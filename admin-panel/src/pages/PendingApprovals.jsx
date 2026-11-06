@@ -3,9 +3,11 @@ import {
   ArrowRight,
   ArrowRightLeft,
   Barcode,
+  Bed,
   Briefcase,
   Building2,
   Calendar,
+  Car,
   CheckCircle2,
   Clock,
   DollarSign,
@@ -14,17 +16,21 @@ import {
   FileText,
   History,
   Layers,
+  ListFilter,
   Loader2,
   Mail,
   MapPin,
   Package,
   Phone,
+  Plane,
   RefreshCw,
   Search,
   ShieldCheck,
   Trash2,
   UploadCloud,
+  Utensils,
   Users,
+  Wrench,
   X,
   XCircle,
   Zap,
@@ -35,6 +41,7 @@ import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import api from '../api/axios';
+import ExpenseClaimDetailContent from '../components/ExpenseClaimDetailContent';
 import SearchableDropdown from '../components/SearchableDropdown';
 const normStr = (v) => String(v || '').trim().toLowerCase();
 const MANAGEMENT_ROLES = [
@@ -135,6 +142,20 @@ const safeText = (val) => {
   return String(val);
 };
 
+const getTravelModeIcon = (modeName = '', subtypeName = '') => {
+  const s = `${modeName || ''} ${subtypeName || ''}`.toLowerCase();
+  if (/(metro)/.test(s)) return '🚇';
+  if (/(train|rail|irctc|vande|shatabdi|rajdhani|express|ac\s*i|ac\s*ii|ac\s*iii|sleeper|chair\s*car|iind\s*class|1st\s*class|2nd\s*class|3rd\s*class)/.test(s)) return '🚆';
+  if (/(flight|air|plane|economy|business\s*class|aviation)/.test(s)) return '✈️';
+  if (/(bus|volvo|sleeper\s*coach|seater)/.test(s)) return '🚌';
+  if (/(auto|rickshaw|tuk)/.test(s)) return '🛺';
+  if (/(taxi|cab|uber|ola|rapido)/.test(s)) return '🚕';
+  if (/(bike|two\s*wheeler|2-wheeler|2\s*wheeler|motorcycle|scooter|scooty|ebike|e-bike)/.test(s)) return '🏍️';
+  if (/(car|four\s*wheeler|4-wheeler|4\s*wheeler|4w|suv|sedan|own\s*vehicle|vehicle|ecar|e-car)/.test(s)) return '🚗';
+  if (/(ferry|ship|boat|water)/.test(s)) return '⛴️';
+  return '🚆';
+};
+
 const isClaimConveyance = (raw) => {
   if (!raw) return false;
   const cType = (raw.claimType || raw.expenseType || '').toUpperCase().trim();
@@ -151,6 +172,66 @@ const isClaimConveyance = (raw) => {
     return t === 'CONVEYANCE' || t === 'LOCAL_CONVEYANCE';
   })) return true;
   return false;
+};
+
+const getResolvedClaimType = (raw) => {
+  if (!raw) return { code: 'OTHER', label: 'Expense', titleLabel: 'Expense' };
+  const rawEntries = Array.isArray(raw.entries) ? raw.entries : [];
+  const firstEcItems = Array.isArray(raw.employeeClaims?.[0]?.items) ? raw.employeeClaims[0].items : [];
+  const cMode = String(raw.claimMode || '').toUpperCase().trim();
+  const hasLodgingWithFood =
+    cMode === 'LODGING' &&
+    Boolean(raw.includeFood || (Array.isArray(raw.foodEntries) && raw.foodEntries.length > 0));
+  const rawClaimType = String(raw.claimType || raw.expenseType || '').toUpperCase().trim();
+
+  if (
+    rawEntries.length > 1 ||
+    firstEcItems.length > 1 ||
+    hasLodgingWithFood ||
+    rawClaimType === 'COMBINE' ||
+    rawClaimType === 'COMBINED'
+  ) {
+    return { code: 'COMBINE', label: 'Combine', titleLabel: 'Combine Claim' };
+  }
+
+  const singleEntry = rawEntries[0] || firstEcItems[0] || {};
+  const rawType = String(
+    singleEntry.expenseType ||
+    singleEntry.claimType ||
+    singleEntry.type ||
+    rawClaimType ||
+    (cMode === 'LODGING' ? 'LODGING' : '')
+  ).toUpperCase().trim();
+  const rawSub = String(
+    singleEntry.otherSubType ||
+    singleEntry.subType ||
+    raw.otherSubType ||
+    ''
+  ).toUpperCase().trim();
+
+  if (
+    rawType === 'STOCK_PURCHASE' ||
+    ((rawType === 'OTHER' || rawType === 'OTHER_EXPENSE' || !rawType) &&
+      (rawSub === 'PURCHASE' || rawSub === 'STOCK_PURCHASE'))
+  ) {
+    return { code: 'STOCK_PURCHASE', label: 'Stock Purchase', titleLabel: 'Stock Purchase Claim' };
+  }
+  if (rawType === 'LODGING' || rawType === 'LODGING_EXPENSE' || cMode === 'LODGING') {
+    return { code: 'LODGING', label: 'Lodging', titleLabel: 'Lodging Claim' };
+  }
+  if (rawType === 'FOOD' || rawType === 'FOOD_DA' || rawType === 'FOOD_EXPENSE') {
+    return { code: 'FOOD', label: 'Food', titleLabel: 'Food Claim' };
+  }
+  if (rawType === 'TRAVEL' || rawType === 'TRAVEL_EXPENSE') {
+    return { code: 'TRAVEL', label: 'Travel', titleLabel: 'Travel Claim' };
+  }
+  if (rawType === 'CONVEYANCE' || rawType === 'LOCAL_CONVEYANCE' || rawType === 'LOCAL_TRAVEL' || rawType === 'LOCAL') {
+    return { code: 'CONVEYANCE', label: 'Local Conveyance', titleLabel: 'Local Conveyance Claim' };
+  }
+  if (rawType === 'OTHER' || rawType === 'OTHER_EXPENSE') {
+    return { code: 'OTHER', label: 'Other Expense', titleLabel: 'Other Expense Claim' };
+  }
+  return { code: rawType || 'OTHER', label: rawType || 'Expense', titleLabel: rawType || 'Expense' };
 };
 
 const getClaimProofs = (raw) => {
@@ -303,6 +384,9 @@ const PendingApprovals = () => {
 
   const normalizeTab = (t) => {
     if (!t) return defaultTab;
+    if (['approved_claims', 'pending_payment', 'awaiting_payment'].includes(t)) {
+      return canViewExpenseTab ? 'approved_claims' : 'all';
+    }
     if (['hr', 'disburse_claims', 'account_claims', 'expense_claims', 'accounts'].includes(t)) {
       return canViewExpenseTab ? 'expense_claims' : 'all';
     }
@@ -335,7 +419,8 @@ const PendingApprovals = () => {
   // Super Admin Multi-Company State
   const [companies, setCompanies] = useState([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState(() => {
-    return localStorage.getItem('selectedCompanyId') || 'ALL';
+    if (isSuperAdmin) return localStorage.getItem('selectedCompanyId') || 'ALL';
+    return String(user?.companyId || user?.company?._id || user?.company || '');
   });
 
   // Pending Items State
@@ -351,57 +436,131 @@ const PendingApprovals = () => {
   const [closeRequests, setCloseRequests] = useState([]);
 
   // Advanced Filter States for Claims and Approvals
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(true);
   const [filterEmployee, setFilterEmployee] = useState('ALL');
   const [filterCity, setFilterCity] = useState('');
   const [filterExpenseType, setFilterExpenseType] = useState('ALL');
+  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterVisitType, setFilterVisitType] = useState('ALL');
   const [filterFromDate, setFilterFromDate] = useState('');
   const [filterToDate, setFilterToDate] = useState('');
   const [allDbEmployees, setAllDbEmployees] = useState([]);
   const [allDbCities, setAllDbCities] = useState([]);
 
-  // Load All Database Employees & Expense Cities on Mount for Filters
+  // Load All Database Employees & Expense Cities for Filters (company-scoped)
   useEffect(() => {
     const loadMasterFilters = async () => {
       try {
-        const [empRes, cityRes] = await Promise.all([
-          api.get('/employees?limit=1000').catch(() => api.get('/expense/employees').catch(() => null)),
-          api.get('/expense/cities').catch(() => null),
+        const reqCfg = selectedCompanyId && selectedCompanyId !== 'ALL'
+          ? { headers: { 'x-company-id': selectedCompanyId }, params: { companyId: selectedCompanyId } }
+          : { headers: { 'x-company-id': 'ALL' }, params: { companyId: 'ALL' } };
+        const [empRes, cityRes, reportOptsRes] = await Promise.all([
+          api.get('/expense/employees', reqCfg).catch(() => api.get('/employees?limit=1000', reqCfg).catch(() => null)),
+          api.get('/expense/cities', reqCfg).catch(() => null),
+          api.get('/expense/reports/filter-options', reqCfg).catch(() => null),
         ]);
 
+        const empList = [];
         if (empRes?.data) {
           const emps = Array.isArray(empRes.data.data)
             ? empRes.data.data
             : Array.isArray(empRes.data)
               ? empRes.data
               : [];
-          emps.sort((a, b) => ((a.name || a.fullName || '').localeCompare(b.name || b.fullName || '')));
-          setAllDbEmployees(emps);
+          empList.push(...emps);
         }
+        if (Array.isArray(reportOptsRes?.data?.data?.employees)) {
+          reportOptsRes.data.data.employees.forEach(re => {
+            const rName = re.name || re.fullName;
+            if (rName && !empList.some(e => (e.name || e.fullName) === rName)) {
+              empList.push(re);
+            }
+          });
+        }
+        empList.sort((a, b) => ((a.name || a.fullName || '').localeCompare(b.name || b.fullName || '')));
+        setAllDbEmployees(empList);
 
+        const cityList = [];
         if (cityRes?.data) {
           const cts = Array.isArray(cityRes.data.data)
             ? cityRes.data.data
             : Array.isArray(cityRes.data)
               ? cityRes.data
               : [];
-          setAllDbCities(cts);
+          cityList.push(...cts);
         }
+        if (Array.isArray(reportOptsRes?.data?.data?.cities)) {
+          reportOptsRes.data.data.cities.forEach(rc => {
+            const cName = typeof rc === 'string' ? rc : rc?.city;
+            if (cName && !cityList.some(c => (c.city || c) === cName)) {
+              cityList.push(typeof rc === 'string' ? { city: rc, cityClass: '' } : rc);
+            }
+          });
+        }
+        setAllDbCities(cityList);
       } catch (err) {
         console.error('Failed to load filter options:', err);
       }
     };
 
     loadMasterFilters();
-  }, []);
+  }, [selectedCompanyId]);
+
+  // Reset status filter if switching to a tab where the current status filter is not applicable
+  useEffect(() => {
+    if (filterStatus === 'ALL') return;
+    const validForTab =
+      activeTab === 'expense_history'
+        ? ['PAID', 'REJECTED']
+        : activeTab === 'approved_claims'
+          ? ['ACCOUNTS_APPROVED']
+          : activeTab === 'expense_claims'
+            ? ['PENDING_APPROVAL']
+            : ['PENDING_APPROVAL', 'ACCOUNTS_APPROVED', 'PAID'];
+    if (!validForTab.includes(filterStatus)) {
+      setFilterStatus('ALL');
+    }
+  }, [activeTab, filterStatus]);
 
   // Detail Modal State
   const [detailItem, setDetailItem] = useState(null);
 
+  useEffect(() => {
+    const isExp =
+      detailItem &&
+      ['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim'].includes(detailItem.type);
+    const claimId = detailItem?.raw?._id || detailItem?._id;
+    if (!isExp || !claimId || detailItem?._enriched) return;
+    let cancelled = false;
+    api
+      .get(`/expense/claims/${claimId}`)
+      .then((res) => {
+        const fresh = res.data?.data || res.data;
+        if (!cancelled && fresh && fresh._id) {
+          setDetailItem((prev) =>
+            prev && (prev.raw?._id || prev._id) === claimId
+              ? { ...prev, raw: { ...prev.raw, ...fresh }, _enriched: true }
+              : prev
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [detailItem]);
+
   // Modal State for Actioning
   const [selectedItem, setSelectedItem] = useState(null);
-  const [actionType, setActionType] = useState(''); // 'approve' | 'reject'
+  const [actionType, setActionType] = useState(''); // 'approve' | 'pay' | 'reject'
   const [adminNote, setAdminNote] = useState('');
+  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [paymentReference, setPaymentReference] = useState('');
+  const [paymentProofUrl, setPaymentProofUrl] = useState('');
+  const [paymentProofName, setPaymentProofName] = useState('');
+  const [paymentProofType, setPaymentProofType] = useState('');
+  const [paymentProofSize, setPaymentProofSize] = useState(0);
+  const [uploadingPaymentProof, setUploadingPaymentProof] = useState(false);
   const [newSplitBarcode, setNewSplitBarcode] = useState('');
   const [splitPhase, setSplitPhase] = useState(1); // 1 = Accept & Tally Stock Journal, 2 = Scan Barcode & Split Remark
   const [processing, setProcessing] = useState(false);
@@ -442,6 +601,13 @@ const PendingApprovals = () => {
     setSelectedItem(null);
     setActionType('');
     setAdminNote('');
+    setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentReference('');
+    setPaymentProofUrl('');
+    setPaymentProofName('');
+    setPaymentProofType('');
+    setPaymentProofSize(0);
+    setUploadingPaymentProof(false);
     setNewSplitBarcode('');
     setSplitPhase(1);
     setInvoiceNumber('');
@@ -465,6 +631,13 @@ const PendingApprovals = () => {
     setSelectedItem(item);
     setActionType(type);
     setAdminNote('');
+    setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentReference('');
+    setPaymentProofUrl('');
+    setPaymentProofName('');
+    setPaymentProofType('');
+    setPaymentProofSize(0);
+    setUploadingPaymentProof(false);
     if (item?.type === 'split') {
       if (item.raw?.status === 'store_accepted') {
         setSplitPhase(2);
@@ -480,6 +653,47 @@ const PendingApprovals = () => {
     setInvoiceUrl(item?.raw?.invoiceUrl || '');
     setInvoiceFileName(item?.raw?.invoiceNumber ? `Invoice-${item.raw.invoiceNumber}` : '');
     setUploadingInvoice(false);
+  };
+
+  const handlePaymentProofUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error('File size exceeds 15MB limit.');
+      return;
+    }
+
+    setUploadingPaymentProof(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      let res;
+      try {
+        res = await api.post('/expense/uploads', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      } catch (_) {
+        res = await api.post('/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      }
+
+      const dataObj = res.data?.data || res.data || {};
+      const url = dataObj.url || res.data?.fileUrl || '';
+      if (!url) throw new Error('No URL returned from server.');
+      setPaymentProofUrl(url);
+      setPaymentProofName(dataObj.name || file.name);
+      setPaymentProofType(dataObj.type || file.type || '');
+      setPaymentProofSize(dataObj.size || file.size || 0);
+      toast.success('Payment confirmation proof uploaded successfully!');
+    } catch (err) {
+      console.error('Payment proof upload failed:', err);
+      toast.error(err.response?.data?.message || 'Failed to upload payment confirmation proof.');
+    } finally {
+      setUploadingPaymentProof(false);
+    }
   };
 
   const handleInvoiceUpload = async (e) => {
@@ -545,7 +759,14 @@ const PendingApprovals = () => {
         api.get('/visits', reqConfig).catch(() => null),
       ]);
       const data = claimsRes?.data?.data || claimsRes?.data || [];
-      const list = Array.isArray(data) ? [...data] : [];
+      const list = (Array.isArray(data) ? [...data] : []).filter(c => {
+        const st = String(c?.status || '').toUpperCase().trim();
+        if (['DRAFT', 'CREATED', 'RETURNED', 'APPROVAL_PENDING'].includes(st)) return false;
+        const ma = String(c?.managerApproval?.status || '').toUpperCase().trim();
+        const fa = String(c?.financeApproval?.status || '').toUpperCase().trim();
+        if (ma === 'PENDING' || ma === 'REJECTED' || fa === 'PENDING' || fa === 'REJECTED') return false;
+        return true;
+      });
       // Sort latest applied claims first
       list.sort((a, b) => new Date(b.submittedAt || b.createdAt || 0) - new Date(a.submittedAt || a.createdAt || 0));
       setExpenseClaims(list);
@@ -572,7 +793,12 @@ const PendingApprovals = () => {
       const list = Array.isArray(data) ? data : [];
       const historyList = list.filter(c => {
         const st = String(c.status || '').toUpperCase().trim();
-        if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED'].includes(st)) {
+        if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED', 'APPROVAL_PENDING'].includes(st)) {
+          return false;
+        }
+        const ma = String(c.managerApproval?.status || '').toUpperCase().trim();
+        const fa = String(c.financeApproval?.status || '').toUpperCase().trim();
+        if (ma === 'PENDING' || ma === 'REJECTED' || fa === 'PENDING' || fa === 'REJECTED') {
           return false;
         }
         return (
@@ -657,7 +883,7 @@ const PendingApprovals = () => {
         if (canViewStoreTab || isAccountAdmin) allPromises.push(fetchAccountMaterialsData(reqConfig));
         if (canViewExpenseHistoryTab) allPromises.push(fetchExpenseHistoryData(reqConfig));
         await Promise.all(allPromises);
-      } else if (tabToFetch === 'expense_claims' || tabToFetch === 'account_claims') {
+      } else if (tabToFetch === 'expense_claims' || tabToFetch === 'approved_claims' || tabToFetch === 'account_claims') {
         await fetchExpenseClaimsData(reqConfig);
       } else if (tabToFetch === 'store') {
         await fetchStoreData(reqConfig);
@@ -913,44 +1139,97 @@ const PendingApprovals = () => {
         }
       } else if (selectedItem.category === 'accounts') {
         if (selectedItem.type === 'accounts_expense') {
+          const raw = selectedItem.raw || {};
+          const isAlreadyAccountsApproved =
+            String(raw.status || '').toUpperCase() === 'ACCOUNTS_APPROVED' ||
+            String(raw.paymentStatus || '').toUpperCase() === 'AWAITING_DISBURSEMENT';
+
           if (actionType === 'approve') {
-            const raw = selectedItem.raw || {};
+            // Step 1: Accounts Admin approves the claim -> remark is REQUIRED
+            if (!adminNote || !adminNote.trim()) {
+              toast.error('Approval remark is required. Please enter a remark.');
+              setProcessing(false);
+              return;
+            }
+            const trimmedRemark = adminNote.trim();
+            const res = await api.post(`/expense/claims/${selectedItem._id}/accounts-approve`, {
+              remarks: trimmedRemark,
+              reason: trimmedRemark,
+              adminNote: trimmedRemark,
+            });
+            const updatedClaim = res.data?.data || {
+              ...raw,
+              status: 'ACCOUNTS_APPROVED',
+              approvalStatus: 'APPROVED',
+              paymentStatus: 'AWAITING_DISBURSEMENT',
+              accountsApproval: {
+                status: 'APPROVED',
+                approvedByName: user?.name || 'Accounts Admin',
+                approvedAt: new Date().toISOString(),
+                remarks: trimmedRemark,
+              },
+            };
+            setExpenseClaims(prev => prev.map(e => String(e._id) === String(selectedItem._id) ? updatedClaim : e));
+            toast.success('Claim approved! Now ready to Mark Paid with payment proof, paid date, and remark.');
+          } else if (actionType === 'pay') {
+            // Step 2: Mark Paid with Paid Date, Payment Confirmation Proof, and Required Remark (only after Accounts Approval)
+            if (!paymentDate) {
+              toast.error('Please select the paid date.');
+              setProcessing(false);
+              return;
+            }
+            if (!paymentProofUrl) {
+              toast.error('Please upload a payment confirmation proof.');
+              setProcessing(false);
+              return;
+            }
+            if (!adminNote || !adminNote.trim()) {
+              toast.error('Payment remark is required. Please enter a remark.');
+              setProcessing(false);
+              return;
+            }
+            const trimmedRemark = adminNote.trim();
             const claimed = Number(raw.grandRequested || raw.amount || 0);
             const allowed = Number(raw.payableAmount || raw.grandAllowed || 0);
             const payable = allowed > 0 ? (claimed > 0 ? Math.min(allowed, claimed) : allowed) : (claimed > 0 ? claimed : 0);
             const finalPayable = payable > 0 ? payable : (claimed > 0 ? claimed : 0);
 
-            // If the claim is in APPROVAL_PENDING, approve it first if applicable
-            let approveSucceeded = false;
-            if (raw.status === 'APPROVAL_PENDING') {
-              try {
-                await api.post(`/expense/claims/${selectedItem._id}/approve`, {
-                  remarks: adminNote || 'Approved via Admin Console'
-                });
-                approveSucceeded = true;
-              } catch (_) { }
-            }
+            const proofObj = {
+              name: paymentProofName || 'Payment Confirmation Proof',
+              url: paymentProofUrl,
+              type: paymentProofType || '',
+              size: paymentProofSize || 0,
+            };
 
-            try {
-              await api.post(`/expense/claims/${selectedItem._id}/payment`, {
-                paidAmount: finalPayable > 0 ? finalPayable : undefined,
-                paymentDate: new Date().toISOString().split('T')[0],
-                paymentMethod: 'Bank Transfer (NEFT)',
-                paymentReference: adminNote || 'Approved and processed via Admin Console',
-                remarks: adminNote || 'Approved and processed via Admin Console',
-                reason: adminNote || 'Approved and processed via Admin Console'
-              });
-              toast.success(`Expense claim approved & payment recorded successfully!`);
-            } catch (payErr) {
-              if (approveSucceeded) {
-                toast.success('Expense claim manager approval completed successfully!');
-              } else {
-                throw payErr;
-              }
-            }
+            await api.post(`/expense/claims/${selectedItem._id}/payment`, {
+              paidAmount: finalPayable > 0 ? finalPayable : undefined,
+              paymentDate,
+              paymentMethod: 'Bank Transfer (NEFT)',
+              paymentReference: paymentReference.trim() || trimmedRemark,
+              remarks: trimmedRemark,
+              reason: trimmedRemark,
+              paymentProof: proofObj,
+              paymentProofs: [proofObj],
+              paymentProofUrl,
+              paymentProofName: proofObj.name,
+              paymentProofType: proofObj.type,
+            });
+            toast.success('Expense claim marked as Paid successfully!');
+            setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
           } else {
-            const rejectNote = adminNote?.trim() || 'Rejected by Accounts / Company Admin';
-            const isApprovalPending = selectedItem.raw?.status === 'APPROVAL_PENDING' || selectedItem.raw?.permissions?.awaitingApproval;
+            // Reject claim: After Accounts approval, ONLY Super Admin is allowed to reject
+            if (isAlreadyAccountsApproved && !isSuperAdmin) {
+              toast.error('Only Super Admin can reject a claim after it has been approved by Accounts.');
+              setProcessing(false);
+              return;
+            }
+            if (!adminNote || !adminNote.trim()) {
+              toast.error('Rejection reason / remark is required.');
+              setProcessing(false);
+              return;
+            }
+            const rejectNote = adminNote.trim();
+            const isApprovalPending = raw.status === 'APPROVAL_PENDING' || raw.permissions?.awaitingApproval;
             if (isApprovalPending) {
               try {
                 await api.post(`/expense/claims/${selectedItem._id}/approval-reject`, {
@@ -967,24 +1246,16 @@ const PendingApprovals = () => {
                 });
               }
             } else {
-              try {
-                await api.post(`/expense/claims/${selectedItem._id}/reject`, {
-                  reason: rejectNote,
-                  remarks: rejectNote,
-                  rejectionReason: rejectNote,
-                  adminNote: rejectNote
-                });
-              } catch (err) {
-                await api.post(`/expense/claims/${selectedItem._id}/approval-reject`, {
-                  reason: rejectNote,
-                  remarks: rejectNote,
-                  rejectionReason: rejectNote
-                });
-              }
+              await api.post(`/expense/claims/${selectedItem._id}/reject`, {
+                reason: rejectNote,
+                remarks: rejectNote,
+                rejectionReason: rejectNote,
+                adminNote: rejectNote
+              });
             }
-            toast.success(`Expense claim rejected.`);
+            toast.success('Expense claim rejected.');
+            setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
           }
-          setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
         } else if (selectedItem.type === 'close_request_accounts') {
           // Close / Conversion request (DC FOC / Invoice) -> Accounts Approval
           const payload = {
@@ -1250,20 +1521,26 @@ const PendingApprovals = () => {
   }));
 
   const allExpenseClaimItems = !canViewExpenseTab ? [] : [
-    ...expenseClaims.map(c => ({
-      _id: c._id,
-      category: 'accounts',
-      type: 'accounts_expense',
-      title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
-      applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
-      empCode: c.claimNumber || 'EXP-CLAIM',
-      companyName: resolveItemCompany(c),
-      details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}${c.fullPayment?.requested ? ' • ⚡ Full Payment Requested' : (c.managerApproval?.kind === 'OTHER_EXPENSE' ? ' • 👤 Manager Approval' : '')}`,
-      reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Pending payment verification',
-      date: c.submittedAt || c.createdAt,
-      expenseDate: c.claimDate || c.fromDate || c.submittedAt || c.createdAt,
-      raw: c
-    })),
+    ...expenseClaims.map(c => {
+      const isAccApproved =
+        String(c.status || '').toUpperCase() === 'ACCOUNTS_APPROVED' ||
+        String(c.paymentStatus || '').toUpperCase() === 'AWAITING_DISBURSEMENT';
+      return {
+        _id: c._id,
+        category: 'accounts',
+        type: 'accounts_expense',
+        isAccountsApproved: isAccApproved,
+        title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+        applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
+        empCode: c.claimNumber || 'EXP-CLAIM',
+        companyName: resolveItemCompany(c),
+        details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}${c.fullPayment?.requested ? ' • ⚡ Full Payment Requested' : (c.managerApproval?.kind === 'OTHER_EXPENSE' ? ' • 👤 Manager Approval' : '')}`,
+        reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || (isAccApproved ? 'Approved by Accounts • Ready for payment' : 'Pending Accounts approval'),
+        date: c.submittedAt || c.createdAt,
+        expenseDate: c.claimDate || c.fromDate || c.submittedAt || c.createdAt,
+        raw: c
+      };
+    }),
     ...allAccountClaimItems
   ].sort((a, b) => {
     const timeA = new Date(a.raw?.submittedAt || a.raw?.createdAt || a.date || 0).getTime();
@@ -1274,7 +1551,12 @@ const PendingApprovals = () => {
   const allExpenseHistoryItems = !canViewExpenseHistoryTab ? [] : expenseHistory
     .filter(c => {
       const st = String(c.status || '').toUpperCase().trim();
-      if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED'].includes(st)) {
+      if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED', 'APPROVAL_PENDING'].includes(st)) {
+        return false;
+      }
+      const ma = String(c.managerApproval?.status || '').toUpperCase().trim();
+      const fa = String(c.financeApproval?.status || '').toUpperCase().trim();
+      if (ma === 'PENDING' || ma === 'REJECTED' || fa === 'PENDING' || fa === 'REJECTED') {
         return false;
       }
       return (
@@ -1293,10 +1575,10 @@ const PendingApprovals = () => {
       const isAccountsRejected = st === 'ACCOUNTS_REJECTED';
       const isRejected = isHrRejected || isAccountsRejected || st === 'REJECTED';
 
-      let statusBadge = 'Approved & Paid';
+      let statusBadge = 'Paid';
       let statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
       if (isPaid) {
-        statusBadge = 'Approved & Paid';
+        statusBadge = 'Paid';
         statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
       } else if (isHrRejected) {
         statusBadge = 'Rejected by HR';
@@ -1351,7 +1633,7 @@ const PendingApprovals = () => {
         statusColor,
         isApproved: isPaid,
         isRejected,
-        title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+        title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
         applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
         empCode: c.claimNumber || 'EXP-CLAIM',
         companyName: resolveItemCompany(c),
@@ -1363,11 +1645,20 @@ const PendingApprovals = () => {
       };
     });
 
+  const pendingApprovalClaimItems = allExpenseClaimItems.filter(
+    item => !(item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED')
+  );
+  const approvedPendingPaymentItems = allExpenseClaimItems.filter(
+    item => item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED'
+  );
+
   let displayItems = [];
   if (activeTab === 'all') {
     displayItems = [...allExpenseClaimItems, ...allStoreItems, ...allAccountMaterialItems];
   } else if (activeTab === 'expense_claims' || activeTab === 'account_claims') {
-    displayItems = allExpenseClaimItems;
+    displayItems = pendingApprovalClaimItems;
+  } else if (activeTab === 'approved_claims') {
+    displayItems = approvedPendingPaymentItems;
   } else if (activeTab === 'store') {
     displayItems = allStoreItems;
   } else if (activeTab === 'account_materials') {
@@ -1411,7 +1702,7 @@ const PendingApprovals = () => {
             isHistory,
             isApproved: st === 'PAID' || st === 'DISBURSED' || st === 'SETTLED',
             isRejected: st.includes('REJECTED'),
-            title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+            title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
             applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
             empCode: c.claimNumber || 'EXP-CLAIM',
             companyName: resolveItemCompany(c),
@@ -1450,61 +1741,139 @@ const PendingApprovals = () => {
   const availableEmployees = useMemo(() => {
     const map = new Map();
     allDbEmployees.forEach(e => {
-      const name = e.name || e.fullName;
-      const code = e.employeeIdCode || e.employeeId;
-      if (name) map.set(name, { name, code });
+      const name = (e.name || e.fullName || '').trim();
+      const code = e.employeeIdCode || e.employeeId || e.employeeCode || '';
+      if (name) map.set(name.toLowerCase(), { name, code });
     });
     [...(expenseClaims || []), ...(expenseHistory || [])].forEach(c => {
-      const name = c.submittedBy?.name || c.submittedBy?.fullName || c.submittedByName || c.employeeClaims?.[0]?.employee?.name;
-      if (name && !map.has(name)) {
-        map.set(name, { name, code: c.submittedBy?.employeeIdCode || c.submittedBy?.employeeId || c.employeeCode });
+      const name = (c.submittedBy?.name || c.submittedBy?.fullName || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || '').trim();
+      if (name && !map.has(name.toLowerCase())) {
+        map.set(name.toLowerCase(), { name, code: c.submittedBy?.employeeIdCode || c.submittedBy?.employeeId || c.employeeCode || '' });
+      }
+      if (Array.isArray(c.employeeClaims)) {
+        c.employeeClaims.forEach(ec => {
+          const ecName = (ec.employee?.name || ec.employee?.fullName || ec.employeeName || '').trim();
+          if (ecName && !map.has(ecName.toLowerCase())) {
+            map.set(ecName.toLowerCase(), { name: ecName, code: ec.employee?.employeeIdCode || ec.employee?.employeeId || '' });
+          }
+        });
       }
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [allDbEmployees, expenseClaims, expenseHistory]);
 
-  // Available cities from Expense Management city masters
+  // Available cities from Expense Management city masters + loaded claims
   const availableCities = useMemo(() => {
     const map = new Map();
     allDbCities.forEach(c => {
-      if (c.city) map.set(c.city, { city: c.city, cityClass: c.cityClass });
+      const cityName = (typeof c === 'string' ? c : c?.city || '').trim();
+      if (cityName) map.set(cityName.toLowerCase(), { city: cityName, cityClass: c?.cityClass || '' });
     });
     [...(expenseClaims || []), ...(expenseHistory || [])].forEach(c => {
-      const dest = c.trip?.destination;
-      if (dest && !map.has(dest)) {
-        map.set(dest, { city: dest, cityClass: '' });
-      }
+      [c.trip?.destination, c.destinationCity, c.city].forEach(rawDest => {
+        const dest = (rawDest || '').trim();
+        if (dest && !map.has(dest.toLowerCase())) {
+          map.set(dest.toLowerCase(), { city: dest, cityClass: '' });
+        }
+      });
     });
     return Array.from(map.values()).sort((a, b) => a.city.localeCompare(b.city));
   }, [allDbCities, expenseClaims, expenseHistory]);
 
   // Apply Advanced Filters to displayItems
   if (filterEmployee && filterEmployee !== 'ALL') {
+    const qEmp = filterEmployee.toLowerCase().trim();
     displayItems = displayItems.filter(item => {
-      const name = item.applicant || item.raw?.submittedBy?.name || item.raw?.submittedByName || '';
-      return name.toLowerCase().includes(filterEmployee.toLowerCase());
+      const candidates = [
+        item.applicant,
+        item.raw?.submittedBy?.name,
+        item.raw?.submittedBy?.fullName,
+        item.raw?.submittedByName,
+        ...(Array.isArray(item.raw?.employeeClaims)
+          ? item.raw.employeeClaims.map(ec => ec.employee?.name || ec.employee?.fullName || ec.employeeName)
+          : []),
+      ].filter(Boolean);
+      return candidates.some(n => String(n).toLowerCase().includes(qEmp));
     });
   }
 
   if (filterCity && filterCity.trim()) {
     const qCity = filterCity.toLowerCase().trim();
     displayItems = displayItems.filter(item => {
-      const city = item.raw?.trip?.destination || item.raw?.destination || item.raw?.location || '';
-      return city.toLowerCase().includes(qCity);
+      const candidates = [
+        item.raw?.trip?.destination,
+        item.raw?.destinationCity,
+        item.raw?.destination,
+        item.raw?.city,
+        item.raw?.location,
+      ].filter(Boolean);
+      return candidates.some(c => String(c).toLowerCase().includes(qCity));
     });
   }
 
   if (filterExpenseType && filterExpenseType !== 'ALL') {
-    const qType = filterExpenseType.toUpperCase();
+    const qType = filterExpenseType.toUpperCase().trim();
     displayItems = displayItems.filter(item => {
-      const t = (item.raw?.claimType || item.type || '').toUpperCase();
-      return t.includes(qType);
+      if (item.type !== 'accounts_expense' && item.type !== 'expense_history') return false;
+      const resolved = getResolvedClaimType(item.raw);
+      return resolved.code === qType;
+    });
+  }
+
+  if (filterStatus && filterStatus !== 'ALL') {
+    const qStatus = filterStatus.toUpperCase();
+    displayItems = displayItems.filter(item => {
+      const rawSt = String(item.raw?.status || '').toUpperCase().trim();
+      const isAccApp = Boolean(item.isAccountsApproved || rawSt === 'ACCOUNTS_APPROVED' || String(item.raw?.paymentStatus || '').toUpperCase() === 'AWAITING_DISBURSEMENT');
+      if (qStatus === 'PENDING_APPROVAL') {
+        return !item.isHistory && !isAccApp;
+      }
+      if (qStatus === 'ACCOUNTS_APPROVED') {
+        return isAccApp;
+      }
+      if (qStatus === 'PAID') {
+        return Boolean(item.isApproved || ['PAID', 'DISBURSED', 'SETTLED'].includes(rawSt));
+      }
+      if (qStatus === 'REJECTED') {
+        return Boolean(item.isRejected || rawSt.includes('REJECTED'));
+      }
+      if (qStatus === 'FULL_PAYMENT') {
+        return Boolean(item.raw?.fullPayment?.requested || item.raw?.fullPaymentRequested);
+      }
+      return true;
+    });
+  }
+
+  if (filterVisitType && filterVisitType !== 'ALL') {
+    const qVisit = filterVisitType.toUpperCase();
+    displayItems = displayItems.filter(item => {
+      if (item.type !== 'accounts_expense') return false;
+      const raw = item.raw || {};
+      const cMode = (raw.claimMode || '').toUpperCase().trim();
+      const cType = (raw.claimType || raw.expenseType || '').toUpperCase().trim();
+      const isLodg = cMode === 'LODGING' || cType === 'LODGING' || cType === 'LODGING_EXPENSE';
+      if (isLodg) return false;
+      const isVisit = Boolean(
+        raw.isVisit ||
+        String(raw.visitType || '').toUpperCase() === 'VISIT' ||
+        (Array.isArray(raw.serviceReports) && raw.serviceReports.length > 0) ||
+        raw.entries?.some(e => e.isVisit || String(e.visitType || '').toUpperCase() === 'VISIT') ||
+        raw.employeeClaims?.some(ec => ec.items?.some(it => it.isVisit || String(it.visitType || '').toUpperCase() === 'VISIT'))
+      );
+      return qVisit === 'VISIT' ? isVisit : !isVisit;
     });
   }
 
   if (filterFromDate || filterToDate) {
     displayItems = displayItems.filter(item => {
-      let targetDateStr = item.raw?.claimDate || item.raw?.fromDate || item.expenseDate || item.date || item.raw?.submittedAt || item.raw?.createdAt;
+      let targetDateStr =
+        item.raw?.claimDate ||
+        item.raw?.fromDate ||
+        item.raw?.trip?.fromDate ||
+        item.expenseDate ||
+        item.date ||
+        item.raw?.submittedAt ||
+        item.raw?.createdAt;
       if (!targetDateStr) return false;
       try {
         const d = new Date(targetDateStr).toISOString().split('T')[0];
@@ -1528,6 +1897,8 @@ const PendingApprovals = () => {
     filterEmployee !== 'ALL' && filterEmployee,
     filterCity.trim(),
     filterExpenseType !== 'ALL' && filterExpenseType,
+    filterStatus !== 'ALL' && filterStatus,
+    filterVisitType !== 'ALL' && filterVisitType,
     filterFromDate,
     filterToDate,
   ].filter(Boolean).length;
@@ -1536,6 +1907,8 @@ const PendingApprovals = () => {
     setFilterEmployee('ALL');
     setFilterCity('');
     setFilterExpenseType('ALL');
+    setFilterStatus('ALL');
+    setFilterVisitType('ALL');
     setFilterFromDate('');
     setFilterToDate('');
     setSearchTerm('');
@@ -1599,7 +1972,17 @@ const PendingApprovals = () => {
               className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'expense_claims' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
             >
               <DollarSign size={15} />
-              Expense Claims ({allExpenseClaimItems.length})
+              Expense Claims ({pendingApprovalClaimItems.length})
+            </button>
+          )}
+
+          {canViewExpenseTab && (
+            <button
+              onClick={() => setActiveTab('approved_claims')}
+              className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'approved_claims' ? 'bg-teal-600 text-white shadow-lg shadow-teal-100' : 'bg-teal-50/70 text-teal-800 hover:bg-teal-100/80 border border-teal-200/60'}`}
+            >
+              <CheckCircle2 size={15} />
+              Approved • Payment Pending ({approvedPendingPaymentItems.length})
             </button>
           )}
 
@@ -1650,7 +2033,7 @@ const PendingApprovals = () => {
             onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
             className={`px-3.5 py-2.5 rounded-2xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${showAdvancedFilters || activeFiltersCount > 0 ? 'bg-indigo-50 text-indigo-700 border-indigo-300' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}
           >
-            <Clock size={14} className={showAdvancedFilters ? 'text-indigo-600' : ''} />
+            <ListFilter size={14} className={showAdvancedFilters ? 'text-indigo-600' : ''} />
             <span>Filters</span>
             {activeFiltersCount > 0 && (
               <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] flex items-center justify-center font-extrabold ml-0.5">
@@ -1675,13 +2058,21 @@ const PendingApprovals = () => {
           >
             <div className="bg-white border border-slate-200 p-5 rounded-3xl shadow-sm space-y-4 overflow-visible">
               <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
-                <span className="text-xs font-bold text-slate-700 tracking-wider">
-                  Filter Claims & Approvals
-                </span>
+                <div className="flex items-center gap-2">
+                  <ListFilter size={14} className="text-indigo-600" />
+                  <span className="text-xs font-bold text-slate-700 tracking-wider">
+                    Filter Claims & Approvals
+                  </span>
+                  {activeFiltersCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-extrabold">
+                      {activeFiltersCount} Active
+                    </span>
+                  )}
+                </div>
                 {activeFiltersCount > 0 && (
                   <button
                     onClick={resetAllFilters}
-                    className="text-xs font-bold text-rose-600 hover:text-rose-700 flex items-center gap-1"
+                    className="text-xs font-bold text-rose-600 hover:text-rose-700 flex items-center gap-1 cursor-pointer"
                   >
                     <X size={13} />
                     Reset All Filters
@@ -1689,7 +2080,7 @@ const PendingApprovals = () => {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3 text-xs">
                 {/* Employee Filter with Search Box */}
                 <div>
                   <label className="block text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
@@ -1706,7 +2097,7 @@ const PendingApprovals = () => {
                     onChange={(val) => setFilterEmployee(val)}
                     allOption={{ label: 'All Employees', value: 'ALL' }}
                     searchPlaceholder="Search employee name or code..."
-                    placeholder="Select Employee..."
+                    placeholder="All Employees"
                     icon={Users}
                     searchable={true}
                   />
@@ -1728,34 +2119,110 @@ const PendingApprovals = () => {
                     onChange={(val) => setFilterCity(val)}
                     allOption={{ label: 'All Cities', value: '' }}
                     searchPlaceholder="Search city name..."
-                    placeholder="Select City..."
+                    placeholder="All Cities"
                     icon={MapPin}
                     searchable={true}
                   />
                 </div>
 
-                {/* Expense Type */}
+                {/* Status Filter */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">Expense Type</label>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+                    <ShieldCheck size={12} className="text-indigo-600" />
+                    Status
+                  </label>
+                  <SearchableDropdown
+                    options={
+                      activeTab === 'expense_history'
+                        ? [
+                            { value: 'PAID', label: 'Paid', icon: CheckCircle2, iconColor: 'text-emerald-600' },
+                            ...(!isAccountAdmin ? [{ value: 'REJECTED', label: 'Rejected', icon: XCircle, iconColor: 'text-rose-600' }] : []),
+                          ]
+                        : activeTab === 'approved_claims'
+                          ? [
+                              { value: 'ACCOUNTS_APPROVED', label: 'Approved • Payment Pending', icon: CheckCircle2, iconColor: 'text-teal-600' },
+                            ]
+                          : activeTab === 'expense_claims'
+                            ? [
+                                { value: 'PENDING_APPROVAL', label: 'Pending', icon: Clock, iconColor: 'text-amber-600' },
+                              ]
+                            : [
+                                { value: 'PENDING_APPROVAL', label: 'Pending', icon: Clock, iconColor: 'text-amber-600' },
+                                { value: 'ACCOUNTS_APPROVED', label: 'Approved • Payment Pending', icon: CheckCircle2, iconColor: 'text-teal-600' },
+                                { value: 'PAID', label: 'Paid', icon: CheckCircle2, iconColor: 'text-emerald-600' },
+                              ]
+                    }
+                    value={filterStatus}
+                    onChange={(val) => setFilterStatus(val)}
+                    allOption={{ label: 'All Statuses', value: 'ALL' }}
+                    placeholder="All Statuses"
+                    icon={ShieldCheck}
+                    searchable={false}
+                  />
+                </div>
+
+                {/* Visit Option Filter */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+                    <Briefcase size={12} className="text-indigo-600" />
+                    Visit Option
+                  </label>
                   <SearchableDropdown
                     options={[
-                      { value: 'LODGING', label: 'Lodging' },
-                      { value: 'FOOD', label: 'Food' },
-                      { value: 'TRAVEL', label: 'Travel' },
-                      { value: 'CONVEYANCE', label: 'Conveyance / Local' },
-                      { value: 'OTHER', label: 'Other' },
+                      { value: 'NO_VISIT', label: 'Normal Travel', icon: Building2, iconColor: 'text-sky-600' },
+                      { value: 'VISIT', label: 'Service Call', icon: Wrench, iconColor: 'text-indigo-600' },
+                    ]}
+                    value={filterVisitType}
+                    onChange={(val) => setFilterVisitType(val)}
+                    allOption={{ label: 'All Visit Options', value: 'ALL' }}
+                    placeholder="All Visit Options"
+                    icon={Briefcase}
+                    searchable={false}
+                  />
+                </div>
+
+                {/* Expense Type */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1 flex items-center gap-1">
+                    <Layers size={12} className="text-indigo-600" />
+                    Expense Type
+                  </label>
+                  <SearchableDropdown
+                    options={[
+                      { value: 'COMBINE', label: 'Combine', icon: Layers, iconColor: 'text-violet-600' },
+                      { value: 'LODGING', label: 'Lodging', icon: Bed, iconColor: 'text-indigo-600' },
+                      { value: 'FOOD', label: 'Food', icon: Utensils, iconColor: 'text-amber-600' },
+                      { value: 'TRAVEL', label: 'Travel', icon: Plane, iconColor: 'text-sky-600' },
+                      { value: 'CONVEYANCE', label: 'Local Conveyance', icon: Car, iconColor: 'text-emerald-600' },
+                      { value: 'OTHER', label: 'Other Expense', icon: FileText, iconColor: 'text-slate-600' },
+                      { value: 'STOCK_PURCHASE', label: 'Stock Purchase', icon: Package, iconColor: 'text-purple-600' },
                     ]}
                     value={filterExpenseType}
                     onChange={(val) => setFilterExpenseType(val)}
-                    allOption={{ label: 'All Types', value: 'ALL' }}
-                    placeholder="Select Type..."
+                    allOption={{ label: 'All Expense Types', value: 'ALL' }}
+                    placeholder="All Expense Types"
+                    icon={Layers}
                     searchable={false}
                   />
                 </div>
 
                 {/* From Date */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">From Date</label>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <Calendar size={12} className="text-indigo-600" />
+                      From Date
+                    </span>
+                    {filterFromDate && (
+                      <button
+                        type="button"
+                        onClick={() => setFilterFromDate('')}
+                        className="text-[10px] text-rose-500 hover:text-rose-700 font-bold"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </label>
                   <input
                     type="date"
                     value={filterFromDate}
@@ -1766,7 +2233,21 @@ const PendingApprovals = () => {
 
                 {/* To Date */}
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">To Date</label>
+                  <label className="block text-[11px] font-bold text-slate-500 mb-1 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <Calendar size={12} className="text-indigo-600" />
+                      To Date
+                    </span>
+                    {filterToDate && (
+                      <button
+                        type="button"
+                        onClick={() => setFilterToDate('')}
+                        className="text-[10px] text-rose-500 hover:text-rose-700 font-bold"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </label>
                   <input
                     type="date"
                     value={filterToDate}
@@ -1794,12 +2275,16 @@ const PendingApprovals = () => {
           <h3 className="text-lg font-bold text-slate-900 m-0">
             {activeTab === 'expense_history'
               ? 'No Expense History Found'
-              : 'All Pending Approvals Cleared!'}
+              : activeTab === 'approved_claims'
+                ? 'No Approved Claims Pending Payment!'
+                : 'All Pending Approvals Cleared!'}
           </h3>
           <p className="text-xs font-medium text-slate-400 max-w-sm">
             {activeTab === 'expense_history'
               ? 'There are currently no approved or rejected expense claims recorded.'
-              : 'There are currently no pending approval requests matching your selection.'}
+              : activeTab === 'approved_claims'
+                ? 'There are currently no approved expense claims awaiting payment.'
+                : 'There are currently no pending approval requests matching your selection.'}
           </p>
         </div>
       ) : (
@@ -1818,13 +2303,19 @@ const PendingApprovals = () => {
                 {/* Header Tag & Company Badge */}
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider bg-indigo-50 text-indigo-600 border border-indigo-200">
+                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider border ${
+                      item.type === 'accounts_expense' && (item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED')
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-indigo-50 text-indigo-600 border-indigo-200'
+                    }`}>
                       {item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material'
                         ? '📦 Material Movement'
                         : item.isHistory || item.type === 'expense_history'
                           ? '📋 Expense History'
                           : item.type === 'accounts_expense'
-                            ? '💰 Expense Claim'
+                            ? ((item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED')
+                              ? '✅ Approved • Payment Pending'
+                              : '⏳ Expense Claim • Pending')
                             : '💰 Customer Visit Claim'}
                     </span>
                   </div>
@@ -1927,31 +2418,45 @@ const PendingApprovals = () => {
                 </div>
               ) : (
                 <div className="flex items-center gap-3 pt-2 border-t border-slate-100">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openActionModal(item, 'approve');
-                    }}
-                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-100 transition-all flex items-center justify-center gap-1.5 active:scale-95"
-                  >
-                    <CheckCircle2 size={15} />
-                    {item.type === 'split'
-                      ? (item.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
-                      : item.type === 'accounts_expense'
-                        ? 'Approve & Pay'
-                        : 'Approve'}
-                  </button>
+                  {(() => {
+                    const isExpensePaidStep =
+                      item.type === 'accounts_expense' &&
+                      (item.isAccountsApproved ||
+                        String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED' ||
+                        String(item.raw?.paymentStatus || '').toUpperCase() === 'AWAITING_DISBURSEMENT');
+                    const showRejectBtn = !isExpensePaidStep || isSuperAdmin;
+                    return (
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openActionModal(item, isExpensePaidStep ? 'pay' : 'approve');
+                          }}
+                          className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-100 transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                        >
+                          <CheckCircle2 size={15} />
+                          {item.type === 'split'
+                            ? (item.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
+                            : item.type === 'accounts_expense'
+                              ? (isExpensePaidStep ? 'Mark Paid' : 'Approve')
+                              : 'Approve'}
+                        </button>
 
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openActionModal(item, 'reject');
-                    }}
-                    className="flex-1 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl font-bold text-xs border border-rose-200/60 transition-all flex items-center justify-center gap-1.5 active:scale-95"
-                  >
-                    <XCircle size={15} />
-                    Reject
-                  </button>
+                        {showRejectBtn && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openActionModal(item, 'reject');
+                            }}
+                            className="flex-1 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl font-bold text-xs border border-rose-200/60 transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                          >
+                            <XCircle size={15} />
+                            Reject
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </motion.div>
@@ -2029,57 +2534,26 @@ const PendingApprovals = () => {
                 </div>
 
                 {/* Modal Body */}
-                <div className="p-6 md:p-8 overflow-y-auto space-y-6 flex-1 text-left">
-                  {/* Applicant Profile Card */}
-                  <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100 shrink-0">
-                        {safeText(detailItem.applicant)?.charAt(0) || 'U'}
-                      </div>
-                      <div>
-                        <h4 className="text-base font-extrabold text-slate-900 m-0">{safeText(detailItem.applicant)}</h4>
-                        {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department) && (
-                          <p className="text-xs font-semibold text-slate-500 m-0 mt-1 flex items-center gap-1">
-                            <Building2 size={13} className="text-slate-400" />
-                            <span>{safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department)}</span>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Visit Status Badge on Employee Card (Single) */}
-                    {Boolean(detailItem.type?.includes('expense') || detailItem.category === 'accounts' || detailItem.category === 'hr') && (() => {
-                      const rawClaim = detailItem.raw || {};
-                      const cMode = (rawClaim.claimMode || '').toUpperCase().trim();
-                      const cType = (rawClaim.claimType || rawClaim.expenseType || '').toUpperCase().trim();
-                      const isLodgingClaim =
-                        cMode === 'LODGING' ||
-                        cType === 'LODGING' ||
-                        cType === 'LODGING_EXPENSE' ||
-                        (Array.isArray(rawClaim.entries) && rawClaim.entries.some(e => ['LODGING', 'LODGING_EXPENSE'].includes((e.expenseType || '').toUpperCase().trim()))) ||
-                        (Array.isArray(rawClaim.employeeClaims?.[0]?.items) && rawClaim.employeeClaims[0].items.some(it => ['LODGING', 'LODGING_EXPENSE'].includes((it.expenseType || '').toUpperCase().trim())));
-                      if (isLodgingClaim) return null;
-                      const isVisitClaim = Boolean(
-                        detailItem.raw?.isVisit ||
-                        detailItem.raw?.visitType === 'VISIT' ||
-                        detailItem.raw?.entries?.some(e => e.isVisit || e.visitType === 'VISIT') ||
-                        detailItem.raw?.employeeClaims?.some(ec => ec.items?.some(it => it.isVisit || it.visitType === 'VISIT'))
-                      );
-                      return (
-                        <div className="shrink-0 flex items-center">
-                          {isVisitClaim ? (
-                            <span className="px-3.5 py-2 rounded-2xl bg-purple-50 text-purple-700 border border-purple-200 text-xs font-extrabold flex items-center gap-1.5 shadow-2xs">
-                              <span>📍</span> Visit
-                            </span>
-                          ) : (
-                            <span className="px-3.5 py-2 rounded-2xl bg-slate-100 text-slate-600 border border-slate-200 text-xs font-extrabold flex items-center gap-1.5 shadow-2xs">
-                              <span>🚫</span> No Visit
-                            </span>
+                <div className="p-6 md:p-8 overflow-y-auto space-y-6 flex-1 text-left bg-slate-50/50">
+                  {/* Applicant Profile Card (for non-expense items; ExpenseClaimDetailContent renders full employee cards in Section 2) */}
+                  {!['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim'].includes(detailItem.type) && (
+                    <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100 shrink-0">
+                          {safeText(detailItem.applicant)?.charAt(0) || 'U'}
+                        </div>
+                        <div>
+                          <h4 className="text-base font-extrabold text-slate-900 m-0">{safeText(detailItem.applicant)}</h4>
+                          {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department) && (
+                            <p className="text-xs font-semibold text-slate-500 m-0 mt-1 flex items-center gap-1">
+                              <Building2 size={13} className="text-slate-400" />
+                              <span>{safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department)}</span>
+                            </p>
                           )}
                         </div>
-                      );
-                    })()}
-                  </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* ── Category 1: HR Leave Specific Info ── */}
                   {detailItem.type === 'leave' && (
@@ -2137,1385 +2611,8 @@ const PendingApprovals = () => {
                   )}
 
                   {/* ── Category 2: Expense Claim Specific Info ── */}
-                  {(detailItem.type === 'expense' || detailItem.type === 'accounts_expense' || detailItem.type === 'hr_expense' || detailItem.type === 'expense_history') && (
-                    <div className="space-y-5">
-                      {/* If History Item, Show Decision Banner */}
-                      {detailItem.isHistory && (
-                        <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${detailItem.isRejected ? 'bg-rose-50/90 border-rose-200 text-rose-900' : 'bg-emerald-50/90 border-emerald-200 text-emerald-900'}`}>
-                          <div className="flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white ${detailItem.isRejected ? 'bg-rose-600 shadow-md shadow-rose-200' : 'bg-emerald-600 shadow-md shadow-emerald-200'}`}>
-                              {detailItem.isRejected ? <XCircle size={20} /> : <CheckCircle2 size={20} />}
-                            </div>
-                            <div>
-                              <span className="text-[10px] font-extrabold tracking-wider block opacity-75">Decision Status</span>
-                              <span className="text-sm font-extrabold">{detailItem.statusBadge}</span>
-                            </div>
-                          </div>
-                          <div className="text-left sm:text-right text-xs">
-                            <span className="block font-bold opacity-75">{detailItem.isRejected ? 'Decision Reason / Remarks:' : 'Settlement & Payment Remarks:'}</span>
-                            <span className="font-extrabold">{detailItem.reason || (detailItem.isRejected ? 'Rejected' : 'Approved & Paid')}</span>
-                            {detailItem.isApproved && (
-                              <span className="block text-[11px] font-extrabold text-emerald-700 mt-0.5">
-                                Disbursed: ₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Applied Date Card */}
-                      <div className="p-3.5 bg-indigo-50/70 rounded-2xl border border-indigo-100 flex items-center justify-between">
-                        <div className="flex items-center gap-2.5">
-                          <div className="p-2 rounded-xl bg-white text-indigo-600 shadow-2xs border border-indigo-100">
-                            <Clock size={16} />
-                          </div>
-                          <div>
-                            <span className="text-[10px] font-extrabold text-indigo-500 block">Claim Applied Date & Time</span>
-                            <span className="text-xs font-bold text-slate-900">{formatAppliedDateTime(detailItem.date)}</span>
-                          </div>
-                        </div>
-                        <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-600 text-white shadow-xs">
-                          {detailItem.raw?.claimNumber || detailItem.empCode || 'CLAIM'}
-                        </span>
-                      </div>
-
-                      {/* Full Payment Request Banner / Details */}
-                      {/* Full Payment Request Banner / Details */}
-                      {(() => {
-                        const rawClaim = detailItem.raw || {};
-                        const isFP = Boolean(rawClaim.fullPayment?.requested || rawClaim.fullPaymentRequested);
-                        const filerUser = (typeof rawClaim.submittedBy === 'object' && rawClaim.submittedBy !== null) ? rawClaim.submittedBy : {};
-                        const filerFromClaim = {
-                          role: filerUser.role || rawClaim.applicantRole,
-                          roleCode: filerUser.roleCode || rawClaim.applicantRoleCode,
-                          designation: filerUser.designation || rawClaim.applicantDesig,
-                          department: filerUser.department || rawClaim.applicantDept,
-                          category: filerUser.category,
-                        };
-                        const isMgmtFiler =
-                          isManagementFiler(filerUser) ||
-                          isManagementFiler(filerFromClaim) ||
-                          Boolean(rawClaim.fullPayment?.decisionRemarks?.includes('Management')) ||
-                          Boolean(rawClaim.managerApproval?.remarks?.includes('Management')) ||
-                          Boolean(isFP && rawClaim.managerApproval?.kind === 'NONE');
-
-                        const filerName = rawClaim.submittedByName || filerUser.name || 'Aditya Pise';
-
-                        return isFP ? (
-                          <div className="p-4 bg-orange-50/80 rounded-2xl border border-orange-200 space-y-2.5">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex items-center gap-2">
-                                <span className="p-1 rounded-lg bg-orange-100 text-orange-600">
-                                  <Zap size={14} className="fill-orange-500 text-orange-500" />
-                                </span>
-                                <span className="text-xs font-extrabold text-orange-950 tracking-wider">
-                                  Full Payment Requested by Employee
-                                </span>
-                              </div>
-                              <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${isMgmtFiler
-                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                : (detailItem.raw.fullPayment?.status === 'APPROVED' || detailItem.raw.fullPaymentApproved
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                  : detailItem.raw.fullPayment?.status === 'REJECTED'
-                                    ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                    : 'bg-amber-100 text-amber-900 border-amber-300')
-                                }`}>
-                                {isMgmtFiler ? 'This approval is not applicable for management user.' : (detailItem.raw.fullPayment?.status || (detailItem.raw.fullPaymentApproved ? 'APPROVED' : 'PENDING APPROVAL'))}
-                              </span>
-                            </div>
-
-                            {/* Reason for Full Payment */}
-                            <div className="text-xs text-slate-800 bg-white/80 p-3 rounded-xl border border-orange-200/70">
-                              <span className="font-extrabold text-orange-950">Employee Reason: </span>
-                              <span className="font-medium text-slate-700">
-                                {detailItem.raw.fullPayment?.reason || detailItem.raw.fullPaymentReason || 'Full reimbursement requested.'}
-                              </span>
-                            </div>
-
-                            {/* Decision Trail if Approved or Rejected */}
-                            {detailItem.raw.fullPayment?.decidedBy && !isMgmtFiler && (
-                              <div className="text-[11px] text-slate-600 bg-orange-100/50 px-3 py-1.5 rounded-lg border border-orange-200/50">
-                                <span className="font-bold text-orange-900">Decision by: </span>
-                                {detailItem.raw.fullPayment.decidedByName || detailItem.raw.fullPayment.decidedBy?.name || 'Admin'}
-                                {detailItem.raw.fullPayment?.decisionRemarks && (
-                                  <span className="ml-1 text-slate-700">("{detailItem.raw.fullPayment.decisionRemarks}")</span>
-                                )}
-                              </div>
-                            )}
-
-                            {/* Supporting Approval Proofs */}
-                            {Array.isArray(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs) &&
-                              (detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length > 0 && (
-                                <div className="space-y-1.5 pt-1">
-                                  <span className="text-[10px] font-extrabold text-orange-950 tracking-wider block">
-                                    ⚡ Full Payment Proofs ({(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length})
-                                  </span>
-                                  <div className="flex flex-wrap gap-2">
-                                    {(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).map((proof, pIdx) => (
-                                      <a
-                                        key={pIdx}
-                                        href={proof.url || proof.uri}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-100 border border-orange-300 rounded-xl text-[11px] font-extrabold text-orange-900 transition-all shadow-sm"
-                                        title="Click to open full payment proof document"
-                                      >
-                                        <span>⚡ {proof.name || `Full Payment Proof #${pIdx + 1}`}</span>
-                                      </a>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                          </div>
-                        ) : null;
-                      })()}
-
-                      {/* Approval Details (Management for Full Payment / Reporting Manager for Other expense) */}
-                      {(() => {
-                        const rawClaim = detailItem.raw || {};
-                        const managerApproval = rawClaim.managerApproval || {};
-                        const isFP = Boolean(rawClaim.fullPayment?.requested || rawClaim.fullPaymentRequested);
-                        const entriesList = Array.isArray(rawClaim.entries) && rawClaim.entries.length > 0
-                          ? rawClaim.entries
-                          : (Array.isArray(rawClaim.employeeClaims?.[0]?.items) ? rawClaim.employeeClaims[0].items : []);
-                        const hasOtherExp = entriesList.some(e => (e.expenseType || '').toUpperCase() === 'OTHER') || (rawClaim.claimType || '').toUpperCase() === 'OTHER';
-
-                        const filerUser = (typeof rawClaim.submittedBy === 'object' && rawClaim.submittedBy !== null) ? rawClaim.submittedBy : {};
-                        const filerFromClaim = {
-                          role: filerUser.role || rawClaim.applicantRole,
-                          roleCode: filerUser.roleCode || rawClaim.applicantRoleCode,
-                          designation: filerUser.designation || rawClaim.applicantDesig,
-                          department: filerUser.department || rawClaim.applicantDept,
-                          category: filerUser.category,
-                        };
-                        const isMgmtFiler =
-                          isManagementFiler(filerUser) ||
-                          isManagementFiler(filerFromClaim) ||
-                          Boolean(rawClaim.fullPayment?.decisionRemarks?.includes('Management')) ||
-                          Boolean(rawClaim.managerApproval?.remarks?.includes('Management')) ||
-                          Boolean(isFP && rawClaim.managerApproval?.kind === 'NONE');
-
-                        const filerName = rawClaim.submittedByName || filerUser.name || 'Aditya Pise';
-
-                        const appKind = managerApproval.kind && managerApproval.kind !== 'NONE'
-                          ? managerApproval.kind
-                          : (isFP ? 'FULL_PAYMENT' : ((hasOtherExp || managerApproval.approver) ? 'OTHER_EXPENSE' : 'NONE'));
-                        const isMgmt = appKind === 'FULL_PAYMENT' || managerApproval.approverRole === 'MANAGEMENT';
-                        const shouldShow = Boolean(
-                          (appKind && appKind !== 'NONE') ||
-                          managerApproval.approver ||
-                          managerApproval.approverName ||
-                          (isFP && (rawClaim.status === 'APPROVAL_PENDING' || rawClaim.fullPayment?.status)) ||
-                          (isMgmtFiler && (isFP || hasOtherExp || managerApproval.status))
-                        );
-
-                        if (!shouldShow) return null;
-
-                        const apprObj = (typeof managerApproval.approver === 'object' && managerApproval.approver !== null) ? managerApproval.approver : null;
-                        const apprName = apprObj?.name || managerApproval.approverName || (typeof managerApproval.approver === 'string' ? managerApproval.approver : '') || 'Assigned Approver';
-                        const apprCode = apprObj?.employeeIdCode ? ` (${apprObj.employeeIdCode})` : '';
-                        const apprSub = [apprObj?.designation, apprObj?.department].filter(Boolean).join(' • ');
-
-                        const rawAppStatus = String(managerApproval.status || '').toUpperCase();
-                        const effStatus = (rawAppStatus && rawAppStatus !== 'NOT_REQUIRED')
-                          ? rawAppStatus
-                          : (rawClaim.status === 'APPROVAL_PENDING'
-                            ? 'PENDING'
-                            : (rawClaim.status === 'SUBMITTED' || rawClaim.status === 'PAID' ? 'APPROVED' : (rawClaim.status === 'REJECTED' ? 'REJECTED' : 'PENDING')));
-
-                        const meta = {
-                          PENDING: { label: 'Awaiting Approval', color: 'text-amber-800', bg: 'bg-amber-100', border: 'border-amber-300' },
-                          APPROVED: { label: 'Approved', color: 'text-emerald-800', bg: 'bg-emerald-100', border: 'border-emerald-300' },
-                          REJECTED: { label: 'Rejected', color: 'text-rose-800', bg: 'bg-rose-100', border: 'border-rose-300' },
-                        }[effStatus] || { label: 'Pending', color: 'text-amber-800', bg: 'bg-amber-100', border: 'border-amber-300' };
-
-                        return (
-                          <div className={`p-4 rounded-2xl border space-y-3 ${isMgmt ? 'bg-purple-50/70 border-purple-200' : 'bg-indigo-50/70 border-indigo-200'}`}>
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex items-center gap-2">
-                                <span className={`p-1.5 rounded-xl ${isMgmt ? 'bg-purple-100 text-purple-700' : 'bg-indigo-100 text-indigo-700'}`}>
-                                  <ShieldCheck size={16} />
-                                </span>
-                                <span className={`text-xs font-extrabold tracking-wider ${isMgmt ? 'text-purple-950' : 'text-indigo-950'}`}>
-                                  {isMgmt ? 'Management Approval (Full Payment)' : 'Reporting Manager Approval (Other Expense)'}
-                                </span>
-                              </div>
-                              <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${isMgmtFiler ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : `${meta.bg} ${meta.color} ${meta.border}`}`}>
-                                {isMgmtFiler ? 'Not Applicable' : meta.label}
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-white/80 p-3 rounded-xl border border-purple-100/70">
-                              <div>
-                                <span className="text-slate-400 font-bold block text-[10px]">
-                                  {isMgmtFiler ? 'Approver' : (isMgmt ? 'Management Approver' : 'Reporting Manager')}
-                                </span>
-                                <span className="font-extrabold text-slate-800 text-xs">
-                                  {isMgmtFiler ? 'Not Applicable (Management User)' : `${apprName}${apprCode}`}
-                                </span>
-                                {!isMgmtFiler && apprSub && (
-                                  <span className="text-[11px] text-slate-500 block font-medium mt-0.5">
-                                    {apprSub}
-                                  </span>
-                                )}
-                              </div>
-                              <div>
-                                <span className="text-slate-400 font-bold block text-[10px]">Approval Status</span>
-                                <span className={`font-extrabold text-xs ${isMgmtFiler ? 'text-emerald-700' : (effStatus === 'APPROVED' ? 'text-emerald-700' : effStatus === 'REJECTED' ? 'text-rose-700' : 'text-amber-700')}`}>
-                                  {isMgmtFiler ? 'This approval is not applicable for management user.' : meta.label}
-                                </span>
-                              </div>
-                              {managerApproval.requestedAt && (
-                                <div>
-                                  <span className="text-slate-400 font-bold block text-[10px]">Requested On</span>
-                                  <span className="font-semibold text-slate-700 text-xs">
-                                    {formatAppliedDateTime(managerApproval.requestedAt)}
-                                  </span>
-                                </div>
-                              )}
-                              {(managerApproval.decidedAt || rawClaim.fullPayment?.decidedAt || (isMgmtFiler && (rawClaim.submittedAt || rawClaim.createdAt))) && (
-                                <div>
-                                  <span className="text-slate-400 font-bold block text-[10px]">Decided On</span>
-                                  <span className="font-semibold text-slate-700 text-xs">
-                                    {formatAppliedDateTime(managerApproval.decidedAt || rawClaim.fullPayment?.decidedAt || rawClaim.submittedAt || rawClaim.createdAt)}
-                                  </span>
-                                </div>
-                              )}
-                              {(rawClaim.fullPayment?.decidedByName || rawClaim.fullPayment?.decidedBy?.name) && !managerApproval.decidedAt && !isMgmtFiler && (
-                                <div>
-                                  <span className="text-slate-400 font-bold block text-[10px]">Decided By</span>
-                                  <span className="font-semibold text-slate-700 text-xs">
-                                    {rawClaim.fullPayment?.decidedByName || rawClaim.fullPayment?.decidedBy?.name}
-                                  </span>
-                                </div>
-                              )}
-                              {(managerApproval.remarks || rawClaim.fullPayment?.decisionRemarks) && (
-                                <div className="sm:col-span-2 pt-1 border-t border-slate-100">
-                                  <span className="text-slate-400 font-bold block text-[10px]">Decision Remarks / Notes</span>
-                                  <span className="font-medium text-slate-800 text-xs">
-                                    "{managerApproval.remarks || rawClaim.fullPayment?.decisionRemarks}"
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* Trip Information / Expense Purpose Details */}
-                      {(() => {
-                        const claimType = (detailItem.raw?.claimType || '').toUpperCase().trim();
-                        const showCityClaimTypes = ['TRAVEL', 'TOUR', 'TRIP', 'LODGING', 'FOOD', 'TRAVEL_EXPENSE', 'TOUR_EXPENSE', 'FOOD_EXPENSE', 'LODGING_EXPENSE'];
-                        const isShowCityClaim = showCityClaimTypes.includes(claimType) || Boolean(detailItem.raw?.trip?.destination || detailItem.raw?.city || (detailItem.raw?.claimMode || '').toUpperCase() === 'LODGING');
-                        const expensePurpose = detailItem.raw?.trip?.purpose || detailItem.raw?.purpose || (detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.description) || '';
-                        const customerName = detailItem.raw?.trip?.customerName || detailItem.raw?.customerName;
-                        const hasValidCustomer = customerName && !['no customer', 'none', 'n/a', 'null', 'undefined'].includes(String(customerName).toLowerCase().trim());
-
-                        const fDate = detailItem.raw?.fromDate || detailItem.raw?.trip?.fromDate || detailItem.raw?.trip?.startDate || detailItem.raw?.entries?.[0]?.fromDate;
-                        const tDate = detailItem.raw?.toDate || detailItem.raw?.trip?.toDate || detailItem.raw?.trip?.endDate || detailItem.raw?.entries?.[0]?.toDate;
-                        const isLodgingClaim = claimType === 'LODGING' || claimType === 'LODGING_EXPENSE' || (detailItem.raw?.claimMode || '').toUpperCase() === 'LODGING' || Boolean(fDate && tDate);
-                        let expDateText;
-                        if (isLodgingClaim && fDate && tDate) {
-                          const fFormatted = formatExpenseDateDisplay(fDate);
-                          const tFormatted = formatExpenseDateDisplay(tDate);
-                          expDateText = (fFormatted && tFormatted) ? (fFormatted === tFormatted ? fFormatted : `${fFormatted} to ${tFormatted}`) : (fFormatted || tFormatted);
-                        } else if (isLodgingClaim && (fDate || tDate)) {
-                          expDateText = formatExpenseDateDisplay(fDate || tDate);
-                        } else {
-                          expDateText = formatExpenseDateDisplay(detailItem.raw?.expenseDate || detailItem.raw?.claimDate || detailItem.raw?.entries?.[0]?.expenseDate || detailItem.raw?.fromDate || detailItem.raw?.date || detailItem.expenseDate || detailItem.date);
-                        }
-
-                        if (isShowCityClaim && (detailItem.raw?.trip?.destination || hasValidCustomer || expensePurpose || expDateText)) {
-                          return (
-                            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                              <span className="text-[10px] font-extrabold text-slate-400 block">Trip Information</span>
-                              <div className="grid grid-cols-2 gap-2 text-xs">
-                                {hasValidCustomer && (
-                                  <div>
-                                    <span className="text-slate-400 font-bold">Customer: </span>
-                                    <span className="font-extrabold text-slate-800">{customerName}</span>
-                                  </div>
-                                )}
-                                {detailItem.raw?.trip?.destination && (
-                                  <div>
-                                    <span className="text-slate-400 font-bold">Destination: </span>
-                                    <span className="font-extrabold text-slate-800">{detailItem.raw.trip.destination} (Class {detailItem.raw.trip.destinationClass || 'A'})</span>
-                                  </div>
-                                )}
-                                {detailItem.raw?.trip?.travelMode && (
-                                  <div>
-                                    <span className="text-slate-400 font-bold">Mode: </span>
-                                    <span className="font-extrabold text-slate-800">{detailItem.raw.trip.travelMode}</span>
-                                  </div>
-                                )}
-                                {expDateText && (
-                                  <div>
-                                    <span className="text-slate-400 font-bold">Exp: </span>
-                                    <span className="font-extrabold text-slate-800">{expDateText}</span>
-                                  </div>
-                                )}
-                                {isLodgingClaim && detailItem.raw?.stayType && (() => {
-                                  const relPct = detailItem.raw.relativeStayPercent ?? detailItem.raw.employeeClaims?.[0]?.items?.[0]?.calculationBreakdown?.relativeStayPercent;
-                                  return (
-                                    <div>
-                                      <span className="text-slate-400 font-bold">Stay Type: </span>
-                                      <span className="font-extrabold text-slate-800">
-                                        {detailItem.raw.stayType === 'WITH_RELATIVE'
-                                          ? `With Relative${relPct !== undefined && relPct !== null ? ` (${relPct}% Allowance)` : ''}`
-                                          : detailItem.raw.stayType === 'IN_HOTEL'
-                                            ? 'In Hotel'
-                                            : ''}
-                                      </span>
-                                    </div>
-                                  );
-                                })()}
-                                {expensePurpose && (
-                                  <div className="col-span-2">
-                                    <span className="text-slate-400 font-bold">Purpose: </span>
-                                    <span className="font-extrabold text-slate-800">{expensePurpose}</span>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        }
-
-                        // Non-travel / Local Conveyance / Other claims: do NOT show destination city/class, but DO show Purpose of Expense
-                        return (
-                          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                            <span className="text-[10px] font-extrabold text-slate-400 block">Expense Details & Purpose</span>
-                            <div className="grid grid-cols-2 gap-2 text-xs">
-                              {hasValidCustomer && (
-                                <div>
-                                  <span className="text-slate-400 font-bold">Customer / Client: </span>
-                                  <span className="font-extrabold text-slate-800">{customerName}</span>
-                                </div>
-                              )}
-                              <div>
-                                <span className="text-slate-400 font-bold">Claim Type: </span>
-                                <span className="font-extrabold text-slate-800">
-                                  {claimType === 'CONVEYANCE'
-                                    ? 'Local Conveyance'
-                                    : (((detailItem.raw?.entries?.[0]?.otherSubType || detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.otherSubType || detailItem.raw?.otherSubType || '').toUpperCase() === 'PURCHASE' && (claimType === 'OTHER' || !claimType))
-                                      ? 'Purchase Claim'
-                                      : (detailItem.raw?.claimType || 'Other Expense'))}
-                                </span>
-                              </div>
-                              {expDateText && (
-                                <div>
-                                  <span className="text-slate-400 font-bold">Exp: </span>
-                                  <span className="font-extrabold text-slate-800">{expDateText}</span>
-                                </div>
-                              )}
-                              {expensePurpose && (
-                                <div className="col-span-2">
-                                  <span className="text-slate-400 font-bold">Purpose of Expense: </span>
-                                  <span className="font-extrabold text-slate-800">{expensePurpose || 'General Business Expense'}</span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* ── Calculation Box (Breakdown Format Explanation) & Combined Items ── */}
-                      {(() => {
-                        const raw = detailItem.raw;
-                        if (!raw) return null;
-
-                        const ecList = Array.isArray(raw.employeeClaims) ? raw.employeeClaims : [];
-                        const empNames = ecList.map(ec => ec.employee?.name).filter(Boolean);
-                        const numEmployees = raw.numberOfEmployees || raw.employeeCount || empNames.length || 1;
-                        const grandReq = raw.grandRequested ?? raw.requestedAmount ?? 0;
-                        const grandAllow = raw.grandAllowed ?? raw.allowedAmount ?? 0;
-                        const grandExc = raw.grandExcess ?? raw.excessAmount ?? 0;
-                        const grandFormula = raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula;
-
-                        // Identify Lodging vs Food claim types
-                        const claimMode = (raw.claimMode || '').toUpperCase().trim();
-                        const claimTypeUpper = (raw.claimType || '').toUpperCase().trim();
-                        const entries = Array.isArray(raw.entries) ? raw.entries : [];
-                        const firstItemType = (ecList[0]?.items?.[0]?.expenseType || '').toUpperCase().trim();
-
-                        const isLodging = claimMode === 'LODGING' ||
-                          claimTypeUpper === 'LODGING' ||
-                          claimTypeUpper === 'LODGING_EXPENSE' ||
-                          entries.some(e => ['LODGING', 'LODGING_EXPENSE'].includes((e.expenseType || '').toUpperCase().trim())) ||
-                          firstItemType === 'LODGING' || firstItemType === 'LODGING_EXPENSE';
-
-                        const isFood = claimTypeUpper === 'FOOD' ||
-                          claimTypeUpper === 'FOOD_EXPENSE' ||
-                          entries.some(e => ['FOOD', 'FOOD_EXPENSE'].includes((e.expenseType || '').toUpperCase().trim())) ||
-                          firstItemType === 'FOOD' || firstItemType === 'FOOD_EXPENSE';
-
-                        const isLodgingOrFood = isLodging || isFood;
-
-                        const days = Number(
-                          raw.numberOfNights ||
-                          raw.days ||
-                          raw.numberOfDays ||
-                          raw.trip?.days ||
-                          (raw.fromDate && raw.toDate ? Math.max(1, Math.round((new Date(raw.toDate) - new Date(raw.fromDate)) / (1000 * 60 * 60 * 24))) : 1)
-                        ) || 1;
-
-                        // Helper to extract actual policy limit/entitlement value from an item / employee claim
-                        const extractItemLimit = (it, ec, isLodgingType, numDays = 1) => {
-                          if (!it && !ec) return 0;
-                          const directLimit = Number(
-                            it?.policyLimit ||
-                            it?.perDayLimit ||
-                            it?.calculationBreakdown?.sourceValues?.dailyEntitlement ||
-                            it?.calculationBreakdown?.sourceValues?.capPerEmployee ||
-                            it?.calculationBreakdown?.stayBudget ||
-                            it?.calculationBreakdown?.dailyCap ||
-                            ec?.policyLimitTotal ||
-                            ec?.policyLimit ||
-                            0
-                          );
-                          if (directLimit > 0) {
-                            if (isLodgingType && numDays > 1 && (it?.perDayLimit || it?.calculationBreakdown?.sourceValues?.dailyEntitlement) && !it?.calculationBreakdown?.stayBudget && directLimit < 1000) {
-                              return directLimit * numDays;
-                            }
-                            return directLimit;
-                          }
-                          if (it?.limitText) {
-                            const m = String(it.limitText).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
-                            if (m) {
-                              const val = parseFloat(m[0]);
-                              if (val > 0) {
-                                if (isLodgingType && numDays > 1 && String(it.limitText).toLowerCase().includes('/day')) {
-                                  return val * numDays;
-                                }
-                                return val;
-                              }
-                            }
-                          }
-                          return 0;
-                        };
-
-                        const ecGrandLimitSum = ecList.reduce((sum, ec) => {
-                          const itemLimit = extractItemLimit(ec.items?.[0], ec, isLodging, days) || Number(ec.policyLimitTotal) || 0;
-                          return sum + itemLimit;
-                        }, 0);
-
-                        const resolvedGrandLimit = (raw.grandPolicyLimit !== undefined && raw.grandPolicyLimit !== null && Number(raw.grandPolicyLimit) > 0)
-                          ? Number(raw.grandPolicyLimit)
-                          : (raw.policyLimit !== undefined && raw.policyLimit !== null && Number(raw.policyLimit) > 0)
-                            ? Number(raw.policyLimit)
-                            : (ecGrandLimitSum > 0 ? ecGrandLimitSum : 0);
-
-                        const grandLimit = resolvedGrandLimit > 0 ? resolvedGrandLimit : (isLodgingOrFood ? 0 : grandAllow);
-                        const hasExcess = grandExc > 0;
-                        const isRelativeStay = isLodging && raw.stayType === 'WITH_RELATIVE';
-                        const relStayPct = raw.relativeStayPercent ?? ecList[0]?.items?.[0]?.calculationBreakdown?.relativeStayPercent;
-
-                        // Extract per-day limits for each employee
-                        let empLines = [];
-                        if (ecList.length > 0) {
-                          empLines = ecList.map((ec, idx) => {
-                            const name = ec.employee?.name || (numEmployees > 1 ? `Employee #${idx + 1}` : (raw.submittedByName || 'Employee'));
-                            const firstItem = ec.items?.[0] || {};
-                            const breakdown = firstItem.calculationBreakdown || {};
-                            const src = breakdown.sourceValues || {};
-
-                            let perDay = (isRelativeStay && firstItem.perDayLimit !== undefined && firstItem.perDayLimit !== null)
-                              ? Number(firstItem.perDayLimit)
-                              : Number(
-                                  firstItem.perDayLimit ||
-                                  src.dailyEntitlement ||
-                                  src.capPerEmployee ||
-                                  breakdown.dailyCap ||
-                                  0
-                                );
-
-                            if (!perDay) {
-                              const itemLimit = Number(firstItem.policyLimit || ec.policyLimitTotal || ec.policyLimit || 0);
-                              if (isLodging && days > 0 && itemLimit > 0) {
-                                perDay = Math.round(itemLimit / days);
-                              } else if (itemLimit > 0) {
-                                perDay = itemLimit;
-                              }
-                            }
-
-                            if (!perDay && firstItem.limitText) {
-                              const m = String(firstItem.limitText).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
-                              if (m) perDay = parseFloat(m[0]);
-                            }
-
-                            if (!perDay && grandLimit > 0) {
-                              perDay = Math.round(grandLimit / (ecList.length || 1) / (isLodging ? days : 1));
-                            }
-
-                            if (isLodging) {
-                              const totalEmpLimit = (isRelativeStay && firstItem.policyLimit !== undefined && firstItem.policyLimit !== null)
-                                ? Number(firstItem.policyLimit)
-                                : perDay * days;
-                              const basePerDay = Number(src.dailyEntitlement || (breakdown.baseEntitlement && days > 0 ? Math.round(breakdown.baseEntitlement / days) : 0) || 0);
-                              const relNote = isRelativeStay && relStayPct !== undefined && relStayPct !== null
-                                ? (basePerDay > 0 ? ` (${relStayPct}% of ₹${basePerDay}/day)` : ` (${relStayPct}% allowance)`)
-                                : '';
-                              return days > 1
-                                ? `${name}: ₹${perDay}/day${relNote} (Total: ₹${totalEmpLimit} for ${days} days)`
-                                : `${name}: ₹${perDay}/day${relNote}`;
-                            } else {
-                              return perDay > 0
-                                ? `${name}: ₹${perDay}/day`
-                                : (isFood && grandLimit > 0
-                                    ? `${name}: ₹${Math.round(grandLimit / (ecList.length || 1))}/day`
-                                    : `${name}: Actuals`);
-                            }
-                          });
-                        } else {
-                          const name = raw.submittedByName || 'Employee';
-                          let perDay = 0;
-                          if (isLodging && days > 0 && grandLimit > 0) {
-                            perDay = Math.round(grandLimit / days);
-                          } else if (grandLimit > 0) {
-                            perDay = grandLimit;
-                          } else {
-                            perDay = extractItemLimit(raw.entries?.[0] || ecList[0]?.items?.[0], null, isLodging, days);
-                          }
-                          empLines = [
-                            isLodging
-                              ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit || (perDay * days)} for ${days} days)` : `${name}: ₹${perDay}/day`)
-                              : (perDay > 0 ? `${name}: ₹${perDay}/day` : (isFood ? `${name}: ₹${grandLimit || grandAllow}/day` : `${name}: Actuals`))
-                          ];
-                        }
-
-                        let combinedLimitText = '';
-                        if (isLodging) {
-                          combinedLimitText = numEmployees > 1
-                            ? `Combined Stay Policy Limit: ₹${grandLimit > 0 ? grandLimit : grandAllow} (${days} day${days > 1 ? 's' : ''})`
-                            : `Stay Policy Limit: ₹${grandLimit > 0 ? grandLimit : grandAllow} (${days} day${days > 1 ? 's' : ''})`;
-                        } else if (isFood) {
-                          const foodLimitAmt = grandLimit > 0 ? grandLimit : (numEmployees > 1 ? numEmployees * 450 : grandAllow);
-                          combinedLimitText = numEmployees > 1
-                            ? `Combined daily limit: ₹${foodLimitAmt}`
-                            : `Daily policy limit: ₹${foodLimitAmt}`;
-                        } else {
-                          combinedLimitText = `Policy limit: ₹${grandLimit}`;
-                        }
-
-                        let calcOutcomeText = '';
-                        if (isRelativeStay) {
-                          calcOutcomeText = `Stay with relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% allowance)` : ''}: No hotel bill required. Allowed amount of ₹${grandAllow} is auto-calculated per policy (${days} day${days > 1 ? 's' : ''}).`;
-                        } else if (hasExcess) {
-                          const perEmpExcessText = numEmployees > 1 ? ` (₹${Math.round(grandExc / numEmployees)} excess per employee)` : '';
-                          calcOutcomeText = `Claimed bill: ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess beyond policy limit${perEmpExcessText}.`;
-                        } else {
-                          const limitLabel = isLodging
-                            ? (numEmployees > 1 ? 'combined stay policy limit' : 'stay policy limit')
-                            : (numEmployees > 1 ? 'combined daily limit' : 'daily policy limit');
-                          const limitValForText = grandLimit > 0 ? grandLimit : (isLodgingOrFood ? grandAllow : 0);
-                          calcOutcomeText = limitValForText > 0
-                            ? `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel} of ₹${limitValForText}, ₹${grandAllow} is fully allowed.`
-                            : `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel}, ₹${grandAllow} is fully allowed.`;
-                        }
-
-                        const foodOrLodgingExplanation = [
-                          `Individual limits per day:\n• ${empLines.join('\n• ')}`,
-                          `${combinedLimitText}.`,
-                          calcOutcomeText
-                        ].join('\n\n');
-
-                        const serverExplanation = raw.plainExplanation || ecList[0]?.items?.[0]?.plainExplanation || ecList[0]?.items?.[0]?.calculationBreakdown?.plainExplanation;
-
-                        let grandExplanation = '';
-                        if (isLodgingOrFood) {
-                          if (serverExplanation && serverExplanation.includes('Individual limits per day')) {
-                            grandExplanation = serverExplanation;
-                          } else {
-                            grandExplanation = foodOrLodgingExplanation;
-                          }
-                        } else if (serverExplanation) {
-                          grandExplanation = serverExplanation;
-                        } else {
-                          const isNoLimitType = ['CONVEYANCE', 'TRAVEL', 'OTHER'].includes(claimTypeUpper);
-                          if (isNoLimitType) {
-                            grandExplanation = `Claimed bill: ₹${grandReq}. All payment of ₹${grandAllow} is fully allowed.`;
-                          } else {
-                            grandExplanation = hasExcess
-                              ? `Policy limit is ₹${grandLimit} and claimed value is ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess.`
-                              : `Policy limit is ₹${grandLimit} and claimed value is ₹${grandReq}. Since it is within the limit, ₹${grandAllow} is fully allowed.`;
-                          }
-                        }
-
-                        // Build combined entries list (combining all employee shares per entry)
-                        const entriesList = (Array.isArray(raw.entries) && raw.entries.length > 0)
-                          ? raw.entries
-                          : (Array.isArray(ecList[0]?.items) && ecList[0].items.length > 0 ? ecList[0].items : null);
-
-                        const combinedItems = entriesList
-                          ? entriesList.map((entry, idx) => {
-                            const firstItem = ecList[0]?.items?.[idx] || {};
-                            const expenseType = (entry.expenseType || firstItem.expenseType || raw.claimType || 'Expense').toUpperCase();
-                            const isOther = expenseType === 'OTHER';
-                            const isConv = expenseType === 'CONVEYANCE' || expenseType === 'LOCAL_CONVEYANCE';
-                            const isPurchase = isOther && ((entry.otherSubType || firstItem.otherSubType || '').toUpperCase() === 'PURCHASE');
-                            const expenseTypeName = firstItem.expenseTypeName || (
-                              isConv ? 'Local Conveyance' :
-                                expenseType === 'FOOD' ? 'Food' :
-                                  expenseType === 'TRAVEL' ? 'Travel' :
-                                    (expenseType === 'LODGING' || expenseType === 'LODGING') ? 'Lodging' :
-                                      isOther ? (isPurchase ? 'Purchase' : 'Other Expense') : expenseType
-                            );
-                            const expenseDate = entry.expenseDate || firstItem.expenseDate || raw.claimDate || raw.date;
-                            const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
-                            const hasEcItems = ecList.some((ec) => Array.isArray(ec.items) && ec.items.length > idx);
-                            const ecAllowSum = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) : null;
-                            const ecExcSum = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0) : null;
-
-                            const allowedAmount = ecAllowSum !== null
-                              ? ecAllowSum
-                              : (entry.allowedAmount !== undefined && entry.allowedAmount !== null
-                                ? Number(entry.allowedAmount)
-                                : (firstItem.allowedAmount !== undefined && firstItem.allowedAmount !== null
-                                  ? Number(firstItem.allowedAmount)
-                                  : (entriesList.length === 1 ? grandAllow : requestedAmount)));
-
-                            const excessAmount = ecExcSum !== null
-                              ? ecExcSum
-                              : (entry.excessAmount !== undefined && entry.excessAmount !== null
-                                ? Number(entry.excessAmount)
-                                : (firstItem.excessAmount !== undefined && firstItem.excessAmount !== null
-                                  ? Number(firstItem.excessAmount)
-                                  : (entriesList.length === 1 ? grandExc : Math.max(0, requestedAmount - allowedAmount))));
-                            const itemHasExcess = excessAmount > 0;
-                            const isItemFood = expenseType === 'FOOD' || expenseType === 'FOOD_EXPENSE';
-                            const isItemLodging = expenseType === 'LODGING' || expenseType === 'LODGING_EXPENSE';
-                            const policyLimit = (isItemFood || isItemLodging)
-                              ? allowedAmount
-                              : (Number(entry.policyLimit) || Number(firstItem.policyLimit) || (entriesList.length === 1 ? grandLimit : 0));
-
-                            const limitDisplay = (isItemFood || isItemLodging)
-                              ? `₹${allowedAmount ?? 0}`
-                              : (isConv || expenseType === 'TRAVEL' || expenseType === 'OTHER')
-                                ? (firstItem.limitText || 'Actuals (Fully Allowed)')
-                                : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : 'Actuals (Fully Allowed)'));
-                            const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
-
-                            const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
-                              isConv
-                                ? ((entry.distanceKm || firstItem.distanceKm) ? `${entry.distanceKm || firstItem.distanceKm} km x ₹${firstItem.calculationBreakdown?.sourceValues?.rate || 10}/km` : 'Actuals (Fully Allowed)')
-                                : expenseType === 'TRAVEL'
-                                  ? 'Travel fare (Fully Allowed)'
-                                  : isOther
-                                    ? (isPurchase ? 'Purchase (Fully Allowed)' : 'Actual amount (Fully Allowed)')
-                                    : expenseType === 'FOOD'
-                                      ? (firstItem.limitText ? `Daily limit: ${firstItem.limitText}` : 'MIN(actual, daily entitlement)')
-                                      : (expenseType === 'LODGING' || expenseType === 'LODGING')
-                                        ? (firstItem.limitText ? `Stay budget: ${firstItem.limitText}` : 'Lodging policy entitlement')
-                                        : 'Actuals (Fully Allowed)'
-                            );
-
-                            return {
-                              expenseType,
-                              expenseTypeName,
-                              expenseDate,
-                              requestedAmount,
-                              allowedAmount,
-                              excessAmount,
-                              policyLimit,
-                              hasExcess: itemHasExcess,
-                              limitDisplay,
-                              formula: itemFormula,
-                              description: entry.remark || entry.description || firstItem.description,
-                              distanceKm: isConv ? (entry.distanceKm || firstItem.distanceKm) : undefined,
-                              vehicle: isConv ? (entry.vehicle || firstItem.vehicle) : undefined,
-                              visitType: isConv ? (entry.visitType || firstItem.visitType || (entry.isVisit || firstItem.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT') : undefined,
-                              isVisit: isConv ? Boolean(entry.isVisit || firstItem.isVisit || entry.visitType === 'VISIT' || firstItem.visitType === 'VISIT') : false,
-                              serviceReports: isConv ? (entry.serviceReports || firstItem.serviceReports || (firstItem.conveyanceKm?.serviceReports) || []) : [],
-                              otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
-                              barcodeNumber: isPurchase ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
-                              quantity: isPurchase ? (entry.quantity || firstItem.quantity) : undefined,
-                              numberPlatePhotos: entry.numberPlatePhotos || firstItem.numberPlatePhotos || [],
-                              startKmPhotos: entry.startKmPhotos || firstItem.startKmPhotos || [],
-                              endKmPhotos: entry.endKmPhotos || firstItem.endKmPhotos || [],
-                              attachments: isConv ? [] : attachments,
-                            };
-                          })
-                          : (() => {
-                            const singleType = (ecList[0]?.items?.[0]?.expenseType || raw.claimType || 'Expense').toUpperCase();
-                            const singleIsOther = singleType === 'OTHER';
-                            const singleIsConv = singleType === 'CONVEYANCE' || singleType === 'LOCAL_CONVEYANCE';
-                            const singleIsPurchase = singleIsOther && ((ecList[0]?.items?.[0]?.otherSubType || raw.entries?.[0]?.otherSubType || raw.otherSubType || '').toUpperCase() === 'PURCHASE');
-                            return [{
-                              expenseType: singleType,
-                              expenseTypeName: ecList[0]?.items?.[0]?.expenseTypeName || (
-                                singleIsConv ? 'Local Conveyance' :
-                                  singleType === 'FOOD' ? 'Food' :
-                                    singleType === 'TRAVEL' ? 'Travel' :
-                                      (singleType === 'LODGING' || singleType === 'LODGING') ? 'Lodging' :
-                                        singleIsOther ? (singleIsPurchase ? 'Purchase' : 'Other Expense') : (raw.claimType || 'Expense')
-                              ),
-                              expenseDate: ecList[0]?.items?.[0]?.expenseDate || raw.claimDate || raw.date || raw.fromDate,
-                              requestedAmount: grandReq,
-                              allowedAmount: grandAllow,
-                              excessAmount: grandExc,
-                              policyLimit: (singleType === 'FOOD' || singleType === 'FOOD_EXPENSE' || singleType === 'LODGING' || singleType === 'LODGING_EXPENSE') ? grandAllow : grandLimit,
-                              hasExcess,
-                              limitDisplay: (singleType === 'FOOD' || singleType === 'FOOD_EXPENSE' || singleType === 'LODGING' || singleType === 'LODGING_EXPENSE')
-                                ? `₹${grandAllow}`
-                                : ((singleIsConv || singleType === 'TRAVEL' || singleIsOther)
-                                  ? (ecList[0]?.items?.[0]?.limitText || 'Actuals (Fully Allowed)')
-                                  : (ecList[0]?.items?.[0]?.limitText || (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals (Fully Allowed)'))),
-                              formula: raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula,
-                              description: raw.remark || ecList[0]?.items?.[0]?.description,
-                              distanceKm: singleIsConv ? (ecList[0]?.items?.[0]?.distanceKm || raw.entries?.[0]?.distanceKm) : undefined,
-                              vehicle: singleIsConv ? (ecList[0]?.items?.[0]?.vehicle || raw.entries?.[0]?.vehicle) : undefined,
-                              visitType: singleIsConv ? (raw.entries?.[0]?.visitType || ecList[0]?.items?.[0]?.visitType || raw.visitType || (raw.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT') : undefined,
-                              isVisit: singleIsConv ? Boolean(raw.entries?.[0]?.isVisit || ecList[0]?.items?.[0]?.isVisit || raw.isVisit || raw.entries?.[0]?.visitType === 'VISIT' || raw.visitType === 'VISIT') : false,
-                              serviceReports: singleIsConv ? (raw.entries?.[0]?.serviceReports || ecList[0]?.items?.[0]?.serviceReports || raw.serviceReports || []) : [],
-                              otherSubType: singleIsOther ? (ecList[0]?.items?.[0]?.otherSubType || raw.entries?.[0]?.otherSubType || raw.otherSubType) : undefined,
-                              barcodeNumber: singleIsPurchase ? (ecList[0]?.items?.[0]?.barcodeNumber || raw.entries?.[0]?.barcodeNumber || raw.barcodeNumber) : undefined,
-                              quantity: singleIsPurchase ? (ecList[0]?.items?.[0]?.quantity || raw.entries?.[0]?.quantity || raw.quantity) : undefined,
-                              numberPlatePhotos: raw.entries?.[0]?.numberPlatePhotos || ecList[0]?.items?.[0]?.numberPlatePhotos || raw.numberPlatePhotos || [],
-                              startKmPhotos: raw.entries?.[0]?.startKmPhotos || ecList[0]?.items?.[0]?.startKmPhotos || raw.startKmPhotos || [],
-                              endKmPhotos: raw.entries?.[0]?.endKmPhotos || ecList[0]?.items?.[0]?.endKmPhotos || raw.endKmPhotos || [],
-                              attachments: singleIsConv ? [] : (raw.receipts || ecList[0]?.items?.[0]?.attachments || []),
-                            }];
-                          })();
-
-                        // Extract applied rule for each entry / type
-                        const appliedRules = combinedItems
-                          .map((it, idx) => {
-                            const formula = it.formula || raw.formula || ecList[0]?.items?.[idx]?.formula || ecList[0]?.items?.[idx]?.calculationBreakdown?.formula;
-                            const title = combinedItems.length > 1
-                              ? `Entry #${idx + 1} (${it.expenseTypeName})`
-                              : it.expenseTypeName;
-                            return {
-                              title,
-                              formula,
-                            };
-                          })
-                          .filter(r => Boolean(r.formula));
-
-                        return (
-                          <div className="space-y-4">
-                            {/* 1. Calculation Box (Breakdown Format Explanation) */}
-                            <div className={`p-4 rounded-2xl border space-y-3 ${hasExcess ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'}`}>
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <span className="text-xs font-extrabold tracking-wider flex items-center gap-1.5">
-                                  <span>💡</span> Calculation Breakdown & Policy Explanation
-                                </span>
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  {isLodging && raw.stayType && (
-                                    <span className={`px-2.5 py-0.5 rounded-md border text-[10px] font-extrabold shadow-2xs ${isRelativeStay ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-sky-50 text-sky-800 border-sky-200'}`}>
-                                      {isRelativeStay
-                                        ? `🏠 Stay with Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}`
-                                        : '🏨 Stay in Hotel'}
-                                    </span>
-                                  )}
-                                  {numEmployees > 1 && (
-                                    <span className="px-2.5 py-0.5 rounded-md bg-white border text-[10px] font-extrabold text-indigo-700 border-indigo-200 shadow-2xs">
-                                      👥 {numEmployees} Employees Combined ({empNames.join(', ')})
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* Grand Figures Summary Grid */}
-                              <div className={`grid grid-cols-2 ${detailItem.isHistory && detailItem.isApproved ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5 p-3 bg-white rounded-xl border border-slate-200 text-center shadow-2xs`}>
-                                <div>
-                                  <span className="text-[9px] font-extrabold text-slate-400 block">Total Claimed</span>
-                                  <span className="text-sm font-extrabold text-slate-800">₹{grandReq}</span>
-                                </div>
-                                <div>
-                                  <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
-                                  <span className="text-sm font-extrabold text-indigo-700">
-                                    {(isFood || isLodging) ? `₹${grandLimit > 0 ? grandLimit : grandAllow}` : (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals')}
-                                  </span>
-                                </div>
-                                <div>
-                                  <span className="text-[9px] font-extrabold text-emerald-600 block">Total Allowed</span>
-                                  <span className="text-sm font-extrabold text-emerald-600">₹{grandAllow}</span>
-                                </div>
-                                <div>
-                                  <span className="text-[9px] font-extrabold text-rose-500 block">Total Excess</span>
-                                  <span className={`text-sm font-extrabold ${hasExcess ? 'text-rose-600' : 'text-slate-400'}`}>
-                                    ₹{grandExc}
-                                  </span>
-                                </div>
-                                {detailItem.isHistory && detailItem.isApproved && (
-                                  <div>
-                                    <span className="text-[9px] font-extrabold text-indigo-600 block">Disbursed / Paid</span>
-                                    <span className="text-sm font-extrabold text-indigo-700">
-                                      ₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Summary Explanation Text with formatting preserved */}
-                              <div className="p-3.5 bg-white/95 rounded-xl border border-slate-200/80 shadow-2xs space-y-2.5">
-                                {isLodgingOrFood && empLines && empLines.length > 0 ? (
-                                  <div className="space-y-2 text-xs">
-                                    {/* 1. One day each employee limit */}
-                                    <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
-                                      <span className="text-[10px] font-extrabold text-slate-500 tracking-wider block mb-1">
-                                        👤 Individual Limits Per Day ({empLines.length} {empLines.length > 1 ? 'Employees' : 'Employee'}):
-                                      </span>
-                                      <div className="space-y-1 pl-1">
-                                        {empLines.map((line, lIdx) => (
-                                          <div key={lIdx} className="font-semibold text-slate-800 flex items-center gap-1.5">
-                                            <span className="text-indigo-600 font-extrabold">•</span>
-                                            <span>{line}</span>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-
-                                    {/* 2. Combined Policy Limit */}
-                                    <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-200 flex items-center justify-between">
-                                      <span className="text-[11px] font-extrabold text-indigo-900">
-                                        ⚖️ {isLodging ? (numEmployees > 1 ? 'Combined Stay Policy Limit:' : 'Stay Policy Limit:') : (numEmployees > 1 ? 'Combined Daily Policy Limit:' : 'Daily Policy Limit:')}
-                                      </span>
-                                      <span className="text-xs font-bold text-indigo-700 bg-white px-2.5 py-0.5 rounded-md border border-indigo-300 shadow-2xs">
-                                        ₹{grandLimit} {isLodging ? `(${days} days)` : ''}
-                                      </span>
-                                    </div>
-
-                                    {/* 3. Allowed & Excess Calculation Breakdown */}
-                                    <div className={`p-2.5 rounded-lg border flex items-start gap-2 ${hasExcess ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'}`}>
-                                      <span className="text-base">{hasExcess ? '⚠️' : '✅'}</span>
-                                      <div className="space-y-0.5">
-                                        <span className="text-[10px] font-extrabold tracking-wider block">
-                                          {hasExcess ? 'Policy Excess Detected' : 'Fully Within Policy Limit'}
-                                        </span>
-                                        <p className="text-xs font-bold leading-relaxed m-0">
-                                          {calcOutcomeText}
-                                        </p>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <p className="text-xs font-bold text-slate-800 whitespace-pre-line leading-relaxed m-0">
-                                    💡 {grandExplanation}
-                                  </p>
-                                )}
-
-                                {appliedRules.length > 0 && (
-                                  <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-1.5">
-                                    <span className="text-[10px] font-extrabold text-slate-500 tracking-wider block">
-                                      {appliedRules.length > 1 ? 'Applied Rules by Type:' : 'Applied Rule:'}
-                                    </span>
-                                    {appliedRules.map((r, rIdx) => (
-                                      <div key={rIdx} className="text-[11px] text-slate-700 flex items-start gap-1.5 leading-relaxed">
-                                        <span className="font-bold text-slate-900 shrink-0">• {r.title}:</span>
-                                        <span className="font-medium text-slate-600">{r.formula}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* 2. Itemized Claim Entries (Combined format across employees) */}
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">
-                                  Itemized Claim Entries ({combinedItems.length})
-                                </span>
-                                <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
-                                  Combined Format {numEmployees > 1 ? `(${numEmployees} Employees)` : ''}
-                                </span>
-                              </div>
-                              <div className="space-y-2.5">
-                                {combinedItems.map((it, idx) => {
-                                  const isItemConv = (it.expenseType || '').toUpperCase() === 'CONVEYANCE' || (it.expenseType || '').toUpperCase() === 'LOCAL_CONVEYANCE';
-                                  const isItemFood = (it.expenseType || '').toUpperCase() === 'FOOD' || (it.expenseType || '').toUpperCase() === 'FOOD_EXPENSE';
-                                  const isItemLodging = (it.expenseType || '').toUpperCase() === 'LODGING' || (it.expenseType || '').toUpperCase() === 'LODGING_EXPENSE';
-                                  const foodSafeLimit = (isItemFood || isItemLodging)
-                                    ? `₹${it.allowedAmount ?? 0}`
-                                    : (isItemConv || it.expenseType === 'TRAVEL' || it.expenseType === 'OTHER')
-                                      ? 'Actuals (Fully Allowed)'
-                                      : (it.limitDisplay || `₹${it.allowedAmount ?? 0}`);
-                                  return (
-                                    <div key={idx} className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs">
-                                      <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                          <div className="flex items-center gap-2">
-                                            <span className="font-extrabold text-slate-900 text-sm">
-                                              {combinedItems.length > 1 ? `Entry #${idx + 1}: ${it.expenseTypeName}` : it.expenseTypeName}
-                                            </span>
-                                            {it.expenseDate && (
-                                              <span className="text-[10px] font-bold text-slate-400">
-                                                {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                              </span>
-                                            )}
-                                            {isItemLodging && raw.stayType && (
-                                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${isRelativeStay ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-sky-50 text-sky-700 border-sky-200'}`}>
-                                                {isRelativeStay
-                                                  ? `🏠 With Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}%)` : ''}`
-                                                  : '🏨 In Hotel'}
-                                              </span>
-                                            )}
-                                            {numEmployees > 1 && (
-                                              <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-extrabold">
-                                                👥 {numEmployees} Employees
-                                              </span>
-                                            )}
-                                            {it.expenseType === 'OTHER' && it.otherSubType && (
-                                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${it.otherSubType === 'PURCHASE'
-                                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                                : 'bg-blue-50 text-blue-700 border-blue-200'
-                                                }`}>
-                                                {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
-                                              </span>
-                                            )}
-                                            {it.expenseType === 'OTHER' && it.otherSubType === 'PURCHASE' && it.barcodeNumber && (
-                                              <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
-                                                Barcode: {it.barcodeNumber}
-                                              </span>
-                                            )}
-                                            {it.expenseType === 'OTHER' && it.otherSubType === 'PURCHASE' && it.quantity && (
-                                              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
-                                                Qty: {it.quantity}
-                                              </span>
-                                            )}
-                                          </div>
-                                          {(it.description || it.note) && (
-                                            <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
-                                          )}
-                                          {it.distanceKm ? (
-                                            <div className="flex flex-wrap items-center gap-2 mt-1">
-                                              <span className="text-[10px] text-indigo-600 font-bold">
-                                                🚗 {it.distanceKm} km ({it.vehicle === 'twoWheeler' ? '2-Wheeler / Bike' : it.vehicle === 'car' ? 'Car (4W)' : it.vehicle === 'eBike' ? 'E-Bike' : it.vehicle === 'eCar' ? 'E-Car' : (it.vehicle || 'Vehicle')})
-                                              </span>
-                                            </div>
-                                          ) : null}
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                          <span className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold border ${it.hasExcess
-                                            ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                            }`}>
-                                            {it.hasExcess ? `₹${it.excessAmount} Excess` : 'Fully Allowed'}
-                                          </span>
-                                        </div>
-                                      </div>
-
-                                      {/* Figures Grid */}
-                                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-center">
-                                        <div>
-                                          <span className="text-[9px] font-extrabold text-slate-400 block">Claimed</span>
-                                          <span className="text-xs font-bold text-slate-800">₹{it.requestedAmount || 0}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
-                                          <span className="text-xs font-bold text-indigo-700">{foodSafeLimit}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] font-extrabold text-emerald-600 block">Allowed</span>
-                                          <span className="text-xs font-bold text-emerald-600">₹{it.allowedAmount || 0}</span>
-                                        </div>
-                                        {it.hasExcess && (
-                                          <div>
-                                            <span className="text-[9px] font-extrabold text-rose-500 block">Excess</span>
-                                            <span className="text-xs font-bold text-rose-600">₹{it.excessAmount || 0}</span>
-                                          </div>
-                                        )}
-                                      </div>
-
-                                      {/* Attached Receipts & Proofs (Non-conveyance only) */}
-                                      {!isItemConv && it.attachments && it.attachments.length > 0 && (
-                                        <div className="flex flex-wrap gap-2 pt-1">
-                                          {it.attachments.map((att, aIdx) => (
-                                            <a
-                                              key={aIdx}
-                                              href={att.url || att.uri}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
-                                              title="Click to preview bill proof"
-                                            >
-                                              <span>🧾 {att.name || `Bill Proof #${aIdx + 1}`}</span>
-                                            </a>
-                                          ))}
-                                        </div>
-                                      )}
-
-                                      {/* Conveyance Photos: Vehicle Photo, Start KM Photo, End KM Photo */}
-                                      {((it.numberPlatePhotos && it.numberPlatePhotos.length > 0) ||
-                                        (it.startKmPhotos && it.startKmPhotos.length > 0) ||
-                                        (it.endKmPhotos && it.endKmPhotos.length > 0)) && (
-                                          <div className="pt-2 border-t border-slate-100 space-y-2">
-                                            <div className="flex items-center gap-1 text-[11px] font-extrabold text-slate-700">
-                                              <span>🚗</span>
-                                              <span>Conveyance Photo Proofs</span>
-                                            </div>
-                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                              {/* 1. Vehicle Photo */}
-                                              <div className="p-2.5 rounded-xl bg-blue-50/70 border border-blue-200/80 space-y-1.5">
-                                                <div className="flex items-center justify-between">
-                                                  <span className="text-[10px] font-extrabold text-blue-900 flex items-center gap-1">
-                                                    🚗 Vehicle Photo
-                                                  </span>
-                                                  <span className="text-[9px] font-bold text-blue-600 bg-white px-1.5 py-0.5 rounded border border-blue-200">
-                                                    {it.numberPlatePhotos?.length || 0}
-                                                  </span>
-                                                </div>
-                                                {it.numberPlatePhotos && it.numberPlatePhotos.length > 0 ? (
-                                                  <div className="space-y-1.5">
-                                                    {it.numberPlatePhotos.map((ph, pIdx) => {
-                                                      const url = ph.url || ph.uri;
-                                                      return (
-                                                        <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-blue-100 shadow-2xs">
-                                                          <div className="flex items-center gap-2 min-w-0">
-                                                            {url ? (
-                                                              <img src={url} alt="Vehicle" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
-                                                            ) : (
-                                                              <div className="w-8 h-8 rounded-md bg-blue-100 flex items-center justify-center text-xs shrink-0">🚗</div>
-                                                            )}
-                                                            <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'Vehicle Photo'}>
-                                                              {ph.name || `Vehicle #${pIdx + 1}`}
-                                                            </span>
-                                                          </div>
-                                                          {url && (
-                                                            <a
-                                                              href={url}
-                                                              target="_blank"
-                                                              rel="noopener noreferrer"
-                                                              className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
-                                                              title="View full vehicle photo"
-                                                            >
-                                                              View ↗
-                                                            </a>
-                                                          )}
-                                                        </div>
-                                                      );
-                                                    })}
-                                                  </div>
-                                                ) : (
-                                                  <p className="text-[10px] text-slate-400 m-0">No vehicle photo</p>
-                                                )}
-                                              </div>
-
-                                              {/* 2. Start KM Photo */}
-                                              <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200/80 space-y-1.5">
-                                                <div className="flex items-center justify-between">
-                                                  <span className="text-[10px] font-extrabold text-emerald-900 flex items-center gap-1">
-                                                    ⏱️ Start KM Photo
-                                                  </span>
-                                                  <span className="text-[9px] font-bold text-emerald-600 bg-white px-1.5 py-0.5 rounded border border-emerald-200">
-                                                    {it.startKmPhotos?.length || 0}
-                                                  </span>
-                                                </div>
-                                                {it.startKmPhotos && it.startKmPhotos.length > 0 ? (
-                                                  <div className="space-y-1.5">
-                                                    {it.startKmPhotos.map((ph, pIdx) => {
-                                                      const url = ph.url || ph.uri;
-                                                      return (
-                                                        <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-emerald-100 shadow-2xs">
-                                                          <div className="flex items-center gap-2 min-w-0">
-                                                            {url ? (
-                                                              <img src={url} alt="Start KM" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
-                                                            ) : (
-                                                              <div className="w-8 h-8 rounded-md bg-emerald-100 flex items-center justify-center text-xs shrink-0">⏱️</div>
-                                                            )}
-                                                            <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'Start KM Photo'}>
-                                                              {ph.name || `Start KM #${pIdx + 1}`}
-                                                            </span>
-                                                          </div>
-                                                          {url && (
-                                                            <a
-                                                              href={url}
-                                                              target="_blank"
-                                                              rel="noopener noreferrer"
-                                                              className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
-                                                              title="View start odometer photo"
-                                                            >
-                                                              View ↗
-                                                            </a>
-                                                          )}
-                                                        </div>
-                                                      );
-                                                    })}
-                                                  </div>
-                                                ) : (
-                                                  <p className="text-[10px] text-slate-400 m-0">No start KM photo</p>
-                                                )}
-                                              </div>
-
-                                              {/* 3. End KM Photo */}
-                                              <div className="p-2.5 rounded-xl bg-purple-50/70 border border-purple-200/80 space-y-1.5">
-                                                <div className="flex items-center justify-between">
-                                                  <span className="text-[10px] font-extrabold text-purple-900 flex items-center gap-1">
-                                                    🏁 End KM Photo
-                                                  </span>
-                                                  <span className="text-[9px] font-bold text-purple-600 bg-white px-1.5 py-0.5 rounded border border-purple-200">
-                                                    {it.endKmPhotos?.length || 0}
-                                                  </span>
-                                                </div>
-                                                {it.endKmPhotos && it.endKmPhotos.length > 0 ? (
-                                                  <div className="space-y-1.5">
-                                                    {it.endKmPhotos.map((ph, pIdx) => {
-                                                      const url = ph.url || ph.uri;
-                                                      return (
-                                                        <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-purple-100 shadow-2xs">
-                                                          <div className="flex items-center gap-2 min-w-0">
-                                                            {url ? (
-                                                              <img src={url} alt="End KM" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
-                                                            ) : (
-                                                              <div className="w-8 h-8 rounded-md bg-purple-100 flex items-center justify-center text-xs shrink-0">🏁</div>
-                                                            )}
-                                                            <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'End KM Photo'}>
-                                                              {ph.name || `End KM #${pIdx + 1}`}
-                                                            </span>
-                                                          </div>
-                                                          {url && (
-                                                            <a
-                                                              href={url}
-                                                              target="_blank"
-                                                              rel="noopener noreferrer"
-                                                              className="px-2 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
-                                                              title="View end odometer photo"
-                                                            >
-                                                              View ↗
-                                                            </a>
-                                                          )}
-                                                        </div>
-                                                      );
-                                                    })}
-                                                  </div>
-                                                ) : (
-                                                  <p className="text-[10px] text-slate-400 m-0">No end KM photo</p>
-                                                )}
-                                              </div>
-                                            </div>
-                                          </div>
-                                        )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* ── Separate Proofs Sections: Bill Proofs, Service Reports, and Full Payment Proofs ── */}
-                      {(() => {
-                        const { billProofs, serviceReports, fullPaymentProofs } = getClaimProofs(detailItem.raw);
-
-                        return (
-                          <div className="space-y-4">
-                            {/* 🧾 Bill Proofs Section (Non-conveyance claims only) */}
-                            {!isClaimConveyance(detailItem.raw) && billProofs.length > 0 && (
-                              <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-200/70 space-y-3">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs font-extrabold text-indigo-950 tracking-wider flex items-center gap-1.5">
-                                    <span>🧾</span> Bill Proofs ({billProofs.length})
-                                  </span>
-                                  <span className="text-[10px] font-bold text-indigo-600 bg-white px-2 py-0.5 rounded-md border border-indigo-200">
-                                    Receipt / Bill Documents
-                                  </span>
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                  {billProofs.map((proof, idx) => {
-                                    const pUrl = proof.url || proof.uri;
-                                    const pName = proof.name || `Bill Proof #${idx + 1}`;
-                                    const isPdf = proof.type === 'application/pdf' || (pName && pName.toLowerCase().endsWith('.pdf'));
-                                    return (
-                                      <div key={idx} className="p-2.5 bg-white rounded-xl border border-slate-200 hover:border-indigo-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
-                                        <div className="flex items-center gap-2.5 min-w-0">
-                                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
-                                            {isPdf ? '📄' : '🧾'}
-                                          </div>
-                                          <div className="min-w-0">
-                                            <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>
-                                              {pName}
-                                            </span>
-                                            <span className="text-[10px] text-slate-400 font-medium block">
-                                              Bill Proof Document {proof.size ? `• ${(proof.size / 1024).toFixed(0)} KB` : ''}
-                                            </span>
-                                          </div>
-                                        </div>
-                                        {pUrl && (
-                                          <a
-                                            href={pUrl}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
-                                            title="Click to view bill proof"
-                                          >
-                                            View ↗
-                                          </a>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* 📑 Service Reports Section */}
-                            {serviceReports.length > 0 && (
-                              <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200 space-y-3">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs font-extrabold text-amber-950 tracking-wider flex items-center gap-1.5">
-                                    <span>📑</span> Service Reports ({serviceReports.length})
-                                  </span>
-                                  <span className="text-[10px] font-bold text-amber-700 bg-white px-2 py-0.5 rounded-md border border-amber-200">
-                                    Tour / Service Reports
-                                  </span>
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                  {serviceReports.map((sr, srIdx) => {
-                                    const srUrl = sr.url || sr.uri;
-                                    const srName = sr.name || `Service Report #${srIdx + 1}`;
-                                    const isPdf = sr.type === 'application/pdf' || (srName && srName.toLowerCase().endsWith('.pdf'));
-                                    const isOdf = (srName && srName.toLowerCase().match(/\.(odt|ods|odp)$/)) || (sr.type && sr.type.includes('opendocument'));
-                                    return (
-                                      <div key={srIdx} className="p-2.5 bg-white rounded-xl border border-amber-200 hover:border-amber-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
-                                        <div className="flex items-center gap-2.5 min-w-0">
-                                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : isOdf ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
-                                            {isPdf ? '📄' : isOdf ? '📑' : '📝'}
-                                          </div>
-                                          <div className="min-w-0">
-                                            <span className="text-xs font-bold text-slate-800 block truncate" title={srName}>
-                                              {srName}
-                                            </span>
-                                            <span className="text-[10px] text-slate-400 font-medium block">
-                                              Service Report Document {sr.size ? `• ${(sr.size / 1024).toFixed(0)} KB` : ''}
-                                            </span>
-                                          </div>
-                                        </div>
-                                        {srUrl && (
-                                          <a
-                                            href={srUrl}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
-                                            title="Click to view service report"
-                                          >
-                                            View ↗
-                                          </a>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* ⚡ Full Payment Proofs Section */}
-                            {fullPaymentProofs.length > 0 && (
-                              <div className="p-4 bg-orange-50/70 rounded-2xl border border-orange-200 space-y-3">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs font-extrabold text-orange-950 tracking-wider flex items-center gap-1.5">
-                                    <span>⚡</span> Full Payment Proofs ({fullPaymentProofs.length})
-                                  </span>
-                                  <span className="text-[10px] font-bold text-orange-700 bg-white px-2 py-0.5 rounded-md border border-orange-200">
-                                    Supporting Approvals
-                                  </span>
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                  {fullPaymentProofs.map((proof, idx) => {
-                                    const pUrl = proof.url || proof.uri;
-                                    const pName = proof.name || `Full Payment Proof #${idx + 1}`;
-                                    const isPdf = proof.type === 'application/pdf' || (pName && pName.toLowerCase().endsWith('.pdf'));
-                                    return (
-                                      <div key={idx} className="p-2.5 bg-white rounded-xl border border-orange-200 hover:border-orange-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
-                                        <div className="flex items-center gap-2.5 min-w-0">
-                                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-orange-50 text-orange-600 border border-orange-200'}`}>
-                                            {isPdf ? '📄' : '⚡'}
-                                          </div>
-                                          <div className="min-w-0">
-                                            <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>
-                                              {pName}
-                                            </span>
-                                            <span className="text-[10px] text-slate-400 font-medium block">
-                                              Full Payment Document {proof.size ? `• ${(proof.size / 1024).toFixed(0)} KB` : ''}
-                                            </span>
-                                          </div>
-                                        </div>
-                                        {pUrl && (
-                                          <a
-                                            href={pUrl}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="px-2.5 py-1 bg-orange-50 hover:bg-orange-100 text-orange-800 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
-                                            title="Click to view full payment proof"
-                                          >
-                                            View ↗
-                                          </a>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-
-                      {/* Accounts Payment & Disbursement Record */}
-                      {detailItem.isHistory && detailItem.isApproved && (detailItem.raw?.disbursement || detailItem.raw?.paidAmount || detailItem.raw?.disbursedAt) && (
-                        <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-2">
-                          <span className="text-[10px] font-extrabold text-emerald-800 tracking-wider block">Accounts Payment & Settlement Record</span>
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-                            <div>
-                              <span className="text-emerald-600 font-bold block text-[10px]">Disbursed Amount</span>
-                              <span className="font-extrabold text-emerald-950 text-sm">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.grandAllowed || 0}</span>
-                            </div>
-                            <div>
-                              <span className="text-emerald-600 font-bold block text-[10px]">Payment Method</span>
-                              <span className="font-extrabold text-emerald-950">{detailItem.raw?.disbursement?.paymentMethod || 'Bank Transfer (NEFT)'}</span>
-                            </div>
-                            <div>
-                              <span className="text-emerald-600 font-bold block text-[10px]">Settled On</span>
-                              <span className="font-extrabold text-emerald-950">{formatAppliedDateTime(detailItem.raw?.disbursement?.paidAt || detailItem.raw?.disbursedAt || detailItem.date)}</span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Review Audit Trail & Decision History */}
-                      {Array.isArray(detailItem.raw?.approvalHistory) && detailItem.raw.approvalHistory.length > 0 && (
-                        <div className="space-y-2.5">
-                          <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">Review Audit Trail & Decision History</span>
-                          <div className="space-y-2">
-                            {detailItem.raw.approvalHistory.map((step, sIdx) => {
-                              const isStepReject = String(step.action || '').toLowerCase().includes('reject');
-                              const isStepDisburse = String(step.action || '').toLowerCase().includes('disburse') || String(step.action || '').toLowerCase().includes('paid');
-                              const stepBadgeColor = isStepReject
-                                ? 'bg-rose-100 text-rose-800 border-rose-200'
-                                : isStepDisburse
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                  : 'bg-blue-100 text-blue-800 border-blue-200';
-
-                              return (
-                                <div key={sIdx} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1.5">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-extrabold text-slate-800 text-[10px] tracking-wider">
-                                        {step.role || 'Reviewer'}
-                                      </span>
-                                      <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${stepBadgeColor}`}>
-                                        {step.action || 'Reviewed'}
-                                      </span>
-                                    </div>
-                                    {step.timestamp && (
-                                      <span className="text-[10px] font-bold text-slate-400">
-                                        {formatAppliedDateTime(step.timestamp)}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {step.remarks && (
-                                    <p className="text-[11px] text-slate-700 font-semibold m-0 pl-2 border-l-2 border-slate-300">
-                                      <span className="font-bold text-slate-500">Remarks: </span>"{step.remarks}"
-                                    </p>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                  {['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim'].includes(detailItem.type) && (
+                    <ExpenseClaimDetailContent claim={detailItem.raw || detailItem} />
                   )}
 
                   {/* ── Category 3: Store Material Info ── */}
@@ -4099,36 +3196,52 @@ const PendingApprovals = () => {
                     </div>
                   ) : (
                     <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const itm = detailItem;
-                          setDetailItem(null);
-                          openActionModal(itm, 'reject');
-                        }}
-                        className="px-3.5 sm:px-4 py-2.5 rounded-xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-                      >
-                        <XCircle size={15} />
-                        <span>Reject Request</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const itm = detailItem;
-                          setDetailItem(null);
-                          openActionModal(itm, 'approve');
-                        }}
-                        className="px-4 sm:px-5 py-2.5 rounded-xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-100 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-                      >
-                        <CheckCircle2 size={15} />
-                        <span>
-                          {detailItem.type === 'split'
-                            ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
-                            : detailItem.type === 'accounts_expense'
-                              ? `Approve & Pay (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`
-                              : 'Approve Request'}
-                        </span>
-                      </button>
+                      {(() => {
+                        const isDetailPaidStep =
+                          detailItem.type === 'accounts_expense' &&
+                          (detailItem.isAccountsApproved ||
+                            String(detailItem.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED' ||
+                            String(detailItem.raw?.paymentStatus || '').toUpperCase() === 'AWAITING_DISBURSEMENT');
+                        const showRejectBtn = !isDetailPaidStep || isSuperAdmin;
+                        return (
+                          <>
+                            {showRejectBtn && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const itm = detailItem;
+                                  setDetailItem(null);
+                                  openActionModal(itm, 'reject');
+                                }}
+                                className="px-3.5 sm:px-4 py-2.5 rounded-xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                <XCircle size={15} />
+                                <span>Reject Request</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const itm = detailItem;
+                                setDetailItem(null);
+                                openActionModal(itm, isDetailPaidStep ? 'pay' : 'approve');
+                              }}
+                              className="px-4 sm:px-5 py-2.5 rounded-xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-100 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                            >
+                              <CheckCircle2 size={15} />
+                              <span>
+                                {detailItem.type === 'split'
+                                  ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
+                                  : detailItem.type === 'accounts_expense'
+                                    ? (isDetailPaidStep
+                                      ? `Mark Paid (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`
+                                      : `Approve Claim (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`)
+                                    : 'Approve Request'}
+                              </span>
+                            </button>
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -4152,16 +3265,20 @@ const PendingApprovals = () => {
               >
                 <div className="flex justify-between items-start">
                   <div className="flex items-center gap-3">
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${actionType === 'approve' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                      {actionType === 'approve' ? <CheckCircle2 size={24} /> : <XCircle size={24} />}
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${(actionType === 'approve' || actionType === 'pay') ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                      {(actionType === 'approve' || actionType === 'pay') ? <CheckCircle2 size={24} /> : <XCircle size={24} />}
                     </div>
                     <div>
                       <h3 className="text-lg font-bold text-slate-900 m-0">
                         {selectedItem.type === 'split' && actionType === 'approve'
                           ? (splitPhase === 1 ? 'Phase 1: Accept Split Request' : 'Phase 2: Barcode Assignment')
-                          : actionType === 'approve'
-                            ? 'Approve Request'
-                            : 'Reject Request'}
+                          : selectedItem.type === 'accounts_expense' && actionType === 'approve'
+                            ? 'Step 1: Approve Expense Claim'
+                            : selectedItem.type === 'accounts_expense' && actionType === 'pay'
+                              ? 'Step 2: Mark Claim as Paid'
+                              : actionType === 'approve'
+                                ? 'Approve Request'
+                                : 'Reject Request'}
                       </h3>
                       <p className="text-xs font-bold text-slate-400 mt-0.5">{selectedItem.title}</p>
                     </div>
@@ -4396,30 +3513,141 @@ const PendingApprovals = () => {
                   </div>
                 )}
 
-                {/* Accounts Expense Approval Notice */}
+                {/* Accounts Expense Step 1: Approve Claim Notice */}
                 {selectedItem.type === 'accounts_expense' && actionType === 'approve' && (
                   <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-1.5 text-xs">
                     <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] tracking-wider">
                       <CheckCircle2 size={14} className="text-emerald-600" />
-                      Approve & Record Disbursement Payment
+                      Step 1: Approve Expense Claim
                     </div>
                     <p className="text-[11px] text-slate-600 font-medium m-0">
-                      Payable Amount: <strong className="text-emerald-800">₹{selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0}</strong>. Confirming will mark this claim as <strong>PAID</strong> and disburse payment.
+                      Payable Amount: <strong className="text-emerald-800">₹{selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0}</strong>. Confirming approval requires an approval remark and moves this claim to <strong>Step 2 (Mark Paid)</strong>.
                     </p>
+                    <p className="text-[11px] text-amber-800 bg-amber-50/90 border border-amber-200/80 rounded-xl px-2.5 py-1.5 font-semibold m-0">
+                      💡 Petty Cash balance is <strong>not</strong> added when approved — the amount is added to Petty Cash only after the claim is marked as <strong>Paid</strong> in Step 2.
+                    </p>
+                  </div>
+                )}
+
+                {/* Accounts Expense Step 2: Mark Paid with Paid Date & Payment Confirmation Proof */}
+                {selectedItem.type === 'accounts_expense' && actionType === 'pay' && (
+                  <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-3 text-xs">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] tracking-wider">
+                        <CheckCircle2 size={14} className="text-emerald-600" />
+                        Step 2: Record Payment &amp; Mark as Paid
+                      </div>
+                      <span className="px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-extrabold">
+                        Payable: ₹{selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-emerald-800 font-medium m-0">
+                      Confirming payment marks the claim as <strong>Paid</strong> and credits the settled amount back to the employee&apos;s Petty Cash wallet (if enabled).
+                    </p>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-extrabold text-slate-800 block">
+                        Paid Date <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={paymentDate}
+                        max={new Date().toISOString().split('T')[0]}
+                        onChange={(e) => setPaymentDate(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-emerald-500 transition-all"
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-extrabold text-slate-800 block">
+                        Upload Payment Confirmation Proof <span className="text-rose-500">*</span>
+                      </label>
+                      {paymentProofUrl ? (
+                        <div className="flex items-center justify-between p-2.5 bg-white border border-emerald-300 rounded-xl shadow-2xs">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                            <a
+                              href={paymentProofUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs font-bold text-indigo-600 hover:underline truncate"
+                            >
+                              {paymentProofName || 'Uploaded Payment Proof'}
+                            </a>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPaymentProofUrl('');
+                              setPaymentProofName('');
+                              setPaymentProofType('');
+                              setPaymentProofSize(0);
+                            }}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded-lg transition-colors ml-2 shrink-0"
+                            title="Remove proof"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            type="file"
+                            id="payment-proof-file-upload"
+                            accept="image/*,.pdf,application/pdf"
+                            onChange={handlePaymentProofUpload}
+                            disabled={uploadingPaymentProof}
+                            className="hidden"
+                          />
+                          <label
+                            htmlFor="payment-proof-file-upload"
+                            className={`w-full p-3 bg-white border-2 border-dashed rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all ${uploadingPaymentProof
+                              ? 'border-emerald-300 bg-emerald-50/50 text-emerald-700 cursor-wait'
+                              : 'border-emerald-300 hover:border-emerald-500 hover:bg-white text-slate-700'
+                              }`}
+                          >
+                            {uploadingPaymentProof ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+                                <span className="text-xs font-bold">Uploading payment confirmation proof...</span>
+                              </>
+                            ) : (
+                              <>
+                                <UploadCloud size={16} className="text-emerald-600" />
+                                <span className="text-xs font-bold">Upload Payment Confirmation Proof (Image / PDF) *</span>
+                              </>
+                            )}
+                          </label>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
                 {/* Generic Remarks textarea (Only shown for non-split approvals or rejections) */}
                 {!(selectedItem.type === 'split' && actionType === 'approve') && (
                   <div className="space-y-2">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest">
-                      Admin Remarks / Notes (Optional)
+                    <label className="text-[11px] font-extrabold text-slate-700 tracking-wider block">
+                      {actionType === 'reject'
+                        ? <>Rejection Reason / Remarks <span className="text-rose-500">*</span></>
+                        : selectedItem.type === 'accounts_expense' && actionType === 'approve'
+                          ? <>Approval Remark <span className="text-rose-500">*</span></>
+                          : selectedItem.type === 'accounts_expense' && actionType === 'pay'
+                            ? <>Payment Remark <span className="text-rose-500">*</span></>
+                            : 'Admin Remarks / Notes (Optional)'}
                     </label>
                     <textarea
                       value={adminNote}
                       onChange={(e) => setAdminNote(e.target.value)}
                       rows={3}
-                      placeholder={`Optional remarks for ${actionType === 'approve' ? 'approval' : 'rejection'}...`}
+                      placeholder={
+                        selectedItem.type === 'accounts_expense' && actionType === 'approve'
+                          ? 'Enter approval remark (required)...'
+                          : selectedItem.type === 'accounts_expense' && actionType === 'pay'
+                            ? 'Enter payment remark (required)...'
+                            : `Enter remarks for ${actionType === 'approve' ? 'approval' : actionType === 'pay' ? 'payment' : 'rejection'}...`
+                      }
                       className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
                     />
                   </div>
@@ -4437,8 +3665,16 @@ const PendingApprovals = () => {
                   <button
                     type="button"
                     onClick={handleAction}
-                    disabled={processing || uploadingInvoice || (selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && !newSplitBarcode.trim())}
-                    className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${actionType === 'approve'
+                    disabled={
+                      processing ||
+                      uploadingInvoice ||
+                      uploadingPaymentProof ||
+                      (selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && !newSplitBarcode.trim()) ||
+                      (selectedItem.type === 'accounts_expense' && actionType === 'approve' && !adminNote.trim()) ||
+                      (selectedItem.type === 'accounts_expense' && actionType === 'pay' && (!paymentDate || !paymentProofUrl || !adminNote.trim())) ||
+                      (selectedItem.type === 'accounts_expense' && actionType === 'reject' && !adminNote.trim())
+                    }
+                    className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${(actionType === 'approve' || actionType === 'pay')
                       ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
                       : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'
                       }`}
@@ -4448,10 +3684,12 @@ const PendingApprovals = () => {
                       : selectedItem.type === 'split' && actionType === 'approve'
                         ? (splitPhase === 1 ? 'Accept & Generate Tally Voucher' : 'Complete Split & Activate Barcode')
                         : selectedItem.type === 'accounts_expense' && actionType === 'approve'
-                          ? 'Confirm & Pay Claim'
-                          : actionType === 'approve'
-                            ? 'Confirm Approval'
-                            : 'Confirm Rejection'}
+                          ? 'Confirm Approval'
+                          : selectedItem.type === 'accounts_expense' && actionType === 'pay'
+                            ? 'Confirm & Mark Paid'
+                            : actionType === 'approve'
+                              ? 'Confirm Approval'
+                              : 'Confirm Rejection'}
                   </button>
                 </div>
               </motion.div>

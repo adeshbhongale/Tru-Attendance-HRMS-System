@@ -702,8 +702,317 @@ test('Audit & Verification Box: OTHER (Purchase/Normal) claim DOES show audit bo
   const buffer = Buffer.concat(chunks);
   const text = extractPdfText(buffer);
 
-  assert.ok(text.includes('APPROVAL & VERIFICATION AUDIT'), 'OTHER claim must show Approval & Verification Audit box');
+  assert.ok(!text.includes('APPROVAL & VERIFICATION AUDIT'), 'Must NOT contain legacy audit header');
+  assert.ok(text.includes('1ST APPROVAL: REPORTING MANAGER APPROVAL'), 'OTHER claim must show 1st Approval Reporting Manager card');
   assert.ok(text.includes('Rohit Patil [MGR201]'), 'Must show Reporting Manager as designated approver');
   assert.ok(text.includes('Reporting Manager'), 'Must show Reporting Manager role');
   assert.ok(text.includes('AWAITING APPROVAL'), 'Must show Awaiting Approval status');
+  assert.ok(text.includes('2ND APPROVAL'), 'Stock purchase OTHER claim must also show 2nd Approval CFO section');
+  assert.ok(text.includes('ACCOUNTS ADMIN APPROVAL (STEP 1 VERIFICATION)'), 'Must also show Accounts Admin Step 1 approval section');
+});
+
+test('All Approvals & Disbursement in PDF: renders 1st Approval, 2nd Approval (CFO), Accounts Step 1 Approval, and Step 2 Payment with remarks', async () => {
+  const claim = {
+    _id: '65e000000000000000000033',
+    claimNumber: 'EXP-ALL-APPROVALS-01',
+    status: 'PAID',
+    paymentStatus: 'PAID',
+    claimType: 'FOOD',
+    claimMode: 'NORMAL',
+    submittedBy: { name: 'Siddhesh Shinde', employeeIdCode: 'EMP301', department: 'Engineering', designation: 'Engineer' },
+    fullPayment: {
+      requested: true,
+      reason: 'Late night client deployment dinner',
+      status: 'APPROVED',
+      approvedAmount: 2500,
+      decidedAt: new Date('2026-10-25T14:00:00Z'),
+    },
+    managerApproval: {
+      kind: 'FULL_PAYMENT',
+      approver: { name: 'Rohit Patil', employeeIdCode: 'MGR201', designation: 'Engineering Manager', department: 'Engineering' },
+      approverRole: 'REPORTING_MANAGER',
+      status: 'APPROVED',
+      decidedAt: new Date('2026-10-25T11:30:00Z'),
+      remarks: 'Verified client deployment attendance.',
+    },
+    financeApproval: {
+      approver: { name: 'Vikram Deshmukh', employeeIdCode: 'CFO101', designation: 'CFO', department: 'Finance' },
+      approverName: 'Vikram Deshmukh',
+      status: 'APPROVED',
+      decidedAt: new Date('2026-10-25T14:00:00Z'),
+      remarks: 'Approved full payment exception as CFO.',
+    },
+    accountsApproval: {
+      status: 'APPROVED',
+      approvedBy: { name: 'Neha Kulkarni', employeeIdCode: 'ACC401', designation: 'Accounts Manager', department: 'Accounts' },
+      approvedByName: 'Neha Kulkarni',
+      approvedAt: new Date('2026-10-26T09:15:00Z'),
+      remarks: 'Bills verified for GST compliance.',
+    },
+    disbursement: {
+      amount: 2500,
+      paymentDate: new Date('2026-10-26T16:30:00Z'),
+      paymentMethod: 'Bank Transfer (NEFT)',
+      paymentReference: 'UTR9988776655',
+      recordedByName: 'Neha Kulkarni',
+      remarks: 'Settled via corporate HDFC account.',
+      paymentProofs: [{ name: 'neft_advice.jpg', size: 145000 }],
+    },
+    paidAmount: 2500,
+    payableAmount: 2500,
+    grandRequested: 2500,
+    grandAllowed: 1000,
+    grandExcess: 1500,
+    entries: [{ expenseType: 'FOOD', requestedAmount: 2500, allowedAmount: 1000, excessAmount: 1500, description: 'Client deployment dinner' }],
+    receipts: [],
+  };
+
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const text = extractPdfText(buffer);
+
+  assert.ok(text.includes('Rohit Patil [MGR201]'), 'Must show 1st Approver name and code');
+  assert.ok(text.includes('Verified client deployment attendance.'), 'Must show 1st Approval remark');
+  assert.ok(text.includes('Vikram Deshmukh [CFO101]'), 'Must show 2nd Approver (CFO) name and code');
+  assert.ok(text.includes('Approved full payment exception as CFO.'), 'Must show 2nd Approval (CFO) remark');
+  assert.ok(text.includes('Neha Kulkarni [ACC401]'), 'Must show Accounts Step 1 Approver name and code');
+  assert.ok(text.includes('Bills verified for GST compliance.'), 'Must show Accounts Step 1 approval remark');
+  assert.ok(text.includes('Settled via corporate HDFC account.'), 'Must show Step 2 payment remark');
+  assert.ok(text.includes('UTR9988776655'), 'Must show payment reference UTR');
+  assert.ok(text.includes('PAYMENT CONFIRMATION PROOF'), 'Must include payment confirmation proof in proof gallery');
+});
+
+test('Lodging claim with accompanied employees, full payment, all approvals, and 3 proofs generates strictly 2 pages without a blank intermediate page', async () => {
+  const claim = {
+    _id: '65e000000000000000000034',
+    claimNumber: 'EXP-2026-000001',
+    status: 'ACCOUNTS_APPROVED',
+    paymentStatus: 'AWAITING_DISBURSEMENT',
+    claimType: 'LODGING',
+    claimMode: 'LOGGING',
+    submittedAt: new Date('2026-10-12T17:06:00Z'),
+    submittedBy: {
+      name: 'Adesh Bhongale',
+      employeeIdCode: 'TCSF11A_033',
+      department: 'Software and Systems',
+      designation: 'ERP Software Trainee',
+      mobile: '8530471572',
+      email: 'adeshbhongale@gmail.com',
+    },
+    trip: {
+      customerName: 'New',
+      destination: 'Pune',
+      destinationClass: 'A',
+      purpose: 'Tests',
+    },
+    employeeClaims: [
+      {
+        employee: { name: 'Adesh Bhongale', employeeIdCode: 'TCSF11A_033', department: 'Software and Systems', designation: 'ERP Software Trainee' },
+        items: [{ expenseType: 'LODGING', perDayLimit: 1200, requestedAmount: 4250, allowedAmount: 4162.5, excessAmount: 87.5, quantity: 1 }],
+      },
+      {
+        employee: { name: 'Abhay Mudgal', employeeIdCode: 'EMP202', department: 'Customer Support', designation: 'Customer Support Team Lead' },
+        items: [{ expenseType: 'LODGING', perDayLimit: 2500, requestedAmount: 4250, allowedAmount: 4162.5, excessAmount: 87.5, quantity: 1 }],
+      },
+    ],
+    plainExplanation: 'Individual limits per day: • Adesh Bhongale: Rs. 1,200/day (Total: Rs. 3,600 for 3 days) • Abhay Mudgal: Rs. 2,500/day (Total: Rs. 7,500 for 3 days) Stay budget rule (2 employees): 75% of combined budget = 75% × (Rs. 3,600 + Rs. 7,500) = Rs. 8,325. Combined Whole Claim Limit: Rs. 8,325 (3 days). Claimed bill: Rs. 8,500. Therefore, Rs. 8,325 is allowed and Rs. 175 is excess beyond policy limit (Rs. 87.5 excess per employee).',
+    fullPayment: {
+      requested: true,
+      reason: 'I want all',
+      status: 'APPROVED',
+      approvedAmount: 8500,
+      proofs: [{ name: '1000632158.jpg', size: 120000 }],
+    },
+    financeApproval: {
+      status: 'NOT_REQUIRED',
+      approverName: 'Preetam Dige',
+      approver: { name: 'Preetam Dige', employeeIdCode: 'TCMN3A_003', designation: 'VP Accounts & Stores', department: 'Accounts and Purchase' },
+    },
+    accountsApproval: {
+      status: 'APPROVED',
+      approvedBy: { name: 'System Super Admin', employeeIdCode: 'SUPER001' },
+      approvedByName: 'System Super Admin',
+      approvedAt: new Date('2026-11-05T16:11:00Z'),
+      remarks: 'yress',
+    },
+    grandRequested: 8500,
+    grandAllowed: 8325,
+    grandExcess: 175,
+    payableAmount: 8500,
+    entries: [{ expenseType: 'LODGING', requestedAmount: 8500, allowedAmount: 8325, excessAmount: 175, description: 'Tests', quantity: 1 }],
+    receipts: [{ name: '1000632736.jpg', size: 180000 }],
+    serviceReports: [{ name: '1000632736_sr.jpg', size: 180000 }],
+  };
+
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const pages = getPageCount(buffer);
+  const text = extractPdfText(buffer);
+
+  assert.equal(pages, 2, `Claim with 3 proofs must generate strictly 2 pages (no blank page 2), got ${pages}`);
+  assert.ok(text.includes('Page 1 of 2'), 'Must contain Page 1 of 2');
+  assert.ok(text.includes('Page 2 of 2'), 'Must contain Page 2 of 2');
+  assert.ok(!text.includes('LODGING (LOGGING)'), 'Must normalize LOGGING typo to LODGING');
+  assert.ok(!text.includes('Barcode: N/A'), 'Lodging item must not show stock purchase Barcode tag');
+  assert.ok(!text.includes('Not Applicable (Management User)'), 'Trainee employee must not be marked as Management User');
+  assert.ok(!text.includes('APPROVAL & VERIFICATION AUDIT'), 'Must NOT contain legacy audit header');
+  assert.ok(!text.includes('AUDITED VALUES'), 'Must NOT contain AUDITED VALUES in Total Claim Amount bar');
+  assert.ok(text.includes('Total Claim Amount (Payable: Rs. 8,500.00):'), 'Must show Total Claim Amount bar matching Claim Details UI');
+  assert.ok(text.includes('5. FULL PAYMENT DETAILS'), 'Must include 5. FULL PAYMENT DETAILS card');
+  assert.ok(text.includes('1ST APPROVAL: REPORTING MANAGER APPROVAL (FULL PAYMENT)'), 'Must include 1st Approval card');
+  assert.ok(text.includes('2ND APPROVAL: CFO / FINANCE HEAD'), 'Must include 2nd Approval CFO card');
+  assert.ok(!text.includes('AWAITING 2ND APPROVAL'), 'Already-approved claim must NOT show AWAITING 2ND APPROVAL');
+  assert.ok(text.includes('APPROVED by Preetam Dige'), 'Must show APPROVED by Preetam Dige in status summary');
+  assert.ok(text.includes('ACCOUNTS ADMIN APPROVAL (STEP 1 VERIFICATION) & PAYMENT'), 'Must include Accounts Admin Approval & Payment card');
+  assert.ok(text.includes('6. CALCULATION BREAKDOWN & POLICY EXPLANATION'), 'Must include 6. CALCULATION BREAKDOWN card');
+  assert.ok(text.includes('7. SERVICE REPORTS (1)'), 'Must include standalone 7. SERVICE REPORTS card');
+  assert.ok(text.includes('8. CLAIM STATUS & APPROVAL JOURNEY'), 'Must include 8. CLAIM STATUS & APPROVAL JOURNEY section');
+  assert.ok(text.includes('CLAIM JOURNEY'), 'Must include CLAIM JOURNEY timeline header');
+  assert.ok(text.includes('Claim Submitted'), 'Must include Step 1 Claim Submitted');
+  assert.ok(text.includes('1st Approval: Reporting Manager (Full Payment)'), 'Must include Step 2 Reporting Manager Approval');
+  assert.ok(text.includes('2nd Approval: CFO / Finance Head'), 'Must include Step 3 CFO / Finance Head Approval');
+  assert.ok(text.includes('Accounts Admin Approval (Step 1)'), 'Must include Step 4 Accounts Admin Approval (Step 1)');
+  assert.ok(text.includes('Payment & Settlement (Step 2)'), 'Must include Step 5 Payment & Settlement (Step 2)');
+});
+
+test('EXP-2026-000003 scenario: Management user Lodging claim with stayType HOTEL, Policy Limit column, and Full Payment renders cleanly without overlap or redundant LODGING (LODGING)', async () => {
+  const claim = {
+    _id: '65e000000000000000000035',
+    claimNumber: 'EXP-2026-000003',
+    status: 'SUBMITTED',
+    paymentStatus: 'UNPAID',
+    claimType: 'LODGING',
+    claimMode: 'LODGING',
+    stayType: 'HOTEL',
+    fromDate: '2026-10-12',
+    toDate: '2026-10-15',
+    numberOfNights: 3,
+    submittedAt: new Date('2026-10-12T17:19:00Z'),
+    submittedBy: {
+      name: 'Siddhesh Shinde',
+      employeeIdCode: 'EMP009',
+      department: 'Management',
+      designation: 'Managing Director',
+      mobile: '8551003526',
+      email: 'siddhesh.shinde@trucode.in',
+    },
+    trip: {
+      customerName: 'News',
+      destination: 'Mumbai',
+      destinationClass: 'A',
+      purpose: 'Testing',
+    },
+    employeeClaims: [
+      {
+        employee: { name: 'Siddhesh Shinde', employeeIdCode: 'EMP009', department: 'Management', designation: 'Managing Director' },
+        items: [{ expenseType: 'LODGING', perDayLimit: 2500, requestedAmount: 4250, allowedAmount: 4162.5, excessAmount: 87.5 }],
+      },
+      {
+        employee: { name: 'Adesh Bhongale', employeeIdCode: 'TCSF11A_033', department: 'Software and Systems', designation: 'ERP Software Trainee' },
+        items: [{ expenseType: 'LODGING', perDayLimit: 1200, requestedAmount: 4250, allowedAmount: 4162.5, excessAmount: 87.5 }],
+      },
+    ],
+    fullPayment: {
+      requested: true,
+      reason: 'I want all payment now.',
+      proofs: [{ name: '1000632158.jpg', size: 120000 }],
+    },
+    grandRequested: 8500,
+    grandPolicyLimit: 8325,
+    grandAllowed: 8325,
+    grandExcess: 175,
+    payableAmount: 8500,
+    entries: [{ expenseType: 'LODGING', requestedAmount: 8500, policyLimit: 8325, allowedAmount: 8325, excessAmount: 175, description: 'Testing' }],
+    receipts: [{ name: '1000632736.jpg', size: 180000 }],
+    serviceReports: [{ name: '1000632736_sr.jpg', size: 180000 }],
+  };
+
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const pages = getPageCount(buffer);
+  const text = extractPdfText(buffer);
+
+  assert.equal(pages, 2, `EXP-2026-000003 with 3 proofs must generate strictly 2 pages, got ${pages}`);
+  assert.ok(!text.includes('LODGING (LODGING)'), 'Must not print redundant LODGING (LODGING)');
+  assert.ok(text.includes('Stay Type:'), 'Must include Stay Type field');
+  assert.ok(text.includes('In Hotel'), 'Must display In Hotel for stayType HOTEL');
+  assert.ok(text.includes('POLICY LIMIT'), 'Must include POLICY LIMIT metric box and table column');
+  assert.ok(text.includes('ACCOUNTS ADMIN APPROVAL (STEP 1 VERIFICATION)'), 'Must include Accounts Admin Step 1 Verification section');
+  assert.ok(text.includes('Rs. 8,500.00'), 'Section 4 table must format Claimed amount with Rs. prefix');
+  assert.ok(text.includes('Rs. 8,325.00'), 'Section 4 table must format Policy Limit & Allowed amount with Rs. prefix');
+  assert.ok(text.includes('Rs. 175.00'), 'Section 4 table must format Excess amount with Rs. prefix');
+});
+
+test('Multi-page table pagination: large accompanied employees list and multi-line expense items paginate cleanly with repeated headers', async () => {
+  const claim = {
+    _id: '65e000000000000000000036',
+    claimNumber: 'EXP-PAGINATED-TABLE-01',
+    status: 'APPROVED',
+    paymentStatus: 'UNPAID',
+    claimType: 'LODGING',
+    claimMode: 'LODGING',
+    fromDate: '2026-10-06',
+    toDate: '2026-10-09',
+    numberOfNights: 3,
+    submittedBy: {
+      name: 'Adesh Bhongale',
+      employeeIdCode: 'TCSF11A_033',
+      department: 'Software and Systems',
+      designation: 'ERP Software Trainee',
+    },
+    employeeClaims: [
+      {
+        employee: { name: 'Adesh Bhongale', employeeIdCode: 'TCSF11A_033', department: 'Software and Systems', designation: 'ERP Software Trainee' },
+        items: [{ expenseType: 'LODGING', perDayLimit: 1200, requestedAmount: 4250, allowedAmount: 4162.5, excessAmount: 87.5 }],
+      },
+      {
+        employee: { name: 'Abhay Mudgal', employeeIdCode: 'TCCS7A_011', department: 'Customer Support', designation: 'Customer Support Team Lead' },
+        items: [{ expenseType: 'LODGING', perDayLimit: 2500, requestedAmount: 4250, allowedAmount: 4162.5, excessAmount: 87.5 }],
+      },
+    ],
+    entries: Array.from({ length: 28 }, (_, i) => ({
+      expenseType: 'LODGING',
+      requestedAmount: 1500,
+      policyLimit: 1200,
+      allowedAmount: 1200,
+      excessAmount: 300,
+      description: `Detailed accommodation & lodging entry #${i + 1} with long description text for wrapping verification`,
+    })),
+    grandRequested: 42000,
+    grandPolicyLimit: 33600,
+    grandAllowed: 33600,
+    grandExcess: 8400,
+    payableAmount: 33600,
+    receipts: [],
+  };
+
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const pages = getPageCount(buffer);
+  const text = extractPdfText(buffer);
+
+  assert.ok(pages >= 2, `28 multi-line entries must paginate cleanly across multiple pages, got ${pages}`);
+  assert.ok(/ERP Software Trainee.*Software and Systems/.test(text), 'Must include full designation and department for Employee #1 on single line');
+  assert.ok(/Customer Support Team Lead.*Customer Support/.test(text), 'Must include full designation and department for Employee #2 on single line');
+  assert.ok(text.includes('Total Claim Amount (Payable: Rs. 33,600.00):'), 'Must render Total Claim Amount footer after paginated rows');
 });

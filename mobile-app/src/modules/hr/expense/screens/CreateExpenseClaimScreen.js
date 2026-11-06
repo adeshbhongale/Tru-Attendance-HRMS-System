@@ -8,10 +8,12 @@ import {
   Bike,
   Briefcase,
   Building2,
+  Bus,
   Calculator,
   Calendar,
   Camera,
   Car,
+  CarTaxiFront,
   CheckCircle2,
   ChevronDown,
   Eye,
@@ -22,12 +24,14 @@ import {
   Image as ImageIcon,
   MapPin,
   Minus,
+  Plane,
   Plus,
   Receipt,
   Search,
   Send,
   ShieldCheck,
   ShoppingBag,
+  TrainFront,
   Trash2,
   Users,
   X,
@@ -58,6 +62,7 @@ const NORMAL_EXPENSE_TYPES = [
   { code: "FOOD", name: "Food", icon: Receipt },
   { code: "TRAVEL", name: "Travel", icon: MapPin },
   { code: "CONVEYANCE", name: "Local Conveyance", icon: MapPin },
+  { code: "STOCK_PURCHASE", name: "Stock Purchase", icon: ShoppingBag },
   { code: "OTHER", name: "Other", icon: FileText },
 ];
 
@@ -74,6 +79,150 @@ const DEFAULT_CONVEYANCE_RATES = {
   car: 5.0,
   eBike: 1.0,
   eCar: 1.75,
+};
+
+const KM_RATE_SUBTYPE_CODES = [
+  "OWN_VEHICLE",
+  "TWO_WHEELER_PETROL",
+  "TWO_WHEELER_EV",
+  "FOUR_WHEELER_PETROL",
+  "FOUR_WHEELER_EV",
+];
+
+const isKmWorkflow = (subObj, entryObj) => {
+  if (subObj?.workflow === "KM_RATE") return true;
+  const sCode = String(subObj?.code || entryObj?.travelSubtypeCode || "").toUpperCase();
+  if (KM_RATE_SUBTYPE_CODES.includes(sCode)) return true;
+  if (!subObj && entryObj?.travelWorkflow === "KM_RATE") return true;
+  return false;
+};
+
+const getTravelModeIconComponent = (codeOrName) => {
+  const key = String(codeOrName || "").toUpperCase();
+  if (key.includes("TRAIN") || key.includes("RAIL")) return TrainFront;
+  if (key.includes("BUS")) return Bus;
+  if (key.includes("FLIGHT") || key.includes("AIR") || key.includes("PLANE")) return Plane;
+  if (key.includes("TAXI") || key.includes("AUTO") || key.includes("CAB")) return CarTaxiFront;
+  if (key.includes("_EV") || key.includes("EBIKE") || key.includes("ECAR") || key.includes("E-BIKE") || key.includes("E-CAR")) return Zap;
+  if (key.includes("TWO_WHEELER") || key.includes("2W") || key.includes("2-WHEELER") || key.includes("BIKE")) return Bike;
+  if (key.includes("FOUR_WHEELER") || key.includes("4W") || key.includes("4-WHEELER") || key.includes("CAR")) return Car;
+  return Car;
+};
+
+const DEFAULT_DYNAMIC_TRAVEL_MODES = [
+  {
+    code: "BUS",
+    name: "Bus",
+    category: "PUBLIC",
+    requiresSubtype: true,
+    subtypes: [{ code: "AC_LUXURY_BUS", name: "AC Luxury Bus", workflow: "STANDARD" }],
+  },
+  {
+    code: "FLIGHT",
+    name: "Flight",
+    category: "PUBLIC",
+    requiresSubtype: true,
+    subtypes: [{ code: "FLIGHT_ECONOMY", name: "Flight Economy", workflow: "STANDARD" }],
+  },
+  {
+    code: "TAXI_AUTO",
+    name: "Taxi/Auto",
+    category: "PUBLIC",
+    requiresSubtype: false,
+    subtypes: [],
+  },
+  {
+    code: "TRAIN",
+    name: "Train",
+    category: "PUBLIC",
+    requiresSubtype: true,
+    subtypes: [
+      { code: "TRAIN_1AC", name: "Train Ind AC Class", workflow: "STANDARD" },
+      { code: "TRAIN_2AC", name: "Train IInd AC Class", workflow: "STANDARD" },
+      { code: "TRAIN_2ND", name: "Train IInd Class", workflow: "STANDARD" },
+    ],
+  },
+  {
+    code: "TWO_WHEELER_PETROL",
+    name: "2-Wheeler Petrol",
+    category: "VEHICLE",
+    conveyanceRateKey: "twoWheeler",
+    requiresSubtype: true,
+    subtypes: [
+      { code: "COMPANY_VEHICLE", name: "Company Vehicle", workflow: "STANDARD" },
+      { code: "OWN_VEHICLE", name: "Own Vehicle", workflow: "KM_RATE", rateKey: "twoWheeler", conveyanceRateKey: "twoWheeler", ratePerKm: 3.5 },
+    ],
+  },
+  {
+    code: "TWO_WHEELER_EV",
+    name: "2-Wheeler EV",
+    category: "VEHICLE",
+    conveyanceRateKey: "eBike",
+    requiresSubtype: true,
+    subtypes: [
+      { code: "COMPANY_VEHICLE", name: "Company Vehicle", workflow: "STANDARD" },
+      { code: "OWN_VEHICLE", name: "Own Vehicle", workflow: "KM_RATE", rateKey: "eBike", conveyanceRateKey: "eBike", ratePerKm: 1.0 },
+    ],
+  },
+  {
+    code: "FOUR_WHEELER_PETROL",
+    name: "4-Wheeler Petrol",
+    category: "VEHICLE",
+    conveyanceRateKey: "car",
+    requiresSubtype: true,
+    subtypes: [
+      { code: "COMPANY_VEHICLE", name: "Company Vehicle", workflow: "STANDARD" },
+      { code: "OWN_VEHICLE", name: "Own Vehicle", workflow: "KM_RATE", rateKey: "car", conveyanceRateKey: "car", ratePerKm: 5.0 },
+    ],
+  },
+  {
+    code: "FOUR_WHEELER_EV",
+    name: "4-Wheeler EV",
+    category: "VEHICLE",
+    conveyanceRateKey: "eCar",
+    requiresSubtype: true,
+    subtypes: [
+      { code: "COMPANY_VEHICLE", name: "Company Vehicle", workflow: "STANDARD" },
+      { code: "OWN_VEHICLE", name: "Own Vehicle", workflow: "KM_RATE", rateKey: "eCar", conveyanceRateKey: "eCar", ratePerKm: 1.75 },
+    ],
+  },
+];
+
+const sanitizeTravelSubtypesList = (rawSubtypes) => {
+  const seen = new Set();
+  return (Array.isArray(rawSubtypes) ? rawSubtypes : []).filter((s) => {
+    if (!s || s.isActive === false || s.status === "inactive") return false;
+    const key = String(s.code || s._id || "").trim().toUpperCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const sanitizeTravelModesList = (rawModes) => {
+  const list = Array.isArray(rawModes) ? rawModes : [];
+  const hasSplitVehicleModes = list.some(
+    (m) =>
+      m &&
+      m.isActive !== false &&
+      m.status !== "inactive" &&
+      ["TWO_WHEELER_PETROL", "TWO_WHEELER_EV", "FOUR_WHEELER_PETROL", "FOUR_WHEELER_EV"].includes(String(m.code || "").toUpperCase())
+  );
+  const seenModes = new Set();
+  const out = [];
+  for (const m of list) {
+    if (!m || m.isActive === false || m.status === "inactive") continue;
+    const code = String(m.code || m._id || "").trim().toUpperCase();
+    if (!code || seenModes.has(code)) continue;
+    if (code === "OWN_VEHICLE" || code === "COMPANY_VEHICLE") continue;
+    if (hasSplitVehicleModes && (code === "TWO_WHEELER" || code === "FOUR_WHEELER")) continue;
+    seenModes.add(code);
+    out.push({
+      ...m,
+      subtypes: sanitizeTravelSubtypesList(m.subtypes),
+    });
+  }
+  return out;
 };
 
 const COUNT_OPTIONS = Array.from({ length: 20 }, (_, i) => i + 1).map((n) => ({
@@ -97,7 +246,16 @@ const daysBetween = (fromStr, toStr) => {
   if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return 0;
   const diffTime = Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
   if (diffTime < 0) return 0;
-  return diffTime + 1; // inclusive days: e.g. 1st to 3rd = 3 days; 1st to 1st = 1 day
+  return diffTime + 1; // inclusive days: e.g. 28th to 30th = 3 days; same-day = 1 day
+};
+
+const nightsBetween = (fromStr, toStr) => {
+  if (!fromStr || !toStr) return 0;
+  const d1 = new Date(fromStr);
+  const d2 = new Date(toStr);
+  if (isNaN(d1.getTime()) || isNaN(d2.getTime())) return 0;
+  const diffTime = Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
+  return diffTime > 0 ? diffTime : 0; // lodging nights: To Date - From Date (checkout not counted)
 };
 
 const formatINR = (n) => {
@@ -216,6 +374,17 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [requestedAmount, setRequestedAmount] = useState("");
   const [remark, setRemark] = useState("");
 
+  // Optional Food Claim inside the Lodging Form (multiplier entries for Food only)
+  const [includeFood, setIncludeFood] = useState(false);
+  const [foodEntries, setFoodEntries] = useState(() => [
+    { id: "food_1", requestedAmount: "", remark: "", attachments: [] },
+  ]);
+  const [foodEntitlementInfo, setFoodEntitlementInfo] = useState({ loading: false, data: null });
+
+  // Dynamic Travel Modes & Subtypes from Admin Configuration
+  const [travelModes, setTravelModes] = useState(DEFAULT_DYNAMIC_TRAVEL_MODES);
+  const [travelEntitlementsConfigured, setTravelEntitlementsConfigured] = useState(false);
+
   // Server Preview & Validation
   const [previewData, setPreviewData] = useState(null);
   const [previewing, setPreviewing] = useState(false);
@@ -245,10 +414,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       id: "1",
       expenseType: initialMode === "LODGING" ? "LODGING" : (isInitialOther ? "OTHER" : (route.params?.expenseType || "")),
       otherSubType: isInitialOther ? "PURCHASE" : "",
+      materialName: "",
       barcodeNumber: "",
       quantity: "",
       vehicle: "twoWheeler",
       distanceKm: "",
+      travelModeId: "",
+      travelModeCode: "",
+      travelModeName: "",
+      travelSubtypeId: "",
+      travelSubtypeCode: "",
+      travelSubtypeName: "",
+      travelWorkflow: "STANDARD",
+      startKm: "",
+      endKm: "",
+      ratePerKm: "",
       visitType: "",
       isVisit: false,
       numberPlatePhotos: [],
@@ -260,6 +440,206 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       attachments: [],
     },
   ]);
+
+  const handleAddFoodEntry = () => {
+    setFoodEntries((prev) => [
+      ...prev,
+      { id: `food_${Date.now()}_${prev.length + 1}`, requestedAmount: "", remark: "", attachments: [] },
+    ]);
+    setPreviewData(null);
+  };
+
+  const handleRemoveFoodEntry = (fIdx) => {
+    setFoodEntries((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== fIdx)));
+    setPreviewData(null);
+  };
+
+  const handleUpdateFoodEntry = (fIdx, field, value) => {
+    setFoodEntries((prev) => {
+      const copy = [...prev];
+      if (copy[fIdx]) {
+        copy[fIdx] = { ...copy[fIdx], [field]: value };
+      }
+      return copy;
+    });
+    setPreviewData(null);
+  };
+
+  const resolveSubtypeRateKey = useCallback((modeObj, subtypeObj) => {
+    if (subtypeObj?.conveyanceRateKey) return subtypeObj.conveyanceRateKey;
+    if (subtypeObj?.rateKey) return subtypeObj.rateKey;
+    const sCode = String(subtypeObj?.code || "").toUpperCase();
+    const sName = String(subtypeObj?.name || "").toUpperCase();
+    const mCode = String(modeObj?.code || "").toUpperCase();
+    const mName = String(modeObj?.name || "").toUpperCase();
+    if (
+      sCode.includes("TWO_WHEELER_EV") ||
+      sCode.includes("2W_EV") ||
+      sCode.includes("EBIKE") ||
+      mCode.includes("TWO_WHEELER_EV") ||
+      mCode.includes("2W_EV") ||
+      ((mCode.includes("TWO") || mCode.includes("2W") || mName.includes("2-WHEELER")) && (/\bEV\b|ELECTRIC/.test(sName) || /\bEV\b|ELECTRIC/.test(mName)))
+    ) {
+      return "eBike";
+    }
+    if (
+      sCode.includes("FOUR_WHEELER_EV") ||
+      sCode.includes("4W_EV") ||
+      sCode.includes("ECAR") ||
+      mCode.includes("FOUR_WHEELER_EV") ||
+      mCode.includes("4W_EV") ||
+      ((mCode.includes("FOUR") || mCode.includes("4W") || mName.includes("4-WHEELER")) && (/\bEV\b|ELECTRIC/.test(sName) || /\bEV\b|ELECTRIC/.test(mName)))
+    ) {
+      return "eCar";
+    }
+    if (modeObj?.conveyanceRateKey) return modeObj.conveyanceRateKey;
+    if (sCode.includes("FOUR_WHEELER") || sCode.includes("4W") || sCode.includes("CAR")) return "car";
+    if (sCode.includes("TWO_WHEELER") || sCode.includes("2W") || sCode.includes("BIKE")) return "twoWheeler";
+    return mCode.includes("FOUR_WHEELER") || mCode.includes("4W") || mCode.includes("CAR") || mName.includes("4-WHEELER") ? "car" : "twoWheeler";
+  }, []);
+
+  const handleSelectTravelMode = useCallback(
+    (idx, modeObj) => {
+      if (!modeObj) return;
+      const subs = sanitizeTravelSubtypesList(modeObj.subtypes);
+      const autoSub = subs.length === 1 ? subs[0] : null;
+      const wf = autoSub && isKmWorkflow(autoSub, null) ? "KM_RATE" : "STANDARD";
+      const rateKey = resolveSubtypeRateKey(modeObj, autoSub);
+      const rate = wf === "KM_RATE"
+        ? (Number(autoSub?.ratePerKm) > 0
+            ? Number(autoSub.ratePerKm)
+            : (Number(modeObj.ratePerKm) > 0 ? Number(modeObj.ratePerKm) : getRateForMode(rateKey, conveyanceRates)))
+        : "";
+
+      setEntries((prev) => {
+        const copy = [...prev];
+        if (copy[idx]) {
+          copy[idx] = {
+            ...copy[idx],
+            travelModeId: String(modeObj._id || modeObj.code || ""),
+            travelModeCode: String(modeObj.code || ""),
+            travelModeName: String(modeObj.name || ""),
+            travelSubtypeId: autoSub ? String(autoSub._id || autoSub.code || "") : "",
+            travelSubtypeCode: autoSub ? String(autoSub.code || "") : "",
+            travelSubtypeName: autoSub ? String(autoSub.name || "") : "",
+            travelWorkflow: wf,
+            ratePerKm: rate !== "" ? String(rate) : "",
+            startKm: "",
+            endKm: "",
+            distanceKm: "",
+            requestedAmount: "",
+            numberPlatePhotos: [],
+            startKmPhotos: [],
+            endKmPhotos: [],
+            attachments: [],
+          };
+        }
+        return copy;
+      });
+      setPreviewData(null);
+    },
+    [conveyanceRates, getRateForMode, resolveSubtypeRateKey]
+  );
+
+  const handleSelectTravelSubtype = useCallback(
+    (idx, modeOrSubtype, maybeSubtype) => {
+      const subtypeObj = maybeSubtype !== undefined ? maybeSubtype : modeOrSubtype;
+      if (!subtypeObj) return;
+
+      setEntries((prev) => {
+        const copy = [...prev];
+        if (copy[idx]) {
+          const cur = copy[idx];
+          const modeObj =
+            (maybeSubtype !== undefined && modeOrSubtype) ||
+            (travelModes || []).find(
+              (m) =>
+                (m._id && String(m._id) === String(cur.travelModeId)) ||
+                String(m.code || "").toUpperCase() === String(cur.travelModeCode || "").toUpperCase()
+            );
+          const wf = isKmWorkflow(subtypeObj, cur) ? "KM_RATE" : "STANDARD";
+          const rateKey = resolveSubtypeRateKey(modeObj, subtypeObj);
+          const rate =
+            wf === "KM_RATE"
+              ? (Number(subtypeObj.ratePerKm) > 0
+                  ? Number(subtypeObj.ratePerKm)
+                  : (Number(modeObj?.ratePerKm) > 0 ? Number(modeObj.ratePerKm) : getRateForMode(rateKey, conveyanceRates)))
+              : "";
+          const prevKm = parseFloat(cur.distanceKm);
+          const nextDist = wf === "KM_RATE" && !isNaN(prevKm) && prevKm > 0 ? String(prevKm) : "";
+          const nextAmt = wf === "KM_RATE" && !isNaN(prevKm) && prevKm > 0 && rate
+            ? String(Math.round(prevKm * Number(rate) * 100) / 100)
+            : "";
+
+          copy[idx] = {
+            ...cur,
+            travelModeId: String(modeObj?._id || cur.travelModeId || modeObj?.code || cur.travelModeCode || ""),
+            travelSubtypeId: String(subtypeObj._id || subtypeObj.code || ""),
+            travelSubtypeCode: String(subtypeObj.code || ""),
+            travelSubtypeName: String(subtypeObj.name || ""),
+            travelWorkflow: wf,
+            ratePerKm: rate !== "" ? String(rate) : "",
+            startKm: "",
+            endKm: "",
+            distanceKm: nextDist,
+            requestedAmount: nextAmt,
+            numberPlatePhotos: wf === "KM_RATE" ? (cur.numberPlatePhotos || []) : [],
+            startKmPhotos: wf === "KM_RATE" ? (cur.startKmPhotos || []) : [],
+            endKmPhotos: wf === "KM_RATE" ? (cur.endKmPhotos || []) : [],
+            attachments: [],
+          };
+        }
+        return copy;
+      });
+      setPreviewData(null);
+    },
+    [conveyanceRates, getRateForMode, resolveSubtypeRateKey, travelModes]
+  );
+
+  const handleUpdateTravelKm = useCallback(
+    (idx, _field, text) => {
+      const sanitized = String(text || "").replace(/[^0-9.]/g, "");
+      const parts = sanitized.split(".");
+      const cleanVal = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join("")}` : sanitized;
+
+      setEntries((prev) => {
+        const copy = [...prev];
+        if (copy[idx]) {
+          const cur = copy[idx];
+          const matchedMode = (travelModes || []).find(
+            (m) =>
+              (m._id && String(m._id) === String(cur.travelModeId)) ||
+              String(m.code || "").toUpperCase() === String(cur.travelModeCode || "").toUpperCase()
+          );
+          const matchedSub = matchedMode?.subtypes?.find(
+            (s) =>
+              (s._id && String(s._id) === String(cur.travelSubtypeId)) ||
+              String(s.code || "").toUpperCase() === String(cur.travelSubtypeCode || "").toUpperCase()
+          );
+          const rateKey = resolveSubtypeRateKey(matchedMode, matchedSub || { code: cur.travelSubtypeCode, name: cur.travelSubtypeName });
+          const rate =
+            (Number(matchedSub?.ratePerKm) > 0 ? Number(matchedSub.ratePerKm) : 0) ||
+            (Number(matchedMode?.ratePerKm) > 0 ? Number(matchedMode.ratePerKm) : 0) ||
+            Number(cur.ratePerKm) ||
+            getRateForMode(rateKey, conveyanceRates);
+
+          const kmNum = parseFloat(cleanVal);
+          const calcAmt = !isNaN(kmNum) && kmNum > 0 ? String(Math.round(kmNum * rate * 100) / 100) : "";
+          copy[idx] = {
+            ...cur,
+            startKm: "",
+            endKm: "",
+            ratePerKm: String(rate),
+            distanceKm: cleanVal,
+            requestedAmount: calcAmt,
+          };
+        }
+        return copy;
+      });
+      setPreviewData(null);
+    },
+    [conveyanceRates, getRateForMode, resolveSubtypeRateKey, travelModes]
+  );
 
   const handleSelectVehicleMode = useCallback(
     (idx, modeKey) => {
@@ -321,10 +701,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         id: Date.now().toString(),
         expenseType: "",
         otherSubType: "",
+        materialName: "",
         barcodeNumber: "",
         quantity: "",
         vehicle: "twoWheeler",
         distanceKm: "",
+        travelModeId: "",
+        travelModeCode: "",
+        travelModeName: "",
+        travelSubtypeId: "",
+        travelSubtypeCode: "",
+        travelSubtypeName: "",
+        travelWorkflow: "STANDARD",
+        startKm: "",
+        endKm: "",
+        ratePerKm: "",
         visitType: normalVisitType,
         isVisit: normalVisitType === "VISIT",
         numberPlatePhotos: [],
@@ -344,6 +735,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setEntries((prev) => prev.filter((_, idx) => idx !== idxToRemove));
     setPreviewData(null);
   };
+
+  // Service Reports (Compulsory for Lodging claims, and for Normal claims when Visit is selected)
+  const [serviceReports, setServiceReports] = useState([]); // [{ localId, uri, name, type, size, url, isUploading, uploadFailed }]
+  const [uploadingServiceReport, setUploadingServiceReport] = useState(false);
 
   const handleSelectNormalVisitType = useCallback((vType) => {
     const isVisit = vType === "VISIT";
@@ -389,14 +784,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setEntries((prev) => {
       const copy = [...prev];
       if (copy[idx]) {
-        if (field === "otherSubType") {
-          copy[idx] = {
-            ...copy[idx],
-            otherSubType: value,
-            barcodeNumber: value === "PURCHASE" ? (copy[idx].barcodeNumber || "") : "",
-            quantity: value === "PURCHASE" ? (copy[idx].quantity || "") : "",
-          };
-        } else if (field === "expenseType") {
+        if (field === "expenseType") {
           if (value === "CONVEYANCE") {
             const vMode = copy[idx].vehicle || "twoWheeler";
             const rate = getRateForMode(vMode, conveyanceRates);
@@ -406,25 +794,70 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               ...copy[idx],
               expenseType: value,
               vehicle: vMode,
+              travelModeId: "",
+              travelModeCode: "",
+              travelModeName: "",
+              travelSubtypeId: "",
+              travelSubtypeCode: "",
+              travelSubtypeName: "",
+              travelWorkflow: "STANDARD",
+              startKm: "",
+              endKm: "",
+              ratePerKm: "",
               visitType: normalVisitType,
               isVisit: normalVisitType === "VISIT",
               serviceReports: copy[idx].serviceReports || [],
               requestedAmount: calculatedAmt,
               attachments: [],
               otherSubType: "",
+              materialName: "",
               barcodeNumber: "",
               quantity: "",
             };
-          } else if (value === "OTHER") {
-            const subType = copy[idx].otherSubType || "PURCHASE";
+          } else if (value === "STOCK_PURCHASE") {
             copy[idx] = {
               ...copy[idx],
               expenseType: value,
-              otherSubType: subType,
-              barcodeNumber: subType === "PURCHASE" ? (copy[idx].barcodeNumber || "") : "",
-              quantity: subType === "PURCHASE" ? (copy[idx].quantity || "") : "",
+              otherSubType: "",
+              materialName: copy[idx].materialName || "",
+              barcodeNumber: copy[idx].barcodeNumber || "",
+              quantity: copy[idx].quantity || "",
               vehicle: "",
               distanceKm: "",
+              travelModeId: "",
+              travelModeCode: "",
+              travelModeName: "",
+              travelSubtypeId: "",
+              travelSubtypeCode: "",
+              travelSubtypeName: "",
+              travelWorkflow: "STANDARD",
+              startKm: "",
+              endKm: "",
+              ratePerKm: "",
+              numberPlatePhotos: [],
+              startKmPhotos: [],
+              endKmPhotos: [],
+            };
+          } else if (value === "OTHER") {
+            copy[idx] = {
+              ...copy[idx],
+              expenseType: value,
+              otherSubType: "NORMAL",
+              materialName: "",
+              barcodeNumber: "",
+              quantity: "",
+              vehicle: "",
+              distanceKm: "",
+              travelModeId: "",
+              travelModeCode: "",
+              travelModeName: "",
+              travelSubtypeId: "",
+              travelSubtypeCode: "",
+              travelSubtypeName: "",
+              travelWorkflow: "STANDARD",
+              startKm: "",
+              endKm: "",
+              ratePerKm: "",
               numberPlatePhotos: [],
               startKmPhotos: [],
               endKmPhotos: [],
@@ -434,10 +867,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               ...copy[idx],
               expenseType: value,
               otherSubType: "",
+              materialName: "",
               barcodeNumber: "",
               quantity: "",
               vehicle: "",
               distanceKm: "",
+              travelModeId: "",
+              travelModeCode: "",
+              travelModeName: "",
+              travelSubtypeId: "",
+              travelSubtypeCode: "",
+              travelSubtypeName: "",
+              travelWorkflow: "STANDARD",
+              startKm: "",
+              endKm: "",
+              ratePerKm: "",
               numberPlatePhotos: [],
               startKmPhotos: [],
               endKmPhotos: [],
@@ -456,11 +900,77 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [attachments, setAttachments] = useState([]); // [{ localId, uri, name, type, size, url, isUploading }]
   const [uploadingProof, setUploadingProof] = useState(false);
 
-  // Service Reports (Compulsory for Lodging claims, and for Normal claims when Visit is selected)
-  const [serviceReports, setServiceReports] = useState([]); // [{ localId, uri, name, type, size, url, isUploading, uploadFailed }]
-  const [uploadingServiceReport, setUploadingServiceReport] = useState(false);
-  // Has any "OTHER" expense type entry in Normal claim mode
-  const hasOtherEntry = !isLodging && entries.some((e) => e.expenseType === "OTHER");
+  // Dynamic Expense Types & Policy Rule Configuration (Pay Limit Set or Not + CFO Approval per Claim Type)
+  const [dynamicExpenseTypes, setDynamicExpenseTypes] = useState([]);
+  const [payLimitConfig, setPayLimitConfig] = useState({
+    enabled: true,
+    applicableClaimTypes: ["OTHER"],
+  });
+  const [cfoApprovalConfig, setCfoApprovalConfig] = useState({
+    enabled: true,
+    applyOnFullPayment: true,
+    applicableClaimTypes: ["STOCK_PURCHASE"],
+  });
+
+  const normalizeClaimTypeCode = useCallback((code) => {
+    const c = String(code || "").trim().toUpperCase();
+    if (!c) return "";
+    if (c === "PETROL" || c === "LOCAL_CONVEYANCE" || c === "LOCAL_TRAVEL") return "CONVEYANCE";
+    if (c === "STAY" || c === "HOTEL" || c === "ACCOMMODATION") return "LODGING";
+    if (c === "MEAL" || c === "DA" || c === "DAILY_ALLOWANCE") return "FOOD";
+    if (c === "STOCK" || c === "PURCHASE") return "STOCK_PURCHASE";
+    if (c === "MISC" || c === "MISCELLANEOUS" || c === "OTHER_EXPENSE") return "OTHER";
+    return c;
+  }, []);
+
+  const availableNormalExpenseTypes = useMemo(() => {
+    const map = new Map();
+    NORMAL_EXPENSE_TYPES.forEach((t) => map.set(t.code, t));
+    (Array.isArray(dynamicExpenseTypes) ? dynamicExpenseTypes : []).forEach((dt) => {
+      if (!dt || dt.status === "inactive") return;
+      const code = normalizeClaimTypeCode(dt.code);
+      if (!code || code === "LODGING") return;
+      if (!map.has(code)) {
+        map.set(code, {
+          code,
+          name: dt.name || code,
+          icon: FileText,
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [dynamicExpenseTypes, normalizeClaimTypeCode]);
+
+  const isTypePayLimitApplicable = useCallback(
+    (code) => {
+      if (!payLimitConfig || payLimitConfig.enabled === false) return false;
+      const norm = normalizeClaimTypeCode(code);
+      if (!norm) return false;
+      const list = Array.isArray(payLimitConfig.applicableClaimTypes)
+        ? payLimitConfig.applicableClaimTypes.map(normalizeClaimTypeCode)
+        : ["OTHER"];
+      return list.includes(norm);
+    },
+    [payLimitConfig, normalizeClaimTypeCode]
+  );
+
+  const isTypeCfoApplicable = useCallback(
+    (code) => {
+      if (!cfoApprovalConfig || cfoApprovalConfig.enabled === false) return false;
+      const norm = normalizeClaimTypeCode(code);
+      if (!norm) return false;
+      const list = Array.isArray(cfoApprovalConfig.applicableClaimTypes)
+        ? cfoApprovalConfig.applicableClaimTypes.map(normalizeClaimTypeCode)
+        : ["STOCK_PURCHASE"];
+      return list.includes(norm);
+    },
+    [cfoApprovalConfig, normalizeClaimTypeCode]
+  );
+
+  // Has any CFO-routed or Pay-Limit-routed expense type entry in Normal claim mode
+  const hasStockPurchaseEntry = !isLodging && entries.some((e) => e.expenseType === "STOCK_PURCHASE" || isTypeCfoApplicable(e.expenseType));
+  const hasOtherOnlyEntry = !isLodging && entries.some((e) => isTypePayLimitApplicable(e.expenseType));
+  const hasOtherEntry = hasStockPurchaseEntry || hasOtherOnlyEntry;
   // Check if any conveyance entry has Visit selected
   const hasVisitConveyance = !isLodging && (normalVisitType === "VISIT" || entries.some(
     (e) => (e.expenseType || "TRAVEL") === "CONVEYANCE" && (e.visitType === "VISIT" || e.isVisit === true)
@@ -468,82 +978,587 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   // Service Report applies to Lodging claims, and to Normal claims ONLY when "Visit" is selected
   const needsServiceReport = isLodging || (!isLodging && normalVisitType === "VISIT");
 
-  // Reporting Manager (for OTHER claim type entry - displayed below Service Report)
+  // Reporting Manager (for OTHER / STOCK_PURCHASE claim type entry - resolved automatically from department hierarchy & payment limit rules)
   const [reportingManagerApprover, setReportingManagerApprover] = useState(null); // { _id, name, designation, department, employeeIdCode }
+  const [baseReportingManager, setBaseReportingManager] = useState(null);
   const [reportingManagerOptions, setReportingManagerOptions] = useState([]);
   const [loadingReportingManagers, setLoadingReportingManagers] = useState(false);
+  const [approvalLimitRules, setApprovalLimitRules] = useState([]);
+  const [serverDirectLimit, setServerDirectLimit] = useState(null);
 
-  // Full Payment & Management Approver (Optional)
+  // Full Payment (Optional)
   const [fullPaymentRequested, setFullPaymentRequested] = useState(false);
   const [fullPaymentReason, setFullPaymentReason] = useState("");
-  const [managementApprover, setManagementApprover] = useState(null); // { _id, name, designation, department, employeeIdCode }
-  const [managementApproverOptions, setManagementApproverOptions] = useState([]);
-  const [loadingManagementApprovers, setLoadingManagementApprovers] = useState(false);
 
-  // Computed approval kind & effective approver (for backwards compatibility & preview/submission)
+  // Selected employee IDs on the claim (slot 0 = self, slots 1..N-1 = tagged employees)
+  const selectedEmployeeIds = useMemo(() => {
+    return employeeSelections
+      .slice(0, numberOfEmployees)
+      .map((s, idx) => {
+        const id = s.employeeId && typeof s.employeeId === "object" ? s.employeeId._id : s.employeeId;
+        if (idx === 0) return String(currentUser?._id || currentUser?.id || id || "");
+        return String(id || "");
+      })
+      .filter((id) => id && id !== "self");
+  }, [employeeSelections, numberOfEmployees, currentUser]);
+
+  const taggedEmployeeIds = useMemo(() => {
+    if (numberOfEmployees <= 1) return [];
+    return employeeSelections
+      .slice(1, numberOfEmployees)
+      .map((s) => {
+        const id = s.employeeId && typeof s.employeeId === "object" ? s.employeeId._id : s.employeeId;
+        return id ? String(id) : "";
+      })
+      .filter((id) => id && id !== "self");
+  }, [employeeSelections, numberOfEmployees]);
+
+  const selectedEmployeeIdsKey = useMemo(() => selectedEmployeeIds.join(","), [selectedEmployeeIds]);
+
+  // Total requested amount across the claim (used for Full Payment reporting manager resolution)
+  const totalClaimRequestedAmount = useMemo(() => {
+    if (isLodging) {
+      const lodgAmt = isRelativeStay ? 0 : (parseFloat(requestedAmount) || 0);
+      const fdAmt = includeFood
+        ? foodEntries.reduce((sum, fe) => sum + (parseFloat(fe.requestedAmount) || 0), 0)
+        : 0;
+      return Math.round((lodgAmt + fdAmt) * 100) / 100;
+    }
+    return Math.round(
+      entries.reduce((sum, e) => sum + (parseFloat(e.requestedAmount) || 0), 0) * 100
+    ) / 100;
+  }, [isLodging, isRelativeStay, requestedAmount, includeFood, foodEntries, entries]);
+
+  // Direct-to-Accounts limit (in ₹) from configured approvalLimitRules:
+  // Up to this limit -> goes directly to Accounts Admin; above this limit -> goes through Reporting Manager.
+  const directAccountLimit = useMemo(() => {
+    const isTeamLeadUser = (u) => {
+      if (!u) return false;
+      if (u.isTeamLead || u.canManageTeam || u.levelRef?.canManageTeam) return true;
+      if (/^TC(LD|TL)/i.test(String(u.roleCode || "").trim())) return true;
+      const text = `${u.levelRef?.name || u.levelName || ""} ${u.designation || ""} ${u.role || ""} ${u.roleCode || ""}`.toLowerCase();
+      return /(team[\s_]*lead|teamlead|\btl\b|\blead\b|supervisor)/i.test(text);
+    };
+
+    const inferLvl = (str) => {
+      const s = String(str || "").trim().toLowerCase();
+      if (!s) return null;
+      if (/(^|[\s_])(ceo|chief[\s_]*executive)($|[\s_])/i.test(s)) return 2;
+      if (/(^|[\s_])(avp|assistant[\s_]*vice[\s_]*president)($|[\s_])/i.test(s)) return 4;
+      if (/(^|[\s_])(vp|vice[\s_]*president)($|[\s_])/i.test(s)) return 3;
+      if (/(^|[\s_])(gm|general[\s_]*manager)($|[\s_])/i.test(s)) return 5;
+      if (/(^|[\s_])(group[\s_]*lead|group[\s_]*leader|manager)($|[\s_])/i.test(s)) return 6;
+      if (/(team[\s_]*lead|teamlead|\btl\b|\blead\b|supervisor)/i.test(s)) return 7;
+      if (/senior[\s_]*(executive|engineer|developer|officer|analyst)/i.test(s)) return 8;
+      if (/junior[\s_]*(executive|engineer|developer|officer|analyst)/i.test(s)) return 9;
+      if (/team[\s_]*member/i.test(s)) return 10;
+      if (/\btrainee\b/i.test(s)) return 11;
+      if (/\bintern\b/i.test(s)) return 12;
+      return null;
+    };
+
+    const getUserLvl = (u) => {
+      if (!u) return 99;
+      const refLvl = Number(u.levelRef?.levelNumber ?? u.levelNumber);
+      if (Number.isFinite(refLvl) && refLvl > 0) {
+        if (isTeamLeadUser(u) && refLvl > 7) return 7;
+        return refLvl;
+      }
+      const rLvl = Number(u.roleLevel);
+      if (Number.isFinite(rLvl) && rLvl > 0) {
+        if (isTeamLeadUser(u) && rLvl > 7) return 7;
+        return rLvl;
+      }
+      const inf = inferLvl(`${u.levelRef?.name || u.levelName || ""} ${u.designation || ""} ${u.role || ""} ${u.roleCode || ""}`);
+      if (inf !== null) return inf;
+      if (isTeamLeadUser(u)) return 7;
+      const codeMatch = String(u.employeeIdCode || "").trim().match(/^[A-Z]{2,6}(\d{1,2})[A-Z]_/i);
+      if (codeMatch) {
+        const codeLvl = Number(codeMatch[1]);
+        if (Number.isFinite(codeLvl) && codeLvl > 0) return codeLvl;
+      }
+      return 99;
+    };
+
+    const getRuleLvl = (r) => {
+      if (!r) return 99;
+      const rLvl = Number(r.levelNumber);
+      if (Number.isFinite(rLvl) && rLvl > 0) return rLvl;
+      const inf = inferLvl(`${r.roleName || ""} ${r.roleKey || ""}`);
+      return inf ?? 99;
+    };
+
+    const activeRules = (Array.isArray(approvalLimitRules) ? approvalLimitRules : [])
+      .filter(
+        (r) =>
+          r &&
+          r.status !== "inactive" &&
+          r.maxAmount !== null &&
+          r.maxAmount !== undefined &&
+          r.maxAmount !== "" &&
+          Number(r.maxAmount) > 0
+      )
+      .slice()
+      .sort((a, b) => {
+        const diff = Number(a.maxAmount) - Number(b.maxAmount);
+        if (diff !== 0) return diff;
+        return getRuleLvl(b) - getRuleLvl(a);
+      });
+    if (activeRules.length === 0) return null;
+
+    const resolveLimitForUser = (u) => {
+      if (!u) return { limit: Number(activeRules[0].maxAmount), uLvl: 99 };
+      const uLvl = getUserLvl(u);
+      const uText = `${u.levelRef?.name || u.levelName || ""} ${u.designation || ""} ${u.role || ""} ${u.roleCode || ""}`.trim().toLowerCase();
+
+      // 1. Direct level or role match
+      const directMatched = activeRules.find((r) => {
+        const rLvl = getRuleLvl(r);
+        if (r.levelNumber && uLvl < 99 && Number(r.levelNumber) === uLvl) return true;
+        const rName = String(r.roleName || "").trim().toLowerCase();
+        if (!rName) return false;
+        if (/(team[\s_]*lead|teamlead|\btl\b|\blead\b)/i.test(rName) && isTeamLeadUser(u)) return true;
+        return uText.includes(rName) && (rLvl >= 99 || rLvl === uLvl);
+      });
+      if (directMatched) return { limit: Number(directMatched.maxAmount), uLvl };
+
+      // 2. "Till Role / Hierarchy Level" range match (smaller levelNumber = higher seniority)
+      if (uLvl > 0 && uLvl < 99) {
+        const rulesWithLevel = activeRules
+          .map((r) => ({ rule: r, rLvl: getRuleLvl(r) }))
+          .filter((x) => x.rLvl > 0 && x.rLvl < 99);
+        if (rulesWithLevel.length > 0) {
+          const tierMatch = rulesWithLevel.find((x) => uLvl >= x.rLvl);
+          if (tierMatch) return { limit: Number(tierMatch.rule.maxAmount), uLvl };
+          return { limit: Number(rulesWithLevel[rulesWithLevel.length - 1].rule.maxAmount), uLvl };
+        }
+      }
+      return { limit: Number(activeRules[0].maxAmount), uLvl };
+    };
+
+    const selfEmp = employeesList.find(
+      (e) => String(e._id || e.id) === String(currentUser?._id || currentUser?.id || "")
+    );
+    const selfUser = selfEmp
+      ? {
+          ...currentUser,
+          ...selfEmp,
+          levelRef:
+            typeof selfEmp.levelRef === "object" && selfEmp.levelRef
+              ? selfEmp.levelRef
+              : typeof currentUser?.levelRef === "object" && currentUser?.levelRef
+                ? currentUser.levelRef
+                : selfEmp.levelRef || currentUser?.levelRef,
+          levelName: selfEmp?.levelName || currentUser?.levelName || currentUser?.levelRef?.name,
+          levelNumber: selfEmp?.levelNumber ?? currentUser?.levelNumber ?? currentUser?.levelRef?.levelNumber ?? selfEmp?.roleLevel,
+          designation: selfEmp?.designation || currentUser?.designation || "",
+          isTeamLead: Boolean(selfEmp?.isTeamLead || currentUser?.isTeamLead || selfEmp?.canManageTeam || currentUser?.canManageTeam),
+        }
+      : currentUser;
+
+    const participants = [selfUser];
+    selectedEmployeeIds.forEach((id) => {
+      const emp = employeesList.find((e) => String(e._id || e.id) === String(id));
+      if (emp) participants.push(emp);
+    });
+    employeeSelections.slice(0, numberOfEmployees).forEach((sel) => {
+      if (sel && (sel.designation || sel.label)) {
+        participants.push(sel);
+      }
+    });
+
+    let bestLimit = null;
+    let bestLvl = 99;
+    participants.filter(Boolean).forEach((p) => {
+      const { limit, uLvl } = resolveLimitForUser(p);
+      if (uLvl < bestLvl) bestLvl = uLvl;
+      if (Number.isFinite(limit) && (bestLimit === null || limit > bestLimit)) {
+        bestLimit = limit;
+      }
+    });
+
+    if (
+      serverDirectLimit !== null &&
+      serverDirectLimit !== undefined &&
+      Number(serverDirectLimit) > 0 &&
+      activeRules.some((r) => Number(r.maxAmount) === Number(serverDirectLimit))
+    ) {
+      if (bestLvl === 99 || Number(serverDirectLimit) > (bestLimit || 0)) {
+        return Number(serverDirectLimit);
+      }
+    }
+
+    return bestLimit !== null ? bestLimit : Number(activeRules[0].maxAmount);
+  }, [approvalLimitRules, currentUser, employeesList, selectedEmployeeIds, employeeSelections, numberOfEmployees, serverDirectLimit]);
+
+  // Helper: Resolve Reporting Manager dynamically based on department hierarchy & tagged employee escalation.
+  // Note: Escalation to the one-step-above Reporting Manager happens ONLY when the employee's
+  // Reporting Manager / Team Lead is tagged on the claim (never based on claim amount).
+  const resolveHierarchyManagerForAmount = useCallback((_rawAmount) => {
+    const isTeamLeadUser = (u) => {
+      if (!u) return false;
+      if (u.isTeamLead || u.canManageTeam || u.levelRef?.canManageTeam) return true;
+      if (/^TC(LD|TL)/i.test(String(u.roleCode || "").trim())) return true;
+      const text = `${u.levelRef?.name || u.levelName || ""} ${u.designation || ""} ${u.role || ""} ${u.roleCode || ""}`.toLowerCase();
+      return /(team[\s_]*lead|teamlead|\btl\b|\blead\b|supervisor)/i.test(text);
+    };
+
+    const inferLvl = (str) => {
+      const s = String(str || "").trim().toLowerCase();
+      if (!s) return null;
+      if (/(^|[\s_])(ceo|chief[\s_]*executive)($|[\s_])/i.test(s)) return 2;
+      if (/(^|[\s_])(avp|assistant[\s_]*vice[\s_]*president)($|[\s_])/i.test(s)) return 4;
+      if (/(^|[\s_])(vp|vice[\s_]*president)($|[\s_])/i.test(s)) return 3;
+      if (/(^|[\s_])(gm|general[\s_]*manager)($|[\s_])/i.test(s)) return 5;
+      if (/(^|[\s_])(group[\s_]*lead|group[\s_]*leader|manager)($|[\s_])/i.test(s)) return 6;
+      if (/(team[\s_]*lead|teamlead|\btl\b|\blead\b|supervisor)/i.test(s)) return 7;
+      if (/senior[\s_]*(executive|engineer|developer|officer|analyst)/i.test(s)) return 8;
+      if (/junior[\s_]*(executive|engineer|developer|officer|analyst)/i.test(s)) return 9;
+      if (/team[\s_]*member/i.test(s)) return 10;
+      if (/\btrainee\b/i.test(s)) return 11;
+      if (/\bintern\b/i.test(s)) return 12;
+      return null;
+    };
+
+    const getUserLvl = (u) => {
+      if (!u) return 99;
+      const refLvl = Number(u.levelRef?.levelNumber ?? u.levelNumber);
+      if (Number.isFinite(refLvl) && refLvl > 0) {
+        if (isTeamLeadUser(u) && refLvl > 7) return 7;
+        return refLvl;
+      }
+      const rLvl = Number(u.roleLevel);
+      if (Number.isFinite(rLvl) && rLvl > 0) {
+        if (isTeamLeadUser(u) && rLvl > 7) return 7;
+        return rLvl;
+      }
+      const inf = inferLvl(`${u.levelRef?.name || u.levelName || ""} ${u.designation || ""} ${u.role || ""} ${u.roleCode || ""}`);
+      if (inf !== null) return inf;
+      if (isTeamLeadUser(u)) return 7;
+      return 99;
+    };
+
+    const excludeSet = new Set(selectedEmployeeIds.map(String));
+    const selfEmp = employeesList.find(
+      (e) => String(e._id || e.id) === String(currentUser?._id || currentUser?.id || "")
+    );
+    const mergedSelf = selfEmp
+      ? {
+          ...currentUser,
+          ...selfEmp,
+          reportsTo: currentUser?.reportsTo || selfEmp?.reportsTo,
+          approver: currentUser?.approver || selfEmp?.approver,
+          levelName: currentUser?.levelName || selfEmp?.levelName || currentUser?.levelRef?.name,
+          levelNumber: currentUser?.levelNumber ?? selfEmp?.levelNumber ?? currentUser?.levelRef?.levelNumber ?? selfEmp?.roleLevel,
+        }
+      : currentUser;
+    const myDept = String(mergedSelf?.department || "").trim().toLowerCase();
+    const empLvl = getUserLvl(mergedSelf);
+    const empIsLeadOrMgr = isTeamLeadUser(mergedSelf) || empLvl <= 7;
+
+    // Check if any tagged employee is the filer's direct Reporting Manager (or a Team Lead / higher-level manager)
+    const directMgrId = String(
+      currentUser?.reportsTo?._id ||
+      currentUser?.reportsTo ||
+      currentUser?.approver?._id ||
+      currentUser?.approver ||
+      selfEmp?.reportsTo?._id ||
+      selfEmp?.reportsTo ||
+      selfEmp?.approver?._id ||
+      selfEmp?.approver ||
+      ""
+    );
+
+    const taggedUsers = taggedEmployeeIds
+      .map((tid) => {
+        return (
+          employeesList.find((e) => String(e._id || e.id) === String(tid)) ||
+          reportingManagerOptions.find((o) => String(o._id || o.id) === String(tid)) ||
+          (baseReportingManager && String(baseReportingManager._id || baseReportingManager.id) === String(tid) ? baseReportingManager : null)
+        );
+      })
+      .filter(Boolean);
+
+    let minParticipantLvl = empLvl;
+    let taggedManagerDoc = null;
+    let hasTaggedTeamLead = false;
+    const taggedManagerAboveIds = [];
+
+    for (const tu of taggedUsers) {
+      const tuId = String(tu._id || tu.id || "");
+      const tuIsTeamLead = isTeamLeadUser(tu);
+      const rawTuLvl = getUserLvl(tu);
+      const tuLvl = rawTuLvl < 99 ? rawTuLvl : (tuIsTeamLead ? 7 : 99);
+      const isDirectMgr = (directMgrId && tuId === directMgrId) ||
+        (baseReportingManager && tuId === String(baseReportingManager._id || baseReportingManager.id || ""));
+      const isMgrRole =
+        tuIsTeamLead ||
+        Boolean(tu.canApprove || tu.levelRef?.canApprove) ||
+        tuLvl <= 7 ||
+        /(team[\s_]*lead|teamlead|\btl\b|\blead\b|manager|supervisor|head|vp|avp|gm|ceo)/i.test(
+          `${tu.designation || ""} ${tu.role || ""} ${tu.levelRef?.name || tu.levelName || ""}`
+        );
+      if (isDirectMgr || isMgrRole) {
+        if (!taggedManagerDoc || isDirectMgr) {
+          taggedManagerDoc = tu;
+        }
+        if (tuLvl < minParticipantLvl) {
+          minParticipantLvl = tuLvl;
+        }
+        if (tuIsTeamLead) {
+          hasTaggedTeamLead = true;
+          if (minParticipantLvl > 7) minParticipantLvl = 7;
+        }
+        const aboveRepId = String(tu.reportsTo?._id || tu.reportsTo || tu.approver?._id || tu.approver || "");
+        if (aboveRepId && !excludeSet.has(aboveRepId)) {
+          taggedManagerAboveIds.push(aboveRepId);
+        }
+      }
+    }
+
+    const isDisqualifiedByTag = (u) => {
+      if (!u || !taggedManagerDoc) return false;
+      const uLvl = getUserLvl(u);
+      if (minParticipantLvl < 99 && uLvl >= minParticipantLvl) return true;
+      if (hasTaggedTeamLead && isTeamLeadUser(u)) return true;
+      return false;
+    };
+
+    const allCandidates = [...(baseReportingManager ? [baseReportingManager] : []), ...reportingManagerOptions];
+    const seen = new Set();
+    const uniqueCandidates = allCandidates.filter((u) => {
+      const id = String(u?._id || u?.id || "");
+      if (!id || seen.has(id) || excludeSet.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+
+    // Direct assigned Reporting Manager (reportsTo / approver) when not tagged on the claim
+    const directMgrDoc =
+      !taggedManagerDoc && directMgrId && !excludeSet.has(directMgrId)
+        ? uniqueCandidates.find((u) => String(u._id || u.id) === directMgrId) ||
+          employeesList.find((e) => String(e._id || e.id) === directMgrId) ||
+          null
+        : null;
+
+    // If the tagged user is the reporting manager / team lead and has a known reportsTo/approver, find that above manager
+    const directAboveTaggedCandidates = taggedManagerAboveIds
+      .map((aid) => uniqueCandidates.find((u) => String(u._id || u.id) === aid) || employeesList.find((e) => String(e._id || e.id) === aid))
+      .filter((u) => u && !excludeSet.has(String(u._id || u.id || "")) && !isDisqualifiedByTag(u));
+
+    const sameDeptCandidates = myDept
+      ? uniqueCandidates
+          .filter((u) => {
+            if (String(u.department || "").trim().toLowerCase() !== myDept) return false;
+            if (isDisqualifiedByTag(u)) return false;
+            return true;
+          })
+          .sort((a, b) => {
+            const aLead = isTeamLeadUser(a);
+            const bLead = isTeamLeadUser(b);
+            if (!taggedManagerDoc && !empIsLeadOrMgr && aLead !== bLead) {
+              return aLead ? -1 : 1;
+            }
+            const aLvl = getUserLvl(a);
+            const bLvl = getUserLvl(b);
+            const aAbove = aLvl < minParticipantLvl;
+            const bAbove = bLvl < minParticipantLvl;
+            if (aAbove !== bAbove) return aAbove ? -1 : 1;
+            if (aAbove && bAbove && aLvl !== bLvl) return bLvl - aLvl;
+            if (aLead !== bLead) return aLead ? -1 : 1;
+            return bLvl - aLvl;
+          })
+      : [];
+
+    const aboveTaggedCompanyCandidates = taggedManagerDoc
+      ? uniqueCandidates
+          .filter((u) => !isDisqualifiedByTag(u))
+          .sort((a, b) => getUserLvl(b) - getUserLvl(a))
+      : uniqueCandidates;
+
+    const validBaseMgr = baseReportingManager && !excludeSet.has(String(baseReportingManager._id || baseReportingManager.id || ""))
+      ? (!isDisqualifiedByTag(baseReportingManager) ? baseReportingManager : null)
+      : null;
+    const validCurrentApprover = reportingManagerApprover && !excludeSet.has(String(reportingManagerApprover._id || reportingManagerApprover.id || ""))
+      ? (!isDisqualifiedByTag(reportingManagerApprover) ? reportingManagerApprover : null)
+      : null;
+
+    const chosenApprover = taggedManagerDoc
+      ? (directAboveTaggedCandidates[0] ||
+          sameDeptCandidates[0] ||
+          validBaseMgr ||
+          aboveTaggedCompanyCandidates[0] ||
+          uniqueCandidates[0] ||
+          null)
+      : (directMgrDoc ||
+          sameDeptCandidates[0] ||
+          validBaseMgr ||
+          validCurrentApprover ||
+          uniqueCandidates[0] ||
+          null);
+
+    const activeRules = (Array.isArray(approvalLimitRules) ? approvalLimitRules : []).filter(
+      (r) => r && r.status !== "inactive" && String(r.roleName || "").trim()
+    );
+
+    return {
+      approver: chosenApprover,
+      matchedRule: activeRules[0] || null,
+      exceededRules: [],
+      isEscalated: false,
+      isTagEscalated: Boolean(taggedManagerDoc),
+      tagEscalatedFrom: taggedManagerDoc?.name || "",
+    };
+  }, [
+    approvalLimitRules,
+    baseReportingManager,
+    reportingManagerApprover,
+    reportingManagerOptions,
+    employeesList,
+    currentUser,
+    selectedEmployeeIds,
+    taggedEmployeeIds,
+  ]);
+
+  // Max requested amount across entries where Pay Limit Rule is enabled
+  const maxOtherOnlyEntryAmount = useMemo(() => {
+    if (isLodging) return 0;
+    const relevant = entries.filter((e) => isTypePayLimitApplicable(e.expenseType));
+    if (!relevant.length) return 0;
+    return Math.max(0, ...relevant.map((e) => parseFloat(e.requestedAmount) || 0));
+  }, [isLodging, entries, isTypePayLimitApplicable]);
+
+  // Max requested amount across entries that require Pay Limit or CFO approval
+  const maxOtherEntryAmount = useMemo(() => {
+    if (isLodging) return 0;
+    const relevant = entries.filter(
+      (e) =>
+        e.expenseType === "STOCK_PURCHASE" ||
+        isTypePayLimitApplicable(e.expenseType) ||
+        isTypeCfoApplicable(e.expenseType)
+    );
+    if (!relevant.length) return 0;
+    return Math.max(0, ...relevant.map((e) => parseFloat(e.requestedAmount) || 0));
+  }, [isLodging, entries, isTypePayLimitApplicable, isTypeCfoApplicable]);
+
+  // Whether the claim requires Reporting Manager approval:
+  // - STOCK_PURCHASE always requires approval (no payment limit rule applies)
+  // - OTHER requires approval when no directAccountLimit is configured or when maxOtherOnlyEntryAmount > directAccountLimit
+  const hasOtherEntryAboveLimit = useMemo(() => {
+    if (isLodging || !hasOtherEntry) return false;
+    if (hasStockPurchaseEntry) return true;
+    if (directAccountLimit === null || directAccountLimit <= 0) return true;
+    return maxOtherOnlyEntryAmount > directAccountLimit;
+  }, [isLodging, hasOtherEntry, hasStockPurchaseEntry, directAccountLimit, maxOtherOnlyEntryAmount]);
+
+  // Computed approval kind & effective approver
+  // When OTHER / STOCK_PURCHASE amount is within directAccountLimit (and no full payment requested),
+  // approvalKind is NONE and the claim routes directly to Accounts Admin!
   const approvalKind = isCurrentUserManagement
     ? "NONE"
     : (fullPaymentRequested
       ? "FULL_PAYMENT"
-      : (hasOtherEntry ? "OTHER_EXPENSE" : null));
+      : (hasOtherEntryAboveLimit ? "OTHER_EXPENSE" : null));
   const approver = isCurrentUserManagement
     ? null
-    : (fullPaymentRequested ? managementApprover : (hasOtherEntry ? reportingManagerApprover : null));
-  const approverLabel = approvalKind === "FULL_PAYMENT" ? "Management Approver" : "Reporting Manager";
+    : (fullPaymentRequested
+      ? (resolveHierarchyManagerForAmount(totalClaimRequestedAmount).approver || reportingManagerApprover)
+      : (hasOtherEntryAboveLimit
+        ? (resolveHierarchyManagerForAmount(maxOtherEntryAmount).approver || reportingManagerApprover)
+        : null));
+  const approverLabel = "Reporting Manager";
 
-  // Fetch Reporting Managers when hasOtherEntry is active
+  // Fetch Reporting Managers when hasOtherEntry or fullPaymentRequested is active, or when tagged employees change
   useEffect(() => {
-    if (!hasOtherEntry || isCurrentUserManagement) {
+    if ((!hasOtherEntry && !fullPaymentRequested) || isCurrentUserManagement) {
       setReportingManagerOptions([]);
       setReportingManagerApprover(null);
+      setBaseReportingManager(null);
       return;
     }
     let alive = true;
     setLoadingReportingManagers(true);
-    expenseApi.getApprovers("OTHER_EXPENSE").then((list) => {
-      if (!alive) return;
-      const opts = Array.isArray(list) ? list : [];
-      setReportingManagerOptions(opts);
-      setReportingManagerApprover((prev) => {
-        if (prev && opts.some((o) => String(o._id) === String(prev._id))) return prev;
-        const myMgrId = String(currentUser?.reportsTo?._id || currentUser?.reportsTo || currentUser?.approver?._id || currentUser?.approver || "");
-        if (myMgrId) {
-          const directMatch = opts.find((o) => String(o._id) === myMgrId);
-          if (directMatch) return directMatch;
+    const relevantAmt = fullPaymentRequested ? totalClaimRequestedAmount : maxOtherEntryAmount;
+    expenseApi
+      .getApprovers("OTHER_EXPENSE", "", relevantAmt > 0 ? relevantAmt : undefined, selectedEmployeeIds)
+      .then((list) => {
+        if (!alive) return;
+        const opts = Array.isArray(list) ? list : [];
+        setReportingManagerOptions(opts);
+        if (Array.isArray(list?.approvalLimitRules) && list.approvalLimitRules.length > 0) {
+          setApprovalLimitRules(list.approvalLimitRules);
         }
-        return null;
+        if (list?.directLimit !== undefined && list?.directLimit !== null && Number(list.directLimit) > 0) {
+          setServerDirectLimit(Number(list.directLimit));
+        }
+        const excludeSet = new Set(selectedEmployeeIds.map(String));
+        const resolveDefault = () => {
+          const selfEmp = employeesList.find(
+            (e) => String(e._id || e.id) === String(currentUser?._id || currentUser?.id || "")
+          );
+          const myMgrId = String(
+            currentUser?.reportsTo?._id ||
+            currentUser?.reportsTo ||
+            currentUser?.approver?._id ||
+            currentUser?.approver ||
+            selfEmp?.reportsTo?._id ||
+            selfEmp?.reportsTo ||
+            ""
+          );
+          if (!taggedEmployeeIds.length && myMgrId && !excludeSet.has(myMgrId)) {
+            const directMatch = opts.find((o) => String(o._id) === myMgrId);
+            if (directMatch) return directMatch;
+          }
+          if (list?.defaultApprover && list.defaultApprover._id && !excludeSet.has(String(list.defaultApprover._id))) {
+            return list.defaultApprover;
+          }
+          const myDept = String(currentUser?.department || selfEmp?.department || "").trim().toLowerCase();
+          if (myDept) {
+            const deptMatches = opts.filter(
+              (o) => String(o.department || "").trim().toLowerCase() === myDept && !excludeSet.has(String(o._id))
+            );
+            if (deptMatches.length > 0) {
+              const tlMatch = deptMatches.find((o) =>
+                Boolean(o.isTeamLead || o.levelRef?.canManageTeam || /(team[\s_]*lead|teamlead|\btl\b|\blead\b|supervisor)/i.test(`${o.levelRef?.name || ""} ${o.designation || ""} ${o.role || ""}`))
+              );
+              return tlMatch || deptMatches[0];
+            }
+          }
+          return opts.find((o) => !excludeSet.has(String(o._id))) || opts[0] || null;
+        };
+        const defMgr = resolveDefault();
+        setBaseReportingManager(defMgr);
+        setReportingManagerApprover(defMgr);
+        setLoadingReportingManagers(false);
+      })
+      .catch(() => {
+        if (alive) setLoadingReportingManagers(false);
       });
-      setLoadingReportingManagers(false);
-    });
     return () => {
       alive = false;
     };
-  }, [hasOtherEntry, currentUser, isCurrentUserManagement]);
+  }, [hasOtherEntry, fullPaymentRequested, currentUser, isCurrentUserManagement, selectedEmployeeIdsKey]);
 
-  // Fetch Management Approvers when fullPaymentRequested is active
+  // Dynamically update reportingManagerApprover whenever amount or tagged employees change
   useEffect(() => {
-    if (!fullPaymentRequested || isCurrentUserManagement) {
-      setManagementApproverOptions([]);
-      setManagementApprover(null);
-      return;
+    if ((!hasOtherEntry && !fullPaymentRequested) || isCurrentUserManagement) return;
+    const relevantAmt = fullPaymentRequested ? totalClaimRequestedAmount : maxOtherEntryAmount;
+    const res = resolveHierarchyManagerForAmount(relevantAmt);
+    if (res.approver && String(res.approver._id || "") !== String(reportingManagerApprover?._id || "")) {
+      setReportingManagerApprover(res.approver);
     }
-    let alive = true;
-    setLoadingManagementApprovers(true);
-    expenseApi.getApprovers("FULL_PAYMENT").then((list) => {
-      if (!alive) return;
-      const opts = Array.isArray(list) ? list : [];
-      setManagementApproverOptions(opts);
-      setManagementApprover((prev) => {
-        if (prev && opts.some((o) => String(o._id) === String(prev._id))) return prev;
-        if (opts.length === 1) return opts[0];
-        return null;
-      });
-      setLoadingManagementApprovers(false);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [fullPaymentRequested, isCurrentUserManagement]);
+  }, [
+    hasOtherEntry,
+    fullPaymentRequested,
+    isCurrentUserManagement,
+    maxOtherEntryAmount,
+    totalClaimRequestedAmount,
+    approvalLimitRules,
+    reportingManagerOptions,
+    baseReportingManager,
+    selectedEmployeeIdsKey,
+    resolveHierarchyManagerForAmount,
+  ]);
 
   // Modals
   const [activeModal, setActiveModal] = useState(null); // { kind: 'employee' | 'city' | 'customer', targetSlot?: number }
@@ -553,11 +1568,166 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const submissionRequestId = useRef(newRequestId());
   const scrollViewRef = useRef(null);
 
-  // Calculated days for lodging
-  const days = useMemo(() => {
+  // Lodging Nights (To Date - From Date) & Food Inclusive Days (To Date - From Date + 1)
+  const lodgingNights = useMemo(() => {
+    if (!isLodging) return 0;
+    return nightsBetween(fromDate, toDate);
+  }, [isLodging, fromDate, toDate]);
+
+  const foodDays = useMemo(() => {
     if (!isLodging) return 1;
     return daysBetween(fromDate, toDate);
   }, [isLodging, fromDate, toDate]);
+
+  const days = lodgingNights;
+
+  // Fetch Dynamic Travel Config whenever destinationCity changes
+  useEffect(() => {
+    let alive = true;
+    expenseApi
+      .getTravelConfig(destinationCity || undefined)
+      .then((res) => {
+        const cfg = res?.data || res;
+        if (!alive || !cfg) return;
+        if (Array.isArray(cfg.modes) && cfg.modes.length > 0) {
+          const cleanModes = sanitizeTravelModesList(cfg.modes);
+          setTravelModes(cleanModes);
+          setEntries((prev) =>
+            prev.map((ent) => {
+              if (ent.expenseType !== "TRAVEL") return ent;
+              if (!ent.travelModeId && !ent.travelModeCode) return ent;
+              let matchedMode = cleanModes.find(
+                (m) =>
+                  (m._id && String(m._id) === String(ent.travelModeId)) ||
+                  String(m.code || "").toUpperCase() === String(ent.travelModeCode || "").toUpperCase()
+              );
+              let effectiveSubCode = String(ent.travelSubtypeCode || "").toUpperCase();
+              if (!matchedMode) {
+                const rawModeCode = String(ent.travelModeCode || "").toUpperCase();
+                if (rawModeCode === "TWO_WHEELER") {
+                  const targetCode = effectiveSubCode === "TWO_WHEELER_EV" ? "TWO_WHEELER_EV" : "TWO_WHEELER_PETROL";
+                  matchedMode = cleanModes.find((m) => String(m.code || "").toUpperCase() === targetCode);
+                  if (["TWO_WHEELER_PETROL", "TWO_WHEELER_EV", "TWO_WHEELER_OWN_VEHICLE"].includes(effectiveSubCode)) {
+                    effectiveSubCode = "OWN_VEHICLE";
+                  }
+                } else if (rawModeCode === "FOUR_WHEELER") {
+                  const targetCode = effectiveSubCode === "FOUR_WHEELER_EV" ? "FOUR_WHEELER_EV" : "FOUR_WHEELER_PETROL";
+                  matchedMode = cleanModes.find((m) => String(m.code || "").toUpperCase() === targetCode);
+                  if (["FOUR_WHEELER_PETROL", "FOUR_WHEELER_EV", "FOUR_WHEELER_OWN_VEHICLE"].includes(effectiveSubCode)) {
+                    effectiveSubCode = "OWN_VEHICLE";
+                  }
+                }
+              }
+              if (!matchedMode) return ent;
+              const activeSubs = sanitizeTravelSubtypesList(matchedMode.subtypes);
+              const matchedSub =
+                ent.travelSubtypeId || effectiveSubCode
+                  ? activeSubs.find(
+                      (s) =>
+                        (s._id && String(s._id) === String(ent.travelSubtypeId)) ||
+                        String(s.code || "").toUpperCase() === effectiveSubCode
+                    ) || null
+                  : (activeSubs.length === 1 ? activeSubs[0] : null);
+              const nextWf = isKmWorkflow(matchedSub, ent) ? "KM_RATE" : "STANDARD";
+              const nextRateKey = resolveSubtypeRateKey(matchedMode, matchedSub || { code: effectiveSubCode, name: ent.travelSubtypeName });
+              const nextRate = nextWf === "KM_RATE"
+                ? (Number(matchedSub?.ratePerKm) > 0
+                    ? Number(matchedSub.ratePerKm)
+                    : (Number(matchedMode?.ratePerKm) > 0
+                        ? Number(matchedMode.ratePerKm)
+                        : (Number(ent.ratePerKm) || getRateForMode(nextRateKey, cfg.conveyanceRates || conveyanceRates))))
+                : "";
+              const kmVal = parseFloat(ent.distanceKm);
+              const nextAmt = nextWf === "KM_RATE" && !isNaN(kmVal) && kmVal > 0 && nextRate
+                ? String(Math.round(kmVal * Number(nextRate) * 100) / 100)
+                : ent.requestedAmount;
+              return {
+                ...ent,
+                travelModeId: String(matchedMode._id || matchedMode.code || ""),
+                travelModeCode: String(matchedMode.code || ""),
+                travelModeName: String(matchedMode.name || ""),
+                travelSubtypeId: matchedSub ? String(matchedSub._id || matchedSub.code || "") : ent.travelSubtypeId,
+                travelSubtypeCode: matchedSub ? String(matchedSub.code || "") : ent.travelSubtypeCode,
+                travelSubtypeName: matchedSub ? String(matchedSub.name || "") : ent.travelSubtypeName,
+                travelWorkflow: nextWf,
+                ratePerKm: nextRate !== "" ? String(nextRate) : ent.ratePerKm,
+                requestedAmount: nextAmt,
+              };
+            })
+          );
+        }
+        setTravelEntitlementsConfigured(Boolean(cfg.travelEntitlementsConfigured));
+        if (cfg.conveyanceRates) {
+          setConveyanceRates((prev) => ({
+            ...prev,
+            ...cfg.conveyanceRates,
+          }));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [destinationCity]);
+
+  // Fetch Shared Food Entitlement (for Lodging + Food OR standalone Normal Food claims)
+  const hasFoodEntryInNormal = !isLodging && entries.some((e) => e.expenseType === "FOOD");
+  useEffect(() => {
+    const shouldFetch =
+      (isLodging && includeFood && fromDate && toDate && toDate > fromDate && destinationCity.trim()) ||
+      (!isLodging && hasFoodEntryInNormal && claimDate && destinationCity.trim());
+    if (!shouldFetch) {
+      setFoodEntitlementInfo({ loading: false, data: null });
+      return undefined;
+    }
+    const empIds = employeeSelections
+      .slice(0, numberOfEmployees)
+      .map((e, idx) => {
+        const id = e.employeeId && typeof e.employeeId === "object" ? e.employeeId._id : e.employeeId;
+        if (idx === 0) return currentUser?._id || currentUser?.id || id || "";
+        return id || "";
+      })
+      .filter((id) => id && id !== "self");
+
+    let cancelled = false;
+    setFoodEntitlementInfo((prev) => ({ ...prev, loading: true }));
+    const timer = setTimeout(async () => {
+      try {
+        const res = await expenseApi.getFoodEntitlement({
+          fromDate: isLodging ? fromDate : claimDate,
+          toDate: isLodging ? toDate : claimDate,
+          destinationCity: destinationCity.trim(),
+          employeeIds: empIds.length > 0 ? empIds : undefined,
+          claimId: editClaimId || undefined,
+          excludeClaimId: editClaimId || undefined,
+        });
+        const fData = res?.data || (res?.entitlement !== undefined ? res : null);
+        if (!cancelled) {
+          setFoodEntitlementInfo({ loading: false, data: fData || null });
+        }
+      } catch {
+        if (!cancelled) {
+          setFoodEntitlementInfo({ loading: false, data: null });
+        }
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    isLodging,
+    includeFood,
+    hasFoodEntryInNormal,
+    fromDate,
+    toDate,
+    claimDate,
+    destinationCity,
+    numberOfEmployees,
+    employeeSelections,
+    currentUser,
+    editClaimId,
+  ]);
 
   // Load Initial Data
   useEffect(() => {
@@ -649,17 +1819,44 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
     const init = async () => {
       try {
-        const [cities, , pol] = await Promise.all([
+        const [cities, , pol, fetchedTypes] = await Promise.all([
           expenseApi.getCities(),
           expenseApi.searchCustomers(),
           expenseApi.getActivePolicy().catch(() => null),
+          expenseApi.getTypes().catch(() => []),
         ]);
 
         if (isMounted) {
           setCitiesList(cities || []);
+          if (Array.isArray(fetchedTypes) && fetchedTypes.length > 0) {
+            setDynamicExpenseTypes(fetchedTypes);
+          }
           // Do not auto-set default destinationCity - employee must choose
           if (pol) {
             setRelativeStayPercent(typeof pol.relativeStayPercent === "number" ? pol.relativeStayPercent : null);
+            if (Array.isArray(pol.approvalLimitRules)) {
+              setApprovalLimitRules(pol.approvalLimitRules);
+            }
+            if (pol.directAccountLimit !== undefined && pol.directAccountLimit !== null && Number(pol.directAccountLimit) > 0) {
+              setServerDirectLimit(Number(pol.directAccountLimit));
+            }
+            if (pol.payLimitConfig && typeof pol.payLimitConfig === "object") {
+              setPayLimitConfig({
+                enabled: pol.payLimitConfig.enabled !== false,
+                applicableClaimTypes: Array.isArray(pol.payLimitConfig.applicableClaimTypes)
+                  ? pol.payLimitConfig.applicableClaimTypes
+                  : ["OTHER"],
+              });
+            }
+            if (pol.cfoApprovalConfig && typeof pol.cfoApprovalConfig === "object") {
+              setCfoApprovalConfig({
+                enabled: pol.cfoApprovalConfig.enabled !== false,
+                applyOnFullPayment: pol.cfoApprovalConfig.applyOnFullPayment !== false,
+                applicableClaimTypes: Array.isArray(pol.cfoApprovalConfig.applicableClaimTypes)
+                  ? pol.cfoApprovalConfig.applicableClaimTypes
+                  : ["STOCK_PURCHASE"],
+              });
+            }
             if (pol.conveyanceRates) {
               const newRates = {
                 twoWheeler: pol.conveyanceRates.twoWheeler !== undefined && pol.conveyanceRates.twoWheeler !== null ? Number(pol.conveyanceRates.twoWheeler) : 3.5,
@@ -692,7 +1889,18 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             setEditingClaimNumber(c.claimNumber || "");
             const st = String(c.status || "").toUpperCase();
             const ps = String(c.paymentStatus || "").toUpperCase();
-            const isSubmitted = ["SUBMITTED", "PENDING", "HR_PENDING", "FULL_PAYMENT_PENDING", "ACCOUNTS_PENDING"].includes(st);
+            const isSubmitted = [
+              "SUBMITTED",
+              "PENDING",
+              "APPROVAL_PENDING",
+              "MANAGER_PENDING",
+              "AWAITING_APPROVAL",
+              "HR_PENDING",
+              "FULL_PAYMENT_PENDING",
+              "ACCOUNTS_PENDING",
+              "HR_APPROVED",
+              "APPROVED",
+            ].includes(st);
             const isRejected = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(st) || ps === "REJECTED";
             setIsEditingSubmittedClaim(isSubmitted);
             setIsEditingRejectedClaim(isRejected);
@@ -730,8 +1938,30 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             const amt = c.requestedAmount !== undefined && c.requestedAmount !== null
               ? c.requestedAmount
               : (c.grandRequested || c.amount || "");
-            setRequestedAmount(String(amt));
-            setRemark(c.remark || c.remarks || c.trip?.purpose || "");
+            if (mode === "LODGING") {
+              const lodgingEntry = Array.isArray(c.entries)
+                ? c.entries.find((e) => String(e?.expenseType || "").toUpperCase() === "LODGING")
+                : null;
+              const lodgingAmt = c.lodgingSummary?.requested ?? c.lodgingSummary?.requestedAmount ?? lodgingEntry?.requestedAmount ?? amt;
+              setRequestedAmount(String(lodgingAmt || ""));
+              setRemark(lodgingEntry?.remark || c.remark || c.remarks || c.trip?.purpose || "");
+
+              const hasFood = Boolean(c.includeFood || (Array.isArray(c.foodEntries) && c.foodEntries.length > 0));
+              setIncludeFood(hasFood);
+              if (hasFood && Array.isArray(c.foodEntries) && c.foodEntries.length > 0) {
+                setFoodEntries(
+                  c.foodEntries.map((fe, fIdx) => ({
+                    id: `food_${fe._id || fIdx + 1}`,
+                    requestedAmount: fe.requestedAmount !== undefined && fe.requestedAmount !== null ? String(fe.requestedAmount) : "",
+                    remark: fe.remark || "",
+                    attachments: toUploadedPhotos(fe.receipts || fe.attachments || [], `srv_food_${fIdx}`),
+                  }))
+                );
+              }
+            } else {
+              setRequestedAmount(String(amt));
+              setRemark(c.remark || c.remarks || c.trip?.purpose || "");
+            }
 
             // Pre-populate entries for NORMAL claims in Edit Mode
             if (mode === "NORMAL") {
@@ -745,23 +1975,38 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                         : (idx === 0 && c.receipts && c.receipts.length > 0)
                           ? c.receipts
                           : [];
-                    const expType = entry.expenseType || "TRAVEL";
+                    const rawEntryType = entry.expenseType || "TRAVEL";
+                    const isLegacyPurchase = rawEntryType === "OTHER" && String(entry.otherSubType).toUpperCase() === "PURCHASE";
+                    const expType = isLegacyPurchase ? "STOCK_PURCHASE" : rawEntryType;
                     const isEntryOther = expType === "OTHER";
+                    const isEntryStockPurchase = expType === "STOCK_PURCHASE";
                     const isEntryConv = expType === "CONVEYANCE";
-                    const isEntryPurchase = isEntryOther && String(entry.otherSubType).toUpperCase() === "PURCHASE";
+                    const isEntryTravel = expType === "TRAVEL";
+                    const isEntryKm = isEntryConv || (isEntryTravel && isKmWorkflow(null, entry));
                     return {
                       id: String(entry._id || idx + 1),
                       expenseType: expType,
-                      otherSubType: isEntryOther ? (entry.otherSubType || "PURCHASE") : "",
-                      barcodeNumber: isEntryPurchase ? (entry.barcodeNumber || "") : "",
-                      quantity: isEntryPurchase && entry.quantity !== undefined && entry.quantity !== null && String(entry.quantity).trim() !== "" ? String(entry.quantity).trim() : "",
+                      otherSubType: isEntryOther ? "NORMAL" : "",
+                      materialName: isEntryStockPurchase ? (entry.materialName || "") : "",
+                      barcodeNumber: isEntryStockPurchase ? (entry.barcodeNumber || "") : "",
+                      quantity: isEntryStockPurchase && entry.quantity !== undefined && entry.quantity !== null && String(entry.quantity).trim() !== "" ? String(entry.quantity).trim() : "",
                       vehicle: isEntryConv ? (entry.vehicle || "twoWheeler") : "",
-                      distanceKm: isEntryConv && entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : "",
+                      distanceKm: isEntryKm && entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : "",
+                      travelModeId: isEntryTravel ? String(entry.travelModeId || entry.travelModeCode || "") : "",
+                      travelModeCode: isEntryTravel ? String(entry.travelModeCode || "") : "",
+                      travelModeName: isEntryTravel ? String(entry.travelModeName || "") : "",
+                      travelSubtypeId: isEntryTravel ? String(entry.travelSubtypeId || entry.travelSubtypeCode || "") : "",
+                      travelSubtypeCode: isEntryTravel ? String(entry.travelSubtypeCode || "") : "",
+                      travelSubtypeName: isEntryTravel ? String(entry.travelSubtypeName || "") : "",
+                      travelWorkflow: isEntryTravel ? (isKmWorkflow(null, entry) ? "KM_RATE" : "STANDARD") : "STANDARD",
+                      startKm: "",
+                      endKm: "",
+                      ratePerKm: isEntryTravel && entry.ratePerKm !== undefined && entry.ratePerKm !== null ? String(entry.ratePerKm) : "",
                       visitType: normalClaimVt,
                       isVisit: normalClaimVt === "VISIT",
-                      numberPlatePhotos: isEntryConv ? toUploadedPhotos(entry.numberPlatePhotos, `srv_np_${idx}`) : [],
-                      startKmPhotos: isEntryConv ? toUploadedPhotos(entry.startKmPhotos, `srv_sk_${idx}`) : [],
-                      endKmPhotos: isEntryConv ? toUploadedPhotos(entry.endKmPhotos, `srv_ek_${idx}`) : [],
+                      numberPlatePhotos: isEntryKm ? toUploadedPhotos(entry.numberPlatePhotos, `srv_np_${idx}`) : [],
+                      startKmPhotos: isEntryKm ? toUploadedPhotos(entry.startKmPhotos, `srv_sk_${idx}`) : [],
+                      endKmPhotos: isEntryKm ? toUploadedPhotos(entry.endKmPhotos, `srv_ek_${idx}`) : [],
                       serviceReports: isEntryConv ? toUploadedPhotos(entry.serviceReports, `srv_sr_${idx}`) : [],
                       requestedAmount: entry.requestedAmount !== undefined && entry.requestedAmount !== null ? String(entry.requestedAmount) : "",
                       remark: entry.remark || "",
@@ -790,23 +2035,38 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                         : (idx === 0 && c.receipts && c.receipts.length > 0)
                           ? c.receipts
                           : [];
-                    const itType = it.expenseType || "TRAVEL";
+                    const rawItType = it.expenseType || "TRAVEL";
+                    const isLegacyItPurchase = rawItType === "OTHER" && String(it.otherSubType).toUpperCase() === "PURCHASE";
+                    const itType = isLegacyItPurchase ? "STOCK_PURCHASE" : rawItType;
                     const isItOther = itType === "OTHER";
+                    const isItStockPurchase = itType === "STOCK_PURCHASE";
                     const isItConv = itType === "CONVEYANCE";
-                    const isItPurchase = isItOther && String(it.otherSubType).toUpperCase() === "PURCHASE";
+                    const isItTravel = itType === "TRAVEL";
+                    const isItKm = isItConv || (isItTravel && isKmWorkflow(null, it));
                     return {
                       id: String(it._id || idx + 1),
                       expenseType: itType,
-                      otherSubType: isItOther ? (it.otherSubType || "PURCHASE") : "",
-                      barcodeNumber: isItPurchase ? (it.barcodeNumber || "") : "",
-                      quantity: isItPurchase && it.quantity !== undefined && it.quantity !== null && String(it.quantity).trim() !== "" ? String(it.quantity).trim() : "",
+                      otherSubType: isItOther ? "NORMAL" : "",
+                      materialName: isItStockPurchase ? (it.materialName || "") : "",
+                      barcodeNumber: isItStockPurchase ? (it.barcodeNumber || "") : "",
+                      quantity: isItStockPurchase && it.quantity !== undefined && it.quantity !== null && String(it.quantity).trim() !== "" ? String(it.quantity).trim() : "",
                       vehicle: isItConv ? (it.vehicle || "twoWheeler") : "",
-                      distanceKm: isItConv && it.distanceKm !== undefined && it.distanceKm !== null ? String(it.distanceKm) : "",
+                      distanceKm: isItKm && it.distanceKm !== undefined && it.distanceKm !== null ? String(it.distanceKm) : "",
+                      travelModeId: isItTravel ? String(it.travelModeId || it.travelModeCode || "") : "",
+                      travelModeCode: isItTravel ? String(it.travelModeCode || "") : "",
+                      travelModeName: isItTravel ? String(it.travelModeName || "") : "",
+                      travelSubtypeId: isItTravel ? String(it.travelSubtypeId || it.travelSubtypeCode || "") : "",
+                      travelSubtypeCode: isItTravel ? String(it.travelSubtypeCode || "") : "",
+                      travelSubtypeName: isItTravel ? String(it.travelSubtypeName || "") : "",
+                      travelWorkflow: isItTravel ? (isKmWorkflow(null, it) ? "KM_RATE" : "STANDARD") : "STANDARD",
+                      startKm: "",
+                      endKm: "",
+                      ratePerKm: isItTravel && it.ratePerKm !== undefined && it.ratePerKm !== null ? String(it.ratePerKm) : "",
                       visitType: normalClaimVt,
                       isVisit: normalClaimVt === "VISIT",
-                      numberPlatePhotos: isItConv ? toUploadedPhotos(it.numberPlatePhotos, `srv_np_${idx}`) : [],
-                      startKmPhotos: isItConv ? toUploadedPhotos(it.startKmPhotos, `srv_sk_${idx}`) : [],
-                      endKmPhotos: isItConv ? toUploadedPhotos(it.endKmPhotos, `srv_ek_${idx}`) : [],
+                      numberPlatePhotos: isItKm ? toUploadedPhotos(it.numberPlatePhotos, `srv_np_${idx}`) : [],
+                      startKmPhotos: isItKm ? toUploadedPhotos(it.startKmPhotos, `srv_sk_${idx}`) : [],
+                      endKmPhotos: isItKm ? toUploadedPhotos(it.endKmPhotos, `srv_ek_${idx}`) : [],
                       serviceReports: isItConv ? toUploadedPhotos(it.serviceReports, `srv_sr_${idx}`) : [],
                       requestedAmount: it.requestedAmount !== undefined && it.requestedAmount !== null ? String(it.requestedAmount) : "",
                       remark: it.description || "",
@@ -830,23 +2090,38 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   ? c.receipts
                   : (c.employeeClaims?.[0]?.items?.[0]?.attachments || []);
                 const singleItem = c.employeeClaims?.[0]?.items?.[0] || {};
-                const isRawOther = rawType === "OTHER";
-                const isRawConv = rawType === "CONVEYANCE";
-                const isRawPurchase = isRawOther && String(singleItem.otherSubType || c.otherSubType).toUpperCase() === "PURCHASE";
+                const isLegacyRawPurchase = rawType === "OTHER" && String(singleItem.otherSubType || c.otherSubType).toUpperCase() === "PURCHASE";
+                const resolvedRawType = isLegacyRawPurchase ? "STOCK_PURCHASE" : rawType;
+                const isRawOther = resolvedRawType === "OTHER";
+                const isRawStockPurchase = resolvedRawType === "STOCK_PURCHASE";
+                const isRawConv = resolvedRawType === "CONVEYANCE";
+                const isRawTravel = resolvedRawType === "TRAVEL";
+                const isRawKm = isRawConv || (isRawTravel && isKmWorkflow(null, singleItem));
                 setEntries([
                   {
                     id: "1",
-                    expenseType: rawType,
-                    otherSubType: isRawOther ? (singleItem.otherSubType || c.otherSubType || "PURCHASE") : "",
-                    barcodeNumber: isRawPurchase ? (singleItem.barcodeNumber || c.barcodeNumber || "") : "",
-                    quantity: isRawPurchase && (singleItem.quantity || c.quantity) ? String(singleItem.quantity || c.quantity).trim() : "",
+                    expenseType: resolvedRawType,
+                    otherSubType: isRawOther ? "NORMAL" : "",
+                    materialName: isRawStockPurchase ? (singleItem.materialName || c.materialName || "") : "",
+                    barcodeNumber: isRawStockPurchase ? (singleItem.barcodeNumber || c.barcodeNumber || "") : "",
+                    quantity: isRawStockPurchase && (singleItem.quantity || c.quantity) ? String(singleItem.quantity || c.quantity).trim() : "",
                     vehicle: isRawConv ? (singleItem.vehicle || c.vehicle || "twoWheeler") : "",
-                    distanceKm: isRawConv ? (singleItem.distanceKm !== undefined && singleItem.distanceKm !== null ? String(singleItem.distanceKm) : (c.distanceKm ? String(c.distanceKm) : "")) : "",
+                    distanceKm: isRawKm ? (singleItem.distanceKm !== undefined && singleItem.distanceKm !== null ? String(singleItem.distanceKm) : (c.distanceKm ? String(c.distanceKm) : "")) : "",
+                    travelModeId: isRawTravel ? String(singleItem.travelModeId || singleItem.travelModeCode || "") : "",
+                    travelModeCode: isRawTravel ? String(singleItem.travelModeCode || "") : "",
+                    travelModeName: isRawTravel ? String(singleItem.travelModeName || "") : "",
+                    travelSubtypeId: isRawTravel ? String(singleItem.travelSubtypeId || singleItem.travelSubtypeCode || "") : "",
+                    travelSubtypeCode: isRawTravel ? String(singleItem.travelSubtypeCode || "") : "",
+                    travelSubtypeName: isRawTravel ? String(singleItem.travelSubtypeName || "") : "",
+                    travelWorkflow: isRawTravel ? (isKmWorkflow(null, singleItem) ? "KM_RATE" : "STANDARD") : "STANDARD",
+                    startKm: "",
+                    endKm: "",
+                    ratePerKm: isRawTravel && singleItem.ratePerKm !== undefined && singleItem.ratePerKm !== null ? String(singleItem.ratePerKm) : "",
                     visitType: normalClaimVt,
                     isVisit: normalClaimVt === "VISIT",
-                    numberPlatePhotos: isRawConv ? toUploadedPhotos(singleItem.numberPlatePhotos, "srv_np") : [],
-                    startKmPhotos: isRawConv ? toUploadedPhotos(singleItem.startKmPhotos, "srv_sk") : [],
-                    endKmPhotos: isRawConv ? toUploadedPhotos(singleItem.endKmPhotos, "srv_ek") : [],
+                    numberPlatePhotos: isRawKm ? toUploadedPhotos(singleItem.numberPlatePhotos, "srv_np") : [],
+                    startKmPhotos: isRawKm ? toUploadedPhotos(singleItem.startKmPhotos, "srv_sk") : [],
+                    endKmPhotos: isRawKm ? toUploadedPhotos(singleItem.endKmPhotos, "srv_ek") : [],
                     serviceReports: isRawConv ? toUploadedPhotos(singleItem.serviceReports || c.serviceReports, "srv_sr") : [],
                     requestedAmount: String(amt),
                     remark: c.remark || c.remarks || c.trip?.purpose || "",
@@ -892,13 +2167,18 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             }
 
             // Pre-populate bill / receipt attachments (for LODGING mode or general attachments)
-            const allClaimReceipts = (c.receipts && Array.isArray(c.receipts) && c.receipts.length > 0)
-              ? c.receipts
-              : (c.entries && Array.isArray(c.entries))
-                ? c.entries.flatMap((e) => e.receipts || e.attachments || [])
-                : (c.employeeClaims && Array.isArray(c.employeeClaims))
-                  ? c.employeeClaims.flatMap((ec) => (ec.items || []).flatMap((it) => it.attachments || it.receipts || []))
-                  : [];
+            const lodgingOnlyEntry = mode === "LODGING" && Array.isArray(c.entries)
+              ? c.entries.find((e) => String(e?.expenseType || "").toUpperCase() === "LODGING")
+              : null;
+            const allClaimReceipts = lodgingOnlyEntry
+              ? (lodgingOnlyEntry.receipts || lodgingOnlyEntry.attachments || [])
+              : (c.receipts && Array.isArray(c.receipts) && c.receipts.length > 0)
+                ? c.receipts
+                : (c.entries && Array.isArray(c.entries))
+                  ? c.entries.flatMap((e) => e.receipts || e.attachments || [])
+                  : (c.employeeClaims && Array.isArray(c.employeeClaims))
+                    ? c.employeeClaims.flatMap((ec) => (ec.items || []).flatMap((it) => it.attachments || it.receipts || []))
+                    : [];
             if (allClaimReceipts.length > 0) {
               setAttachments(
                 allClaimReceipts.map((r, rIdx) => {
@@ -926,18 +2206,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             const isUserMgmt = isManagementFiler(cachedCurrentUser);
             const ma = c.managerApproval || {};
             if (ma.approver && !isUserMgmt) {
-              const approverObj = {
+              setReportingManagerApprover({
                 _id: String(ma.approver._id || ma.approver),
                 name: ma.approver.name || ma.approverName || "Approver",
                 employeeIdCode: ma.approver.employeeIdCode || "",
                 department: ma.approver.department || "",
                 designation: ma.approver.designation || "",
-              };
-              if (ma.kind === "FULL_PAYMENT" || isFpRequested) {
-                setManagementApprover(approverObj);
-              } else {
-                setReportingManagerApprover(approverObj);
-              }
+              });
             }
 
             // Pre-populate Service Reports (for LODGING mode)
@@ -1136,7 +2411,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           uploadFailed: false,
         };
 
-        if (typeof targetEntryIndex === "number") {
+        if (targetField === "food_attachments" && typeof targetEntryIndex === "number") {
+          setFoodEntries((prev) => {
+            const copy = [...prev];
+            if (copy[targetEntryIndex]) {
+              const currentList = copy[targetEntryIndex].attachments || [];
+              copy[targetEntryIndex] = {
+                ...copy[targetEntryIndex],
+                attachments: [...currentList, newFile],
+              };
+            }
+            return copy;
+          });
+        } else if (typeof targetEntryIndex === "number") {
           setEntries((prev) => {
             const copy = [...prev];
             if (copy[targetEntryIndex]) {
@@ -1169,7 +2456,23 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             );
             if (upRes.success && upRes.data?.url) {
               const finalUrl = resolveProofImageUrl(upRes.data.url) || upRes.data.url;
-              if (typeof targetEntryIndex === "number") {
+              if (targetField === "food_attachments" && typeof targetEntryIndex === "number") {
+                setFoodEntries((prev) => {
+                  const copy = [...prev];
+                  if (copy[targetEntryIndex]) {
+                    const list = copy[targetEntryIndex].attachments || [];
+                    copy[targetEntryIndex] = {
+                      ...copy[targetEntryIndex],
+                      attachments: list.map((item) =>
+                        item.localId === tempId
+                          ? { ...item, url: finalUrl, uri: finalUrl, isUploading: false, uploadFailed: false }
+                          : item
+                      ),
+                    };
+                  }
+                  return copy;
+                });
+              } else if (typeof targetEntryIndex === "number") {
                 setEntries((prev) => {
                   const copy = [...prev];
                   if (copy[targetEntryIndex]) {
@@ -1198,7 +2501,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               console.warn("Upload response failed:", upRes);
               const failUpdate = (item) =>
                 item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item;
-              if (typeof targetEntryIndex === "number") {
+              if (targetField === "food_attachments" && typeof targetEntryIndex === "number") {
+                setFoodEntries((prev) => {
+                  const copy = [...prev];
+                  if (copy[targetEntryIndex]) {
+                    const list = copy[targetEntryIndex].attachments || [];
+                    copy[targetEntryIndex] = {
+                      ...copy[targetEntryIndex],
+                      attachments: list.map(failUpdate),
+                    };
+                  }
+                  return copy;
+                });
+              } else if (typeof targetEntryIndex === "number") {
                 setEntries((prev) => {
                   const copy = [...prev];
                   if (copy[targetEntryIndex]) {
@@ -1220,7 +2535,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             console.warn("Upload error:", e);
             const failUpdate = (item) =>
               item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item;
-            if (typeof targetEntryIndex === "number") {
+            if (targetField === "food_attachments" && typeof targetEntryIndex === "number") {
+              setFoodEntries((prev) => {
+                const copy = [...prev];
+                if (copy[targetEntryIndex]) {
+                  const list = copy[targetEntryIndex].attachments || [];
+                  copy[targetEntryIndex] = {
+                    ...copy[targetEntryIndex],
+                    attachments: list.map(failUpdate),
+                  };
+                }
+                return copy;
+              });
+            } else if (typeof targetEntryIndex === "number") {
               setEntries((prev) => {
                 const copy = [...prev];
                 if (copy[targetEntryIndex]) {
@@ -1248,7 +2575,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
   const removeAttachment = (attIdx, _legacyFullPayment = false, targetEntryIndex = null, targetField = "attachments") => {
     setPreviewData(null);
-    if (typeof targetEntryIndex === "number") {
+    if (targetField === "food_attachments" && typeof targetEntryIndex === "number") {
+      setFoodEntries((prev) => {
+        const copy = [...prev];
+        if (copy[targetEntryIndex]) {
+          const list = copy[targetEntryIndex].attachments || [];
+          copy[targetEntryIndex] = {
+            ...copy[targetEntryIndex],
+            attachments: list.filter((_, i) => i !== attIdx),
+          };
+        }
+        return copy;
+      });
+    } else if (typeof targetEntryIndex === "number") {
       setEntries((prev) => {
         const copy = [...prev];
         if (copy[targetEntryIndex]) {
@@ -1459,7 +2798,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   // Build Payload
   const buildPayload = useCallback(
     (isFinalSubmit = false) => {
-      let totalAmt = parseFloat(requestedAmount) || 0;
+      let totalAmt = (isRelativeStay || (isLodging && lodgingNights === 0)) ? 0 : (parseFloat(requestedAmount) || 0);
       let cleanEntries = [];
 
       const lodgingOrGlobalReports = (needsServiceReport ? serviceReports : [])
@@ -1479,23 +2818,37 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             })
             .filter((a) => a.url);
           const isOther = e.expenseType === "OTHER";
-          const isPurchase = isOther && (e.otherSubType || "PURCHASE") === "PURCHASE";
+          const isStockPurchase = e.expenseType === "STOCK_PURCHASE";
           const isConv = e.expenseType === "CONVEYANCE";
-          const sendAtts = isConv ? [] : entryAtts; // no bills/proofs for Local Conveyance
+          const isTravel = e.expenseType === "TRAVEL";
+          const isTravelKm = isTravel && isKmWorkflow(null, e);
+          const isKmEntry = isConv || isTravelKm;
+          const sendAtts = isKmEntry ? [] : entryAtts; // no bills/proofs for KM-rate entries
           const isVisit = !isLodging ? normalVisitType === "VISIT" : false;
           const entryServiceReports = isVisit ? cleanServiceReports : [];
           return {
             expenseType: e.expenseType || "",
-            otherSubType: isOther ? (e.otherSubType || "NORMAL") : "",
-            barcodeNumber: isPurchase ? (e.barcodeNumber || "").trim() : "",
-            quantity: isPurchase ? (e.quantity !== undefined && e.quantity !== null && String(e.quantity).trim() !== "" ? String(e.quantity).trim() : "") : "",
+            otherSubType: isOther ? "NORMAL" : "",
+            materialName: isStockPurchase ? (e.materialName || "").trim() : "",
+            barcodeNumber: isStockPurchase ? (e.barcodeNumber || "").trim() : "",
+            quantity: isStockPurchase ? (e.quantity !== undefined && e.quantity !== null && String(e.quantity).trim() !== "" ? String(e.quantity).trim() : "") : "",
             requestedAmount: parseFloat(e.requestedAmount) || 0,
             remark: (e.remark || "").trim(),
             vehicle: isConv ? (e.vehicle || "twoWheeler").trim() : "",
-            distanceKm: isConv ? (parseFloat(e.distanceKm) || 0) : 0,
-            numberPlatePhotos: isConv ? toPayloadFiles(e.numberPlatePhotos) : [],
-            startKmPhotos: isConv ? toPayloadFiles(e.startKmPhotos) : [],
-            endKmPhotos: isConv ? toPayloadFiles(e.endKmPhotos) : [],
+            distanceKm: isKmEntry ? (parseFloat(e.distanceKm) || 0) : 0,
+            travelModeId: isTravel ? (e.travelModeId || undefined) : undefined,
+            travelModeCode: isTravel ? (e.travelModeCode || undefined) : undefined,
+            travelModeName: isTravel ? (e.travelModeName || undefined) : undefined,
+            travelSubtypeId: isTravel ? (e.travelSubtypeId || undefined) : undefined,
+            travelSubtypeCode: isTravel ? (e.travelSubtypeCode || undefined) : undefined,
+            travelSubtypeName: isTravel ? (e.travelSubtypeName || undefined) : undefined,
+            travelWorkflow: isTravel ? (isTravelKm ? "KM_RATE" : "STANDARD") : undefined,
+            startKm: undefined,
+            endKm: undefined,
+            ratePerKm: isTravelKm && e.ratePerKm !== "" ? Number(e.ratePerKm) : undefined,
+            numberPlatePhotos: isKmEntry ? toPayloadFiles(e.numberPlatePhotos) : [],
+            startKmPhotos: isKmEntry ? toPayloadFiles(e.startKmPhotos) : [],
+            endKmPhotos: isKmEntry ? toPayloadFiles(e.endKmPhotos) : [],
             visitType: isLodging ? undefined : normalVisitType,
             isVisit: isLodging ? undefined : normalVisitType === "VISIT",
             serviceReports: isConv ? entryServiceReports : undefined,
@@ -1506,6 +2859,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         totalAmt = cleanEntries.reduce((sum, e) => sum + e.requestedAmount, 0);
       }
 
+      const cleanFoodEntries = isLodging && includeFood
+        ? foodEntries.map((fe) => {
+            const fAtts = toPayloadFiles(fe.attachments || []);
+            return {
+              expenseType: "FOOD",
+              requestedAmount: parseFloat(fe.requestedAmount) || 0,
+              remark: (fe.remark || "").trim(),
+              receipts: fAtts,
+              attachments: fAtts,
+            };
+          })
+        : [];
+
       const allEntryReceipts = cleanEntries.flatMap((e) => e.receipts || []);
       const lodgingReceipts = attachments
         .map((a) => {
@@ -1514,10 +2880,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         })
         .filter((a) => a.url);
 
-      const isAllConv = cleanEntries.length > 0 && cleanEntries.every((e) => e.expenseType === "CONVEYANCE");
+      const isAllKm = cleanEntries.length > 0 && cleanEntries.every(
+        (e) => e.expenseType === "CONVEYANCE" || (e.expenseType === "TRAVEL" && e.travelWorkflow === "KM_RATE")
+      );
       const cleanReceipts = isLodging
         ? lodgingReceipts
-        : (isAllConv ? [] : (allEntryReceipts.length > 0 ? allEntryReceipts : lodgingReceipts));
+        : (isAllKm ? [] : (allEntryReceipts.length > 0 ? allEntryReceipts : lodgingReceipts));
 
 
       const resolvedEmployeeIds = employeeSelections
@@ -1563,11 +2931,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         approverId: isCurrentUserManagement
           ? undefined
           : (fullPaymentRequested
-            ? (managementApprover ? String(managementApprover._id) : undefined)
-            : (hasOtherEntry && reportingManagerApprover ? String(reportingManagerApprover._id) : undefined)),
+            ? ((approver && approver._id)
+              ? String(approver._id)
+              : (reportingManagerApprover ? String(reportingManagerApprover._id) : undefined))
+            : (hasOtherEntryAboveLimit
+              ? ((approver && approver._id)
+                ? String(approver._id)
+                : (reportingManagerApprover ? String(reportingManagerApprover._id) : undefined))
+              : undefined)),
         reportingManagerId: isCurrentUserManagement
           ? undefined
-          : (reportingManagerApprover ? String(reportingManagerApprover._id) : undefined),
+          : ((fullPaymentRequested || hasOtherEntryAboveLimit)
+            ? ((approver && approver._id)
+              ? String(approver._id)
+              : (reportingManagerApprover ? String(reportingManagerApprover._id) : undefined))
+            : undefined),
         submit: isFinalSubmit,
       };
 
@@ -1575,8 +2953,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         payload.fromDate = fromDate;
         payload.toDate = toDate;
         payload.stayType = stayType;
-        payload.numberOfDays = days;
-        payload.numberOfNights = days;
+        payload.lodgingNights = lodgingNights;
+        payload.foodDays = foodDays;
+        payload.numberOfNights = lodgingNights;
+        payload.numberOfDays = foodDays;
+        payload.includeFood = includeFood;
+        payload.foodEntries = includeFood ? cleanFoodEntries : [];
       } else {
         payload.claimDate = claimDate;
       }
@@ -1593,7 +2975,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       toDate,
       stayType,
       isRelativeStay,
-      days,
+      lodgingNights,
+      foodDays,
+      includeFood,
+      foodEntries,
       numberOfEmployees,
       employeeSelections,
       currentUser,
@@ -1610,53 +2995,63 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       serviceReports,
       needsServiceReport,
       hasOtherEntry,
+      hasOtherEntryAboveLimit,
+      approver,
       reportingManagerApprover,
-      managementApprover,
       fullPaymentRequested,
       fullPaymentReason,
-      approvalKind,
-      approver,
     ]
   );
 
-  // With Relative: fetch the server-calculated allowed amount (nothing is typed by the employee)
-  const [relativeAllowed, setRelativeAllowed] = useState({ loading: false, amount: null, error: "" });
-  const relativeAllowedKey = isRelativeStay
-    ? [fromDate, toDate, destinationCity.trim(), numberOfEmployees, employeeSelections.slice(0, numberOfEmployees).map((e) => (e.employeeId && typeof e.employeeId === "object" ? e.employeeId._id : e.employeeId) || "").join(",")].join("|")
+  // Lodging Allowed Amount: fetch the server-calculated allowed amount for 1 to multiple employees based on nights (both In Hotel and At Relative)
+  const [relativeAllowed, setRelativeAllowed] = useState({ loading: false, amount: null, policyLimit: null, perDay: null, days: null, percent: null, error: "" });
+  const relativeAllowedKey = isLodging
+    ? [stayType || "IN_HOTEL", fromDate, toDate, destinationCity.trim(), numberOfEmployees, employeeSelections.slice(0, numberOfEmployees).map((e) => (e.employeeId && typeof e.employeeId === "object" ? e.employeeId._id : e.employeeId) || "").join(",")].join("|")
     : "";
   useEffect(() => {
-    if (!isRelativeStay) return undefined;
-    const ready = fromDate && toDate && toDate >= fromDate && destinationCity.trim() &&
+    if (!isLodging) return undefined;
+    const ready = fromDate && toDate && toDate > fromDate && destinationCity.trim() &&
       employeeSelections.length >= numberOfEmployees &&
       employeeSelections.slice(0, numberOfEmployees).every((e, idx) => (idx === 0 ? (e.employeeId || currentUser) : e.employeeId));
     if (!ready) {
-      setRelativeAllowed({ loading: false, amount: null, error: "" });
+      setRelativeAllowed({ loading: false, amount: null, policyLimit: null, perDay: null, days: null, percent: null, error: "" });
       return undefined;
     }
     let cancelled = false;
     setRelativeAllowed((prev) => ({ ...prev, loading: true, error: "" }));
     const timer = setTimeout(async () => {
       try {
-        const res = await expenseApi.previewClaim(buildPayload(false));
+        const basePayload = buildPayload(false);
+        const previewPayload = {
+          ...basePayload,
+          stayType: stayType || "IN_HOTEL",
+          requestedAmount: isRelativeStay ? 0 : (Number(basePayload.requestedAmount) > 0 ? Number(basePayload.requestedAmount) : 1),
+        };
+        const res = await expenseApi.previewClaim(previewPayload);
         if (cancelled) return;
         const d = res?.data;
-        if (res?.success && d && d.relativeStayPercent !== null && d.relativeStayPercent !== undefined) {
+        const limitVal = d?.lodgingSummary?.policyLimit ?? d?.grandPolicyLimit ?? d?.lodgingSummary?.allowed ?? d?.standardAllowedAmount ?? d?.allowedAmount;
+        if (res?.success && d && limitVal !== null && limitVal !== undefined) {
+          const totalLimit = Number(limitVal || 0);
+          const nightsCnt = Number(d.lodgingNights ?? d.numberOfNights ?? d.numberOfDays ?? lodgingNights) || 1;
+          const perNightVal = nightsCnt > 0 ? Math.round((totalLimit / nightsCnt) * 100) / 100 : totalLimit;
           setRelativeAllowed({
             loading: false,
-            amount: Number(d.standardAllowedAmount ?? d.allowedAmount ?? 0),
+            amount: Number(isRelativeStay ? (d.lodgingSummary?.allowed ?? d.lodgingSummary?.allowedAmount ?? totalLimit) : totalLimit),
+            policyLimit: totalLimit,
             percent: d.relativeStayPercent,
-            perDay: d.perDayLimit,
-            days: d.numberOfDays,
+            perDay: perNightVal,
+            days: nightsCnt,
             error: "",
           });
         } else {
           const relevant = (d?.errors || res?.errors || []).find((er) => ["fromDate", "toDate", "employeeIds", "destinationCity", "stayType", "policy"].includes(er.field));
-          setRelativeAllowed({ loading: false, amount: null, error: relevant?.message || "Unable to calculate the allowed amount." });
+          setRelativeAllowed({ loading: false, amount: null, policyLimit: null, perDay: null, days: null, percent: null, error: relevant?.message || "Unable to calculate the allowed amount." });
         }
       } catch {
-        if (!cancelled) setRelativeAllowed({ loading: false, amount: null, error: "Unable to calculate the allowed amount. Please check network connection." });
+        if (!cancelled) setRelativeAllowed({ loading: false, amount: null, policyLimit: null, perDay: null, days: null, percent: null, error: "Unable to calculate the allowed amount. Please check network connection." });
       }
-    }, 400);
+    }, 350);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -1673,13 +3068,28 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     const todayStr = `${todayY}-${todayM}-${todayD}`;
 
     if (isLodging) {
-      if (!fromDate || !toDate || fromDate > todayStr || toDate > todayStr || toDate < fromDate) return false;
+      if (!fromDate || !toDate || fromDate > todayStr || toDate > todayStr || toDate <= fromDate) return false;
       if (!stayType) return false;
       if (!expenseType) return false;
+      if (lodgingNights < 1) return false;
       const amt = parseFloat(requestedAmount);
       if (!isRelativeStay && (isNaN(amt) || amt <= 0)) return false;
       if (!remark || !remark.trim() || remark.trim().length < 5) return false;
       if (!isRelativeStay && (!attachments || attachments.length === 0 || attachments.some((a) => a.isUploading))) return false;
+      if (includeFood) {
+        if (!foodEntries || foodEntries.length === 0) return false;
+        const anyFoodInvalid = foodEntries.some((fe) => {
+          const fAmt = parseFloat(fe.requestedAmount);
+          return (
+            isNaN(fAmt) ||
+            fAmt <= 0 ||
+            !fe.attachments ||
+            fe.attachments.length === 0 ||
+            fe.attachments.some((a) => a.isUploading)
+          );
+        });
+        if (anyFoodInvalid) return false;
+      }
       if (!serviceReports || serviceReports.length === 0 || serviceReports.some((s) => s.isUploading)) return false;
     } else {
       if (!claimDate || claimDate > todayStr) return false;
@@ -1704,9 +3114,42 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             ent.remark.trim().length < 5
           );
         }
+        if (ent.expenseType === "TRAVEL") {
+          if (!ent.travelModeId && !ent.travelModeCode) return true;
+          const matchedMode = travelModes.find(
+            (m) => (m._id && String(m._id) === String(ent.travelModeId)) || m.code === ent.travelModeCode
+          );
+          const activeSubs = Array.isArray(matchedMode?.subtypes)
+            ? matchedMode.subtypes.filter((s) => s.isActive !== false)
+            : [];
+          if (activeSubs.length > 0 && !ent.travelSubtypeId && !ent.travelSubtypeCode) return true;
+          const isKmRate = isKmWorkflow(null, ent);
+          if (isKmRate) {
+            const km = parseFloat(ent.distanceKm);
+            const amt = parseFloat(ent.requestedAmount);
+            const photosMissing = CONVEYANCE_PHOTO_FIELDS.some(({ field }) => {
+              const list = ent[field] || [];
+              return list.length === 0 || list.some((a) => a.isUploading);
+            });
+            return (
+              photosMissing ||
+              isNaN(km) ||
+              km <= 0 ||
+              isNaN(amt) ||
+              amt <= 0 ||
+              !ent.remark ||
+              !ent.remark.trim() ||
+              ent.remark.trim().length < 5
+            );
+          }
+        }
         const amt = parseFloat(ent.requestedAmount);
+        const missingPurchaseFields =
+          ent.expenseType === "STOCK_PURCHASE" &&
+          (!ent.materialName || !ent.materialName.trim() || !ent.barcodeNumber || !ent.barcodeNumber.trim() || !ent.quantity || !String(ent.quantity).trim());
         return (
           !ent.expenseType ||
+          missingPurchaseFields ||
           isNaN(amt) ||
           amt <= 0 ||
           !ent.remark ||
@@ -1733,9 +3176,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
     if (fullPaymentRequested) {
       if (!fullPaymentReason || !fullPaymentReason.trim() || fullPaymentReason.trim().length < 5) return false;
-      if (!isCurrentUserManagement && !managementApprover) return false;
     }
-    if (hasOtherEntry && !isCurrentUserManagement && !reportingManagerApprover) return false;
 
     return true;
   }, [
@@ -1745,6 +3186,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     toDate,
     stayType,
     isRelativeStay,
+    lodgingNights,
+    includeFood,
+    foodEntries,
+    travelModes,
     claimDate,
     expenseType,
     requestedAmount,
@@ -1754,7 +3199,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     needsServiceReport,
     hasOtherEntry,
     reportingManagerApprover,
-    managementApprover,
     entries,
     customerName,
     destinationCity,
@@ -1764,8 +3208,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     isCurrentUserManagement,
     fullPaymentRequested,
     fullPaymentReason,
-    approvalKind,
-    approver,
   ]);
 
   // Validation: Strictly validates that all required (*) fields are filled before previewing calculation, saving draft, or submitting
@@ -1789,12 +3231,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert("Invalid Date", "To Date cannot be a future date.");
         return false;
       }
+      if (toDate === fromDate) {
+        Alert.alert(
+          "Invalid Date Range",
+          "From Date and To Date cannot be the same date. Please select a To Date after From Date."
+        );
+        return false;
+      }
       if (toDate < fromDate) {
         Alert.alert("Invalid Dates", "To Date cannot be earlier than From Date.");
         return false;
       }
       if (!stayType) {
-        Alert.alert("Required Field: Stay Type", "Please select the Stay Type: In Hotel or With Relative.");
+        Alert.alert("Required Field: Stay Type", "Please select the Stay Type: In Hotel or At Relative.");
         return false;
       }
     } else {
@@ -1834,7 +3283,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     }
 
     if (!isLodging && !normalVisitType) {
-      Alert.alert("Required Field: Visit Option", "Please select a Visit Option: No Visit or Visit.");
+      Alert.alert("Required Field: Visit Option", "Please select a Visit Option: Normal Travel or Service Call.");
       return false;
     }
 
@@ -1843,9 +3292,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert("Required Field: Expense Type", "Please select the Expense Type.");
         return false;
       }
+      if (lodgingNights < 1) {
+        Alert.alert(
+          "Invalid Date Range",
+          "From Date and To Date cannot be the same date. Please select a To Date after From Date."
+        );
+        return false;
+      }
       const amt = parseFloat(requestedAmount);
       if (!isRelativeStay && (isNaN(amt) || amt <= 0)) {
-        Alert.alert("Required Field: Amount", "Please enter a valid Pay's Value / Amount greater than ₹0.");
+        Alert.alert("Required Field: Amount", "Please enter a valid Lodging Amount greater than ₹0.");
         return false;
       }
       if (!remark || !remark.trim()) {
@@ -1857,8 +3313,27 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         return false;
       }
       if (!isRelativeStay && (!attachments || attachments.length === 0)) {
-        Alert.alert("Required Field: Proofs", "At least one hotel bill or receipt proof is compulsory for lodging stay.");
+        Alert.alert("Required Field: Proofs", "At least one hotel bill or receipt proof is compulsory for hotel stay.");
         return false;
+      }
+      if (includeFood) {
+        if (!foodEntries || foodEntries.length === 0) {
+          Alert.alert("Required Field: Food Entries", "Please add at least one food entry or uncheck Include Food Claim.");
+          return false;
+        }
+        for (let fIdx = 0; fIdx < foodEntries.length; fIdx++) {
+          const fe = foodEntries[fIdx];
+          const fNum = fIdx + 1;
+          const fAmt = parseFloat(fe.requestedAmount);
+          if (isNaN(fAmt) || fAmt <= 0) {
+            Alert.alert("Required Field: Food Amount", `Please enter a valid Food Amount greater than ₹0 for Food Entry #${fNum}.`);
+            return false;
+          }
+          if (!fe.attachments || fe.attachments.length === 0) {
+            Alert.alert("Required Field: Food Bill Proof", `Please attach at least one food bill or receipt proof for Food Entry #${fNum}.`);
+            return false;
+          }
+        }
       }
       if (!serviceReports || serviceReports.length === 0) {
         Alert.alert(
@@ -1896,12 +3371,44 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             return false;
           }
         }
+        if (ent.expenseType === "TRAVEL") {
+          if (!ent.travelModeId && !ent.travelModeCode) {
+            Alert.alert("Required Field: Travel Mode", `Please select a Travel Mode for Expense Details #${entryNum}.`);
+            return false;
+          }
+          const matchedMode = travelModes.find(
+            (m) => (m._id && String(m._id) === String(ent.travelModeId)) || m.code === ent.travelModeCode
+          );
+          const activeSubs = Array.isArray(matchedMode?.subtypes)
+            ? matchedMode.subtypes.filter((s) => s.isActive !== false)
+            : [];
+          if (activeSubs.length > 0 && !ent.travelSubtypeId && !ent.travelSubtypeCode) {
+            Alert.alert("Required Field: Subtype", `Please select a Travel Subtype / Vehicle Type for Expense Details #${entryNum}.`);
+            return false;
+          }
+          const isKmRate = isKmWorkflow(null, ent);
+          if (isKmRate) {
+            const km = parseFloat(ent.distanceKm);
+            if (isNaN(km) || km <= 0) {
+              Alert.alert("Required Field: Distance", `Please enter a valid distance in KM greater than 0 for Expense Details #${entryNum}.`);
+              return false;
+            }
+            const missingPhoto = CONVEYANCE_PHOTO_FIELDS.find(({ field }) => !(ent[field] || []).length);
+            if (missingPhoto) {
+              Alert.alert(`Required Field: ${missingPhoto.label}`, `Please upload the ${missingPhoto.label} for Expense Details #${entryNum}.`);
+              return false;
+            }
+          }
+        }
+        const isKmEntry =
+          ent.expenseType === "CONVEYANCE" ||
+          (ent.expenseType === "TRAVEL" && isKmWorkflow(null, ent));
         const amt = parseFloat(ent.requestedAmount);
         if (isNaN(amt) || amt <= 0) {
           Alert.alert(
             "Required Field: Amount",
-            ent.expenseType === "CONVEYANCE"
-              ? `Please enter a valid distance in KM to calculate conveyance amount for Expense Details #${entryNum}.`
+            isKmEntry
+              ? `Please enter a valid distance in KM to calculate the amount for Expense Details #${entryNum}.`
               : `Please enter a valid Amount greater than ₹0 for Expense Details #${entryNum}.`
           );
           return false;
@@ -1914,24 +3421,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           Alert.alert("Required Field: Remark", `Remark / Purpose must be at least 5 characters for Expense Details #${entryNum}.`);
           return false;
         }
-        if (ent.expenseType === "OTHER") {
-          const subType = (ent.otherSubType || "PURCHASE").toUpperCase();
-          if (!subType) {
-            Alert.alert("Required Selection: Other Type", `Please select either "Purchase" or "Normal" for Expense Details #${entryNum}.`);
+        if (ent.expenseType === "STOCK_PURCHASE") {
+          if (!ent.materialName || !ent.materialName.trim()) {
+            Alert.alert("Required Field: Material Name", `Material name is required for Stock Purchase in Expense Details #${entryNum}.`);
             return false;
           }
-          if (subType === "PURCHASE") {
-            if (!ent.barcodeNumber || !ent.barcodeNumber.trim()) {
-              Alert.alert("Required Field: Barcode", `Barcode number is required for purchase in Expense Details #${entryNum}.`);
-              return false;
-            }
-            if (!ent.quantity || !String(ent.quantity).trim()) {
-              Alert.alert("Required Field: Quantity", `Quantity is required for purchase in Expense Details #${entryNum}.`);
-              return false;
-            }
+          if (!ent.barcodeNumber || !ent.barcodeNumber.trim()) {
+            Alert.alert("Required Field: Barcode", `Barcode number is required for Stock Purchase in Expense Details #${entryNum}.`);
+            return false;
+          }
+          if (!ent.quantity || !String(ent.quantity).trim()) {
+            Alert.alert("Required Field: Quantity", `Quantity is required for Stock Purchase in Expense Details #${entryNum}.`);
+            return false;
           }
         }
-        if (ent.expenseType !== "CONVEYANCE" && (!ent.attachments || ent.attachments.length === 0)) {
+        if (!isKmEntry && (!ent.attachments || ent.attachments.length === 0)) {
           Alert.alert("Required Field: Bill Proof", `Please attach at least one bill or receipt proof for Expense Details #${entryNum}.`);
           return false;
         }
@@ -1940,7 +3444,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert(
           "Required Field: Service Report",
           !isLodging && normalVisitType === "VISIT"
-            ? "Visit option is selected. Please upload or capture at least one Service Report photo or live photo in the Service Report section below."
+            ? "Service Call option is selected. Please upload or capture at least one Service Report photo or live photo in the Service Report section below."
             : "Service Report is compulsory for Expense claims. Please upload at least one Service Report photo or live photo in the Service Report section below."
         );
         return false;
@@ -1955,13 +3459,15 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     ];
     const anyEntryUploading = !isLodging && entries.some((e) => entryFiles(e).some((a) => a.isUploading));
     const anyEntryFailed = !isLodging && entries.some((e) => entryFiles(e).some((a) => a.uploadFailed));
+    const anyFoodUploading = isLodging && includeFood && foodEntries.some((fe) => (fe.attachments || []).some((a) => a.isUploading));
+    const anyFoodFailed = isLodging && includeFood && foodEntries.some((fe) => (fe.attachments || []).some((a) => a.uploadFailed));
     const anyServiceReportUploading = needsServiceReport && serviceReports.some((s) => s.isUploading);
     const anyServiceReportFailed = needsServiceReport && serviceReports.some((s) => s.uploadFailed);
-    if (attachments.some((a) => a.isUploading) || anyEntryUploading || anyServiceReportUploading) {
+    if (attachments.some((a) => a.isUploading) || anyEntryUploading || anyFoodUploading || anyServiceReportUploading) {
       Alert.alert("Uploading Documents", "Please wait for your proofs and documents to finish uploading.");
       return false;
     }
-    if (attachments.some((a) => a.uploadFailed) || anyEntryFailed || anyServiceReportFailed) {
+    if (attachments.some((a) => a.uploadFailed) || anyEntryFailed || anyFoodFailed || anyServiceReportFailed) {
       Alert.alert("Upload Incomplete", "One or more documents failed to upload. Please remove and re-upload.");
       return false;
     }
@@ -1975,17 +3481,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert("Required Field: Full Payment", "Reason for full payment must be at least 5 characters.");
         return false;
       }
-      if (!isCurrentUserManagement && !managementApprover) {
-        Alert.alert("Required Field: Management Approver", "Please select the Management user who will approve the full payment.");
-        return false;
-      }
-    }
-    if (hasOtherEntry && !isCurrentUserManagement && !reportingManagerApprover) {
-      Alert.alert(
-        "Required Field: Reporting Manager",
-        "Please select the Reporting Manager who will approve this Other expense."
-      );
-      return false;
     }
 
     return true;
@@ -2106,7 +3601,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             : isEditingSubmittedClaim
               ? "Claim Updated Successfully!"
               : "Claim Submitted Successfully!",
-          `Claim ID: ${res.data.claimNumber || res.data.claimId || res.data._id || ""}\nStatus: ${res.data.status || "SUBMITTED"}`,
+          `Claim ID: ${res.data.claimNumber || res.data.claimId || res.data._id || ""}\nStatus: ${res.data.status || "SUBMITTED"}${res.data.pettyCashSummary?.walletBalance !== undefined ? `\nPetty Cash Balance: ${res.data.pettyCashSummary.walletBalance < 0 ? "-₹" : "₹"}${Math.abs(res.data.pettyCashSummary.walletBalance).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ""}`,
           [
             {
               text: "Go to My Claims",
@@ -2227,6 +3722,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   </TouchableOpacity>
                 </View>
               </View>
+              {fromDate && toDate && toDate > fromDate ? (
+                <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: "#f1f5f9", flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                  <Text style={{ fontSize: 12, fontWeight: "700", color: "#4338ca" }}>
+                    Lodging: {lodgingNights} Night{lodgingNights === 1 ? "" : "s"}
+                  </Text>
+                  <Text style={{ fontSize: 12, fontWeight: "700", color: "#059669" }}>
+                    Food: {foodDays} Day{foodDays === 1 ? "" : "s"}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           ) : (
             <View style={styles.itemCard}>
@@ -2294,7 +3799,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     <Users size={18} color={stayType === "WITH_RELATIVE" ? "#4f46e5" : "#94a3b8"} />
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.visitOptionTitle, stayType === "WITH_RELATIVE" && styles.visitOptionTitleActiveVisit]}>
-                        2. With Relative
+                        2. At Relative
                       </Text>
                       <Text style={styles.visitOptionSub}>{relativeStayPercent !== null ? `${relativeStayPercent}% of lodging entitlement` : "Reduced lodging entitlement"}</Text>
                     </View>
@@ -2317,12 +3822,37 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       : activeDatePicker === "fromDate"
                         ? fromDate
                         : toDate;
-                  const parsed = raw ? new Date(raw) : new Date();
-                  return isNaN(parsed.getTime()) ? new Date() : parsed;
+                  if (raw) {
+                    const [ry, rm, rd] = String(raw).split("-").map(Number);
+                    const parsed = ry && rm && rd ? new Date(ry, rm - 1, rd) : new Date(raw);
+                    if (!isNaN(parsed.getTime())) return parsed;
+                  }
+                  if (activeDatePicker === "toDate" && fromDate) {
+                    const [fy, fm, fd] = String(fromDate).split("-").map(Number);
+                    if (fy && fm && fd) {
+                      const nextDay = new Date(fy, fm - 1, fd + 1);
+                      const now = new Date();
+                      return nextDay <= now ? nextDay : now;
+                    }
+                  }
+                  return new Date();
                 })()
               }
               mode="date"
               display={Platform.OS === "ios" ? "spinner" : "default"}
+              minimumDate={
+                (() => {
+                  if (activeDatePicker === "toDate" && fromDate) {
+                    const [fy, fm, fd] = String(fromDate).split("-").map(Number);
+                    if (fy && fm && fd) {
+                      const nextDay = new Date(fy, fm - 1, fd + 1);
+                      const now = new Date();
+                      if (nextDay <= now) return nextDay;
+                    }
+                  }
+                  return undefined;
+                })()
+              }
               maximumDate={new Date()}
               onValueChange={(event, selectedDate) => {
                 const picker = activeDatePicker;
@@ -2348,10 +3878,23 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     setClaimDate(iso);
                   } else if (picker === "fromDate") {
                     setFromDate(iso);
-                    if (toDate && toDate < iso) {
-                      setToDate(iso);
+                    if (toDate && iso === toDate) {
+                      setToDate("");
+                      Alert.alert(
+                        "Invalid Date Range",
+                        "From Date and To Date cannot be the same date. Please select a To Date after From Date."
+                      );
+                    } else if (toDate && iso > toDate) {
+                      setToDate("");
                     }
                   } else if (picker === "toDate") {
+                    if (fromDate && iso === fromDate) {
+                      Alert.alert(
+                        "Invalid Date Range",
+                        "From Date and To Date cannot be the same date. Please select a To Date after From Date."
+                      );
+                      return;
+                    }
                     if (fromDate && iso < fromDate) {
                       Alert.alert("Invalid Date Range", "To Date cannot be earlier than From Date.");
                       return;
@@ -2529,7 +4072,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           </View>
 
           {/* ======================================================== */}
-          {/* STEP 4 (NORMAL): VISIT OPTION (VISIT / NO VISIT)         */}
+          {/* STEP 4 (NORMAL): VISIT OPTION (SERVICE CALL / NORMAL TRAVEL) */}
           {/* ======================================================== */}
           {!isLodging && (
             <>
@@ -2547,23 +4090,23 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   {normalVisitType === "VISIT" ? (
                     <View style={styles.badgeVisitActive}>
                       <CheckCircle2 size={12} color="#059669" />
-                      <Text style={styles.badgeVisitActiveText}>2. Visit Selected</Text>
+                      <Text style={styles.badgeVisitActiveText}>2. Service Call Selected</Text>
                     </View>
                   ) : normalVisitType === "NO_VISIT" ? (
                     <View style={styles.badgeNoVisitActive}>
                       <Building2 size={12} color="#475569" />
-                      <Text style={styles.badgeNoVisitActiveText}>1. No Visit</Text>
+                      <Text style={styles.badgeNoVisitActiveText}>1. Normal Travel</Text>
                     </View>
                   ) : null}
                 </View>
 
                 <Text style={styles.visitSectionHint}>
-                  Choose whether this claim is for an on-site client / site visit:
+                  Choose whether this claim is for Normal Travel or a Service Call:
                 </Text>
 
-                {/* Two Options: 1. No Visit (Default), 2. Visit */}
+                {/* Two Options: 1. Normal Travel, 2. Service Call */}
                 <View style={styles.visitToggleRow}>
-                  {/* Option 1: No Visit */}
+                  {/* Option 1: Normal Travel */}
                   <TouchableOpacity
                     style={[
                       styles.visitOptionBtn,
@@ -2588,7 +4131,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                           normalVisitType === "NO_VISIT" && styles.visitOptionTitleActiveNoVisit,
                         ]}
                       >
-                        1. No Visit
+                        1. Normal Travel
                       </Text>
                       <Text style={styles.visitOptionSub}>
                         No service report required
@@ -2596,7 +4139,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     </View>
                   </TouchableOpacity>
 
-                  {/* Option 2: Visit */}
+                  {/* Option 2: Service Call */}
                   <TouchableOpacity
                     style={[
                       styles.visitOptionBtn,
@@ -2621,7 +4164,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                           normalVisitType === "VISIT" && styles.visitOptionTitleActiveVisit,
                         ]}
                       >
-                        2. Visit
+                        2. Service Call
                       </Text>
                       <Text style={styles.visitOptionSub}>
                         Upload service report *
@@ -2635,7 +4178,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <View style={styles.noVisitInfoBox}>
                     <Building2 size={16} color="#64748b" style={{ marginTop: 1 }} />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.noVisitInfoTitle}>1. No Visit Selected</Text>
+                      <Text style={styles.noVisitInfoTitle}>1. Normal Travel Selected</Text>
                       <Text style={styles.noVisitInfoText}>
                         Service report is not required. You do not need to upload any service report for Food, Local Conveyance, Travel, or Other expenses in this claim.
                       </Text>
@@ -2645,9 +4188,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <View style={styles.visitInfoBox}>
                     <Briefcase size={16} color="#4f46e5" style={{ marginTop: 1 }} />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.visitInfoTitle}>2. Visit Selected</Text>
+                      <Text style={styles.visitInfoTitle}>2. Service Call Selected</Text>
                       <Text style={styles.visitInfoText}>
-                        Client / site visit selected. Please upload or capture the required Service Report in the Service Report section below.
+                        Service Call selected. Please upload or capture the required Service Report in the Service Report section below.
                       </Text>
                     </View>
                   </View>
@@ -2685,19 +4228,26 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           </View>
 
           {isLodging ? (
+            <>
             <View style={styles.itemCard}>
-              {/* Expense Type Selector */}
+              {/* Expense Type Selector (Fixed Single Lodging Box) */}
               <View style={styles.fieldBlock}>
-                <Text style={styles.inputLabel}>
-                  Expense Type <Text style={styles.reqStar}>*</Text>
-                </Text>
+                <View style={styles.inputLabelRow}>
+                  <Text style={styles.inputLabel}>
+                    Lodging Claim Type <Text style={styles.reqStar}>*</Text>
+                  </Text>
+                  <View style={styles.entryCountBadge}>
+                    <Text style={styles.entryCountBadgeText}>
+                      {lodgingNights} Night{lodgingNights === 1 ? "" : "s"}
+                    </Text>
+                  </View>
+                </View>
                 <View style={styles.datePickerBtn}>
                   <BedDouble size={16} color="#4f46e5" />
-                  <Text style={styles.datePickerBtnText}>{isRelativeStay ? "Lodging (Stay with Relative)" : "Lodging (Hotel Stay)"}</Text>
+                  <Text style={styles.datePickerBtnText}>{isRelativeStay ? "Lodging (Stay At Relative)" : "Lodging (Hotel Stay)"}</Text>
                 </View>
               </View>
 
-              {/* Pay's Value / Amount (In Hotel) or calculated Allowed Amount (With Relative) */}
               {isRelativeStay ? (
                 <View style={styles.fieldBlock}>
                   <Text style={styles.inputLabel}>Allowed Amount (₹)</Text>
@@ -2714,7 +4264,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     {relativeAllowed.error
                       ? relativeAllowed.error
                       : relativeAllowed.amount !== null
-                        ? `Stay with relative: ${relativeAllowed.percent}% of your lodging entitlement${relativeAllowed.days ? ` for ${relativeAllowed.days} day${relativeAllowed.days > 1 ? "s" : ""}` : ""}. No amount entry or hotel bill needed.`
+                        ? `Stay at relative: ${relativeAllowed.percent}% of your lodging entitlement for ${lodgingNights} night${lodgingNights === 1 ? "" : "s"}. No amount entry or hotel bill needed.`
                         : "Select stay dates, employees and destination city to see the allowed amount."}
                   </Text>
                 </View>
@@ -2723,7 +4273,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               {/* Pay's Value / Amount */}
               <View style={styles.fieldBlock}>
                 <Text style={styles.inputLabel}>
-                  Pay's Value / Amount (₹) <Text style={styles.reqStar}>*</Text>
+                  Lodging Amount (₹) <Text style={styles.reqStar}>*</Text>
                 </Text>
                 <TextInput
                   style={[styles.textInput, { fontSize: 16, fontWeight: "800", color: "#0f172a" }]}
@@ -2736,6 +4286,33 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     if (previewData) setPreviewData(null);
                   }}
                 />
+                {relativeAllowed.loading ? (
+                  <Text style={{ fontSize: 11, color: "#64748b", marginTop: 5, fontWeight: "600" }}>
+                    Calculating allowed amount...
+                  </Text>
+                ) : relativeAllowed.policyLimit !== null && relativeAllowed.policyLimit !== undefined ? (
+                  (() => {
+                    const limitAmt = Number(relativeAllowed.policyLimit || 0);
+                    const typedAmt = parseFloat(requestedAmount) || 0;
+                    const nightsCnt = Number(relativeAllowed.days || lodgingNights || 1);
+                    const perNightAmt = Number(relativeAllowed.perDay || (nightsCnt > 0 ? Math.round((limitAmt / nightsCnt) * 100) / 100 : limitAmt));
+                    const excessAmt = typedAmt > limitAmt ? Math.round((typedAmt - limitAmt) * 100) / 100 : 0;
+                    return (
+                      <Text style={{ fontSize: 11, color: excessAmt > 0 ? "#d97706" : "#059669", marginTop: 5, fontWeight: "700" }}>
+                        Allowed Amount: {formatINR(limitAmt)} ({formatINR(perNightAmt)}/night × {nightsCnt} night{nightsCnt === 1 ? "" : "s"} • {numberOfEmployees} {numberOfEmployees === 1 ? "Employee" : "Employees"})
+                        {excessAmt > 0 ? ` • Excess: ${formatINR(excessAmt)}` : ""}
+                      </Text>
+                    );
+                  })()
+                ) : relativeAllowed.error ? (
+                  <Text style={{ fontSize: 11, color: "#dc2626", marginTop: 5, fontWeight: "600" }}>
+                    {relativeAllowed.error}
+                  </Text>
+                ) : (
+                  <Text style={{ fontSize: 11, color: "#64748b", marginTop: 5 }}>
+                    Select stay dates, employees and destination city to see allowed amount.
+                  </Text>
+                )}
               </View>
               </>
               )}
@@ -2762,6 +4339,248 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 />
               </View>
             </View>
+
+            {/* Optional Food Claim Section within Lodging Form (Multiplier Entries) */}
+            <View style={styles.itemCard}>
+              <TouchableOpacity
+                style={styles.fullPaymentRadioRow}
+                activeOpacity={0.8}
+                onPress={() => {
+                  const next = !includeFood;
+                  setIncludeFood(next);
+                  if (next && (!foodEntries || foodEntries.length === 0)) {
+                    setFoodEntries([{ id: `food_${Date.now()}_1`, requestedAmount: "", remark: "", attachments: [] }]);
+                  }
+                  if (previewData) setPreviewData(null);
+                }}
+              >
+                <View style={[styles.fullPaymentRadioCircle, includeFood && styles.fullPaymentRadioCircleActive]}>
+                  {includeFood ? <View style={styles.radioDot} /> : null}
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                    <Text style={styles.fullPaymentRadioTitle}>Include Food Claim</Text>
+                    <View style={[styles.entryCountBadge, { backgroundColor: "#ecfdf5" }]}>
+                      <Text style={[styles.entryCountBadgeText, { color: "#059669" }]}>
+                        {foodDays} Food Day{foodDays === 1 ? "" : "s"}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.fullPaymentRadioSub}>
+                    Claim food allowance for the shared date range ({foodDays} inclusive calendar day{foodDays === 1 ? "" : "s"}). You can add multiple food entries.
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              {includeFood ? (
+                <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#f1f5f9" }}>
+                  {/* Live Shared Food Entitlement Info */}
+                  {(() => {
+                    const fInfo = foodEntitlementInfo?.data || foodEntitlementInfo?.summary;
+                    if (!fInfo) return null;
+                    const fTotal = Number(fInfo.entitlement ?? fInfo.totalPeriodLimit ?? 0);
+                    const fPrior = Number(fInfo.priorConsumed ?? 0);
+                    const fRem = Number(fInfo.remaining ?? fInfo.totalRemainingLimit ?? Math.max(0, fTotal - fPrior));
+                    return (
+                      <View style={{ backgroundColor: "#f8fafc", borderColor: "#e2e8f0", borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 12 }}>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                          <Text style={{ fontSize: 11, color: "#64748b", fontWeight: "600" }}>
+                            Food Entitlement ({fInfo.foodDays || foodDays} day{(fInfo.foodDays || foodDays) === 1 ? "" : "s"}):
+                          </Text>
+                          <Text style={{ fontSize: 11, color: "#0f172a", fontWeight: "700" }}>
+                            {formatINR(fTotal)}
+                          </Text>
+                        </View>
+                        {fPrior > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                            <Text style={{ fontSize: 11, color: "#dc2626", fontWeight: "600" }}>
+                              Previously Claimed on Overlapping Dates:
+                            </Text>
+                            <Text style={{ fontSize: 11, color: "#dc2626", fontWeight: "700" }}>
+                              -{formatINR(fPrior)}
+                            </Text>
+                          </View>
+                        )}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", paddingTop: 4, borderTopWidth: 1, borderTopColor: "#e2e8f0" }}>
+                          <Text style={{ fontSize: 12, color: "#059669", fontWeight: "700" }}>
+                            Remaining Food Entitlement:
+                          </Text>
+                          <Text style={{ fontSize: 12, color: "#059669", fontWeight: "800" }}>
+                            {formatINR(fRem)}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })()}
+
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                    <Text style={{ fontSize: 13, fontWeight: "700", color: "#1e293b" }}>
+                      Food Entries ({foodEntries.length})
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.headerAddEntryBtn}
+                      onPress={handleAddFoodEntry}
+                      activeOpacity={0.8}
+                    >
+                      <Plus size={13} color="#ffffff" />
+                      <Text style={styles.headerAddEntryBtnText}>Add Food Entry</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {foodEntries.map((fEntry, fIdx) => (
+                    <View
+                      key={fEntry.id || fIdx}
+                      style={{
+                        backgroundColor: "#f8fafc",
+                        borderRadius: 10,
+                        padding: 12,
+                        marginBottom: 10,
+                        borderWidth: 1,
+                        borderColor: "#e2e8f0",
+                      }}
+                    >
+                      <View style={styles.entryCardHeader}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                          <View style={styles.entryNumberPill}>
+                            <Text style={styles.entryNumberPillText}>F#{fIdx + 1}</Text>
+                          </View>
+                          <Receipt size={14} color="#4f46e5" />
+                          <Text style={styles.entryCardTitle}>Food Entry #{fIdx + 1}</Text>
+                        </View>
+                        {foodEntries.length > 1 && (
+                          <TouchableOpacity
+                            style={styles.removeEntryBtn}
+                            onPress={() => handleRemoveFoodEntry(fIdx)}
+                            activeOpacity={0.7}
+                          >
+                            <Trash2 size={13} color="#dc2626" />
+                            <Text style={styles.removeEntryBtnText}>Remove</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+
+                      <View style={styles.fieldBlock}>
+                        <Text style={styles.inputLabel}>
+                          Food Amount (₹) <Text style={styles.reqStar}>*</Text>
+                        </Text>
+                        <TextInput
+                          style={[styles.textInput, { fontSize: 15, fontWeight: "800", color: "#0f172a", backgroundColor: "#ffffff" }]}
+                          placeholder="₹ 0.00"
+                          placeholderTextColor="#94a3b8"
+                          keyboardType="numeric"
+                          value={fEntry.requestedAmount}
+                          onChangeText={(t) =>
+                            handleUpdateFoodEntry(fIdx, "requestedAmount", t.replace(/[^0-9.]/g, ""))
+                          }
+                        />
+                      </View>
+
+                      <View style={styles.fieldBlock}>
+                        <Text style={styles.inputLabel}>Food Remark (Optional)</Text>
+                        <TextInput
+                          style={[styles.textInput, { backgroundColor: "#ffffff" }]}
+                          placeholder="e.g. Breakfast / Lunch / Dinner bill"
+                          placeholderTextColor="#94a3b8"
+                          value={fEntry.remark || ""}
+                          onChangeText={(t) => handleUpdateFoodEntry(fIdx, "remark", t)}
+                        />
+                      </View>
+
+                      <View style={styles.entryProofBlock}>
+                        <View style={styles.inputLabelRow}>
+                          <Text style={styles.inputLabel}>
+                            Food Bill / Receipt #{fIdx + 1} <Text style={styles.reqStar}>* (Compulsory)</Text>
+                          </Text>
+                          {(fEntry.attachments || []).length > 0 ? (
+                            <View style={styles.badgeSuccess}>
+                              <CheckCircle2 size={12} color="#059669" />
+                              <Text style={styles.badgeSuccessText}>{(fEntry.attachments || []).length} Attached</Text>
+                            </View>
+                          ) : (
+                            <View style={styles.badgeCompulsory}>
+                              <AlertCircle size={12} color="#dc2626" />
+                              <Text style={styles.badgeCompulsoryText}>Required</Text>
+                            </View>
+                          )}
+                        </View>
+
+                        <View style={styles.attachBtnRow}>
+                          <TouchableOpacity
+                            style={[styles.attachBtn, (fEntry.attachments || []).length === 0 && styles.attachBtnRequired]}
+                            onPress={() => handlePickAttachment(true, false, fIdx, "food_attachments")}
+                            disabled={uploadingProof}
+                          >
+                            <Camera size={14} color="#4f46e5" />
+                            <Text style={styles.attachBtnText}>Camera</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.attachBtn, (fEntry.attachments || []).length === 0 && styles.attachBtnRequired]}
+                            onPress={() => handlePickAttachment(false, false, fIdx, "food_attachments")}
+                            disabled={uploadingProof}
+                          >
+                            <ImageIcon size={14} color="#4f46e5" />
+                            <Text style={styles.attachBtnText}>Gallery</Text>
+                          </TouchableOpacity>
+                        </View>
+
+                        {(fEntry.attachments || []).map((att, attIdx) => {
+                          const resolvedPreview = resolveProofImageUrl(att) || resolveProofImageUrl(att.uri) || att.uri;
+                          const isPdf = att.type === "application/pdf" || (att.name && att.name.toLowerCase().endsWith(".pdf"));
+                          return (
+                            <View key={att.localId || attIdx} style={styles.attachCard}>
+                              <TouchableOpacity
+                                style={styles.attachCardBody}
+                                activeOpacity={0.7}
+                                onPress={() => {
+                                  if (isPdf && resolvedPreview) {
+                                    Linking.openURL(resolvedPreview).catch(() => {
+                                      Alert.alert("Document", "Unable to open document.");
+                                    });
+                                  } else if (resolvedPreview) {
+                                    setPhotoPreviewModal({
+                                      visible: true,
+                                      uri: resolvedPreview,
+                                      title: att.name || `Food #${fIdx + 1} Proof #${attIdx + 1}`,
+                                    });
+                                  }
+                                }}
+                              >
+                                {isPdf ? (
+                                  <View style={styles.attachIconPlaceholder}>
+                                    <FileText size={20} color="#dc2626" />
+                                  </View>
+                                ) : resolvedPreview ? (
+                                  <Image source={{ uri: resolvedPreview }} style={styles.attachThumb} resizeMode="cover" />
+                                ) : (
+                                  <View style={styles.attachIconPlaceholder}>
+                                    <FileCheck size={16} color="#059669" />
+                                  </View>
+                                )}
+                                <View style={{ flex: 1, marginLeft: 8 }}>
+                                  <Text style={styles.attachCardName} numberOfLines={1}>
+                                    {att.name || `Food Proof #${attIdx + 1}`}
+                                  </Text>
+                                  <Text style={styles.attachCardSub}>
+                                    {att.isUploading ? "Uploading..." : att.uploadFailed ? "Upload failed • Retry" : "Tap to preview"}
+                                  </Text>
+                                </View>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.attachDeleteBtn}
+                                onPress={() => removeAttachment(attIdx, false, fIdx, "food_attachments")}
+                              >
+                                <Trash2 size={14} color="#dc2626" />
+                              </TouchableOpacity>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+            </>
           ) : (
             <>
               {/* Normal Mode: Multiple Expense Entries (#1, #2, etc.) */}
@@ -2769,7 +4588,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 const isFirst = idx === 0;
                 const isLast = idx === entries.length - 1;
                 const entryNum = idx + 1;
-                const foundType = NORMAL_EXPENSE_TYPES.find((t) => t.code === entry.expenseType);
+                const foundType = availableNormalExpenseTypes.find((t) => t.code === entry.expenseType);
                 const TypeIcon = foundType?.icon || Receipt;
 
                 return (
@@ -2814,91 +4633,24 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       </TouchableOpacity>
                     </View>
 
-                    {/* Other Expense Sub-Type Selection (Purchase vs Normal) */}
-                    {entry.expenseType === "OTHER" && (
-                      <View style={styles.otherSubTypeContainer}>
-                        <Text style={styles.inputLabel}>
-                          Choose Other Category <Text style={styles.reqStar}>*</Text>
-                        </Text>
-                        <View style={styles.otherOptionBoxesRow}>
-                          {/* Box 1: Purchase */}
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            style={[
-                              styles.otherOptionBox,
-                              (entry.otherSubType || "PURCHASE") === "PURCHASE" && styles.otherOptionBoxActive,
-                            ]}
-                            onPress={() => handleUpdateEntry(idx, "otherSubType", "PURCHASE")}
-                          >
-                            <View style={styles.otherOptionBoxHeader}>
-                              <View
-                                style={[
-                                  styles.radioCircle,
-                                  (entry.otherSubType || "PURCHASE") === "PURCHASE" && styles.radioCircleActive,
-                                ]}
-                              >
-                                {(entry.otherSubType || "PURCHASE") === "PURCHASE" && <View style={styles.radioInner} />}
-                              </View>
-                              <ShoppingBag
-                                size={18}
-                                color={(entry.otherSubType || "PURCHASE") === "PURCHASE" ? "#4f46e5" : "#64748b"}
-                              />
-                            </View>
-                            <Text
-                              style={[
-                                styles.otherOptionBoxTitle,
-                                (entry.otherSubType || "PURCHASE") === "PURCHASE" && styles.otherOptionBoxTitleActive,
-                              ]}
-                            >
-                              Purchase
-                            </Text>
-                            <Text style={styles.otherOptionBoxSub}>
-                              Barcode & Quantity
-                            </Text>
-                          </TouchableOpacity>
-
-                          {/* Box 2: Normal */}
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            style={[
-                              styles.otherOptionBox,
-                              entry.otherSubType === "NORMAL" && styles.otherOptionBoxActive,
-                            ]}
-                            onPress={() => handleUpdateEntry(idx, "otherSubType", "NORMAL")}
-                          >
-                            <View style={styles.otherOptionBoxHeader}>
-                              <View
-                                style={[
-                                  styles.radioCircle,
-                                  entry.otherSubType === "NORMAL" && styles.radioCircleActive,
-                                ]}
-                              >
-                                {entry.otherSubType === "NORMAL" && <View style={styles.radioInner} />}
-                              </View>
-                              <FileText
-                                size={18}
-                                color={entry.otherSubType === "NORMAL" ? "#4f46e5" : "#64748b"}
-                              />
-                            </View>
-                            <Text
-                              style={[
-                                styles.otherOptionBoxTitle,
-                                entry.otherSubType === "NORMAL" && styles.otherOptionBoxTitleActive,
-                              ]}
-                            >
-                              Normal
-                            </Text>
-                            <Text style={styles.otherOptionBoxSub}>
-                              Standard expense
-                            </Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    )}
-
-                    {/* Purchase Fields: Barcode Number & Quantity */}
-                    {entry.expenseType === "OTHER" && (entry.otherSubType || "PURCHASE") === "PURCHASE" && (
+                    {/* Stock Purchase Fields: Material Name, Barcode Number & Quantity */}
+                    {entry.expenseType === "STOCK_PURCHASE" && (
                       <View style={{ gap: 10, marginBottom: 4 }}>
+                        <View style={styles.fieldBlock}>
+                          <Text style={styles.inputLabel}>
+                            Material Name <Text style={styles.reqStar}>*</Text>
+                          </Text>
+                          <View style={styles.barcodeInputWrapper}>
+                            <TextInput
+                              style={styles.barcodeTextInput}
+                              placeholder="Type material name..."
+                              placeholderTextColor="#94a3b8"
+                              value={entry.materialName || ""}
+                              onChangeText={(t) => handleUpdateEntry(idx, "materialName", t)}
+                            />
+                          </View>
+                        </View>
+
                         <View style={styles.fieldBlock}>
                           <Text style={styles.inputLabel}>
                             Barcode Number <Text style={styles.reqStar}>*</Text>
@@ -3127,9 +4879,293 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                           );
                         })()}
                       </View>
+                    ) : entry.expenseType === "TRAVEL" ? (
+                      (() => {
+                        const activeModes = sanitizeTravelModesList(travelModes);
+                        const selectedMode = activeModes.find(
+                          (m) => String(m.code || "").toUpperCase() === String(entry.travelModeCode || "").toUpperCase()
+                        );
+                        const activeSubs = sanitizeTravelSubtypesList(selectedMode?.subtypes);
+                        const selectedSub = activeSubs.find(
+                          (s) => String(s.code || "").toUpperCase() === String(entry.travelSubtypeCode || "").toUpperCase()
+                        );
+                        const wf = isKmWorkflow(selectedSub, entry) ? "KM_RATE" : "STANDARD";
+                        const rateKey = resolveSubtypeRateKey(selectedMode, selectedSub || { code: entry.travelSubtypeCode, name: entry.travelSubtypeName });
+                        const appliedRate = Number(
+                          (Number(selectedSub?.ratePerKm) > 0 ? selectedSub.ratePerKm : null) ??
+                          (Number(selectedMode?.ratePerKm) > 0 ? selectedMode.ratePerKm : null) ??
+                          conveyanceRates?.[rateKey] ??
+                          entry.ratePerKm ??
+                          0
+                        );
+                        const subEntStatus = selectedSub?.entitlement?.status;
+                        const isNotEntitled = selectedSub?.entitled === false || subEntStatus === "NOT_ENTITLED";
+                        const maxCap = selectedSub?.entitlement?.maxAmount ?? selectedSub?.maxAllowed;
+                        const ModeIcon = getTravelModeIconComponent(selectedMode?.code || selectedMode?.name || entry.travelModeCode || entry.travelModeName);
+                        const SubtypeIcon = getTravelModeIconComponent(selectedSub?.code || selectedSub?.name || entry.travelSubtypeCode || entry.travelSubtypeName || selectedMode?.code || entry.travelModeCode);
+
+                        return (
+                          <View style={styles.conveyanceContainer}>
+                            {/* Travel Mode Dropdown */}
+                            <View style={styles.fieldBlock}>
+                              <Text style={styles.inputLabel}>
+                                Travel Mode <Text style={styles.reqStar}>*</Text>
+                              </Text>
+                              <TouchableOpacity
+                                style={styles.datePickerBtn}
+                                activeOpacity={0.7}
+                                onPress={() =>
+                                  setActiveModal({ kind: "travelMode", targetEntryIndex: idx })
+                                }
+                              >
+                                <ModeIcon size={16} color="#4f46e5" />
+                                <Text
+                                  style={[
+                                    styles.datePickerBtnText,
+                                    !selectedMode && !entry.travelModeName && { color: "#94a3b8" },
+                                  ]}
+                                >
+                                  {selectedMode?.name || entry.travelModeName || "Select Travel Mode"}
+                                </Text>
+                                <ChevronDown size={14} color="#64748b" style={{ marginLeft: "auto" }} />
+                              </TouchableOpacity>
+                            </View>
+
+                            {/* Travel Subtype Dropdown (shown when mode has subtypes, hidden for Taxi/Auto) */}
+                            {selectedMode && activeSubs.length > 0 && (
+                              <View style={[styles.fieldBlock, { marginTop: 10 }]}>
+                                <Text style={styles.inputLabel}>
+                                  Travel Subtype <Text style={styles.reqStar}>*</Text>
+                                </Text>
+                                <TouchableOpacity
+                                  style={styles.datePickerBtn}
+                                  activeOpacity={0.7}
+                                  onPress={() =>
+                                    setActiveModal({ kind: "travelSubtype", targetEntryIndex: idx })
+                                  }
+                                >
+                                  <SubtypeIcon size={16} color="#4f46e5" />
+                                  <Text
+                                    style={[
+                                      styles.datePickerBtnText,
+                                      !selectedSub && !entry.travelSubtypeName && { color: "#94a3b8" },
+                                    ]}
+                                  >
+                                    {selectedSub?.name || entry.travelSubtypeName || "Select Subtype"}
+                                  </Text>
+                                  {wf === "KM_RATE" && appliedRate > 0 ? (
+                                    <View style={[styles.modeRatePill, { marginLeft: "auto", marginRight: 8 }]}>
+                                      <Text style={styles.modeRatePillText}>₹{appliedRate}/km</Text>
+                                    </View>
+                                  ) : null}
+                                  <ChevronDown
+                                    size={14}
+                                    color="#64748b"
+                                    style={wf === "KM_RATE" && appliedRate > 0 ? undefined : { marginLeft: "auto" }}
+                                  />
+                                </TouchableOpacity>
+                              </View>
+                            )}
+
+                            {/* Level Entitlement Status Banner */}
+                            {selectedSub && isNotEntitled && (
+                              <View style={{ backgroundColor: "#fef2f2", borderColor: "#fecaca", borderWidth: 1, borderRadius: 8, padding: 8, marginTop: 8 }}>
+                                <Text style={{ fontSize: 11, fontWeight: "700", color: "#991b1b" }}>
+                                  ⚠️ Not in your Level Entitlement: You may still submit this claim, and the claimed amount will be recorded as Excess (Allowed = ₹0).
+                                </Text>
+                              </View>
+                            )}
+                            {selectedSub && !isNotEntitled && maxCap !== null && maxCap !== undefined && (
+                              <View style={{ backgroundColor: "#eff6ff", borderColor: "#bfdbfe", borderWidth: 1, borderRadius: 8, padding: 8, marginTop: 8 }}>
+                                <Text style={{ fontSize: 11, fontWeight: "600", color: "#1e40af" }}>
+                                  Level Entitlement Cap: {formatINR(maxCap)} (any amount above cap is Excess).
+                                </Text>
+                              </View>
+                            )}
+
+                            {wf === "KM_RATE" ? (
+                              <>
+                                {/* Total Distance in KM Input (just like Local Conveyance) */}
+                                <View style={[styles.fieldBlock, { marginTop: 10 }]}>
+                                  <View style={styles.inputLabelRow}>
+                                    <Text style={styles.inputLabel}>
+                                      Distance (in KM) <Text style={styles.reqStar}>*</Text>
+                                    </Text>
+                                    <Text style={styles.inputHint}>Type distance in KM</Text>
+                                  </View>
+                                  <View style={styles.kmInputWrapper}>
+                                    <Gauge size={18} color="#6366f1" style={{ marginRight: 8 }} />
+                                    <TextInput
+                                      style={styles.kmTextInput}
+                                      placeholder="Type distance in KM (e.g. 25, 40.5)..."
+                                      placeholderTextColor="#94a3b8"
+                                      keyboardType="numeric"
+                                      value={entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : ""}
+                                      onChangeText={(t) => handleUpdateTravelKm(idx, "distanceKm", t)}
+                                    />
+                                    <View style={styles.kmUnitBadge}>
+                                      <Text style={styles.kmUnitBadgeText}>KM</Text>
+                                    </View>
+                                  </View>
+                                </View>
+
+                                {/* Photo uploads: 1. Vehicle Photo, 2. Start Odometer, 3. End Odometer */}
+                                {CONVEYANCE_PHOTO_FIELDS.map(({ field, label }) => {
+                                  const photos = entry[field] || [];
+                                  return (
+                                    <View key={field} style={[styles.fieldBlock, { marginTop: 10 }]}>
+                                      <View style={styles.inputLabelRow}>
+                                        <Text style={styles.inputLabel}>
+                                          {label} <Text style={styles.reqStar}>*</Text>
+                                        </Text>
+                                        {photos.length > 0 ? (
+                                          <View style={styles.badgeSuccess}>
+                                            <CheckCircle2 size={12} color="#059669" />
+                                            <Text style={styles.badgeSuccessText}>{photos.length} Attached</Text>
+                                          </View>
+                                        ) : (
+                                          <View style={styles.badgeCompulsory}>
+                                            <AlertCircle size={12} color="#dc2626" />
+                                            <Text style={styles.badgeCompulsoryText}>Required</Text>
+                                          </View>
+                                        )}
+                                      </View>
+
+                                      <View style={styles.attachBtnRow}>
+                                        <TouchableOpacity
+                                          style={[styles.attachBtn, photos.length === 0 && styles.attachBtnRequired]}
+                                          onPress={() => handlePickAttachment(true, false, idx, field)}
+                                          disabled={uploadingProof}
+                                        >
+                                          <Camera size={14} color="#4f46e5" />
+                                          <Text style={styles.attachBtnText}>Camera</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                          style={[styles.attachBtn, photos.length === 0 && styles.attachBtnRequired]}
+                                          onPress={() => handlePickAttachment(false, false, idx, field)}
+                                          disabled={uploadingProof}
+                                        >
+                                          <ImageIcon size={14} color="#4f46e5" />
+                                          <Text style={styles.attachBtnText}>Gallery</Text>
+                                        </TouchableOpacity>
+                                      </View>
+
+                                      {photos.map((ph, phIdx) => {
+                                        const preview = resolveProofImageUrl(ph) || resolveProofImageUrl(ph.uri) || ph.uri;
+                                        return (
+                                          <View key={ph.localId || phIdx} style={styles.attachCard}>
+                                            <TouchableOpacity
+                                              style={styles.attachCardBody}
+                                              activeOpacity={0.7}
+                                              onPress={() => {
+                                                if (preview) setPhotoPreviewModal({ visible: true, uri: preview, title: ph.name || label });
+                                              }}
+                                            >
+                                              {preview ? (
+                                                <Image source={{ uri: preview }} style={styles.attachThumb} resizeMode="cover" />
+                                              ) : (
+                                                <View style={styles.attachIconPlaceholder}>
+                                                  <FileCheck size={16} color="#059669" />
+                                                </View>
+                                              )}
+                                              <View style={{ flex: 1, marginLeft: 8 }}>
+                                                <Text style={styles.attachCardName} numberOfLines={1}>
+                                                  {ph.name || label}
+                                                </Text>
+                                                <Text style={styles.attachCardSub}>
+                                                  {ph.isUploading ? "Uploading..." : ph.uploadFailed ? "Upload failed • Retry" : "Tap to preview"}
+                                                </Text>
+                                              </View>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                              style={styles.attachDeleteBtn}
+                                              onPress={() => removeAttachment(phIdx, false, idx, field)}
+                                            >
+                                              <Trash2 size={14} color="#dc2626" />
+                                            </TouchableOpacity>
+                                          </View>
+                                        );
+                                      })}
+                                    </View>
+                                  );
+                                })}
+
+                                {/* Auto-calculated Distance & Amount Result Card */}
+                                <View style={[styles.calcResultBox, { marginTop: 10 }]}>
+                                  <View style={styles.calcResultTop}>
+                                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                      <Calculator size={15} color="#4338ca" />
+                                      <Text style={styles.calcResultTitle}>{selectedSub?.name || "Vehicle"} Calculation</Text>
+                                    </View>
+                                    <View style={styles.calcResultTag}>
+                                      <Text style={styles.calcResultTagText}>Auto-calculated</Text>
+                                    </View>
+                                  </View>
+
+                                  <View style={styles.calcFormulaRow}>
+                                    <Text style={styles.calcFormulaText}>
+                                      {Number(entry.distanceKm || 0) > 0
+                                        ? `${entry.distanceKm} KM × ₹${appliedRate}/km`
+                                        : `0 KM × ₹${appliedRate}/km`}
+                                    </Text>
+                                    <Text style={styles.calcAmountBig}>
+                                      {formatINR(Number(entry.requestedAmount || 0))}
+                                    </Text>
+                                  </View>
+
+                                  <Text style={styles.calcHelperText}>
+                                    Vehicle rate of ₹{appliedRate}/km applied from Admin Policy. Claim amount is auto-computed from distance ({entry.distanceKm || 0} KM).
+                                  </Text>
+                                </View>
+                              </>
+                            ) : (
+                              /* Standard Travel Amount Input (Bus, Flight, Taxi/Auto, Train, Company Vehicle) */
+                              <View style={[styles.fieldBlock, { marginTop: 10 }]}>
+                                <Text style={styles.inputLabel}>
+                                  Travel Amount (₹) <Text style={styles.reqStar}>*</Text>
+                                </Text>
+                                <TextInput
+                                  style={[styles.textInput, { fontSize: 16, fontWeight: "800", color: "#0f172a", backgroundColor: "#ffffff" }]}
+                                  placeholder="₹ 0.00"
+                                  placeholderTextColor="#94a3b8"
+                                  keyboardType="numeric"
+                                  value={entry.requestedAmount}
+                                  onChangeText={(t) => {
+                                    handleUpdateEntry(idx, "requestedAmount", t.replace(/[^0-9.]/g, ""));
+                                  }}
+                                />
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })()
                     ) : (
                       /* Pay's Value / Amount for non-conveyance expense types */
                       <View style={styles.fieldBlock}>
+                        {entry.expenseType === "FOOD" && (() => {
+                          const fInfo = foodEntitlementInfo?.data || foodEntitlementInfo?.summary;
+                          if (!fInfo) return null;
+                          const fTotal = Number(fInfo.entitlement ?? fInfo.totalPeriodLimit ?? 0);
+                          const fPrior = Number(fInfo.priorConsumed ?? 0);
+                          const fRem = Number(fInfo.remaining ?? fInfo.totalRemainingLimit ?? Math.max(0, fTotal - fPrior));
+                          return (
+                            <View style={{ backgroundColor: "#f8fafc", borderColor: "#e2e8f0", borderWidth: 1, borderRadius: 8, padding: 8, marginBottom: 8 }}>
+                              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                                <Text style={{ fontSize: 11, color: "#64748b", fontWeight: "600" }}>
+                                  Remaining Food Entitlement ({claimDate || "Today"}):
+                                </Text>
+                                <Text style={{ fontSize: 11, color: "#059669", fontWeight: "800" }}>
+                                  {formatINR(fRem)}
+                                </Text>
+                              </View>
+                              {fPrior > 0 && (
+                                <Text style={{ fontSize: 10, color: "#dc2626", marginTop: 2, fontWeight: "600" }}>
+                                  Already claimed on this date: {formatINR(fPrior)} (shared across Food &amp; Lodging+Food claims)
+                                </Text>
+                              )}
+                            </View>
+                          );
+                        })()}
                         <Text style={styles.inputLabel}>
                           Pay's Value / Amount (₹) <Text style={styles.reqStar}>*</Text>
                         </Text>
@@ -3143,6 +5179,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                             handleUpdateEntry(idx, "requestedAmount", t.replace(/[^0-9.]/g, ""));
                           }}
                         />
+                        {isTypePayLimitApplicable(entry.expenseType) &&
+                          !isTypeCfoApplicable(entry.expenseType) &&
+                          !fullPaymentRequested &&
+                          !hasStockPurchaseEntry &&
+                          directAccountLimit !== null &&
+                          directAccountLimit > 0 && (
+                            <Text style={{ fontSize: 11, fontWeight: "700", color: "#475569", marginTop: 6 }}>
+                              Limit is ₹{Number(directAccountLimit).toLocaleString("en-IN")} — above ₹{Number(directAccountLimit).toLocaleString("en-IN")} pay goes for approval
+                            </Text>
+                          )}
                       </View>
                     )}
 
@@ -3167,8 +5213,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       />
                     </View>
 
-                    {/* Bill Proof Upload for THIS Entry (not applicable for Local Conveyance) */}
-                    {entry.expenseType !== "CONVEYANCE" && (
+                    {/* Bill Proof Upload for THIS Entry (not applicable for Local Conveyance or Own Vehicle KM_RATE) */}
+                    {entry.expenseType !== "CONVEYANCE" && !(entry.expenseType === "TRAVEL" && isKmWorkflow(null, entry)) && (
                       <View style={styles.entryProofBlock}>
                         <View style={styles.inputLabelRow}>
                           <Text style={styles.inputLabel}>
@@ -3267,8 +5313,23 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       </View>
                     )}
 
-                    {/* Reporting Manager Choose Option for OTHER claim type entry - Directly Below Bills */}
-                    {entry.expenseType === "OTHER" && (
+                    {/* Reporting Manager / Accounts Routing Display for CFO-Applicable or Pay-Limit-Applicable claim type entry
+                        Strict Approval Priority:
+                        1st Priority: Full Payment (when fullPaymentRequested is true, only show approval in Full Payment section)
+                        2nd Priority: CFO Approval Claim Type (e.g. Stock Purchase or configured CFO claim types; no payment limit applies unless also configured)
+                        3rd Priority: Pay Limit Applicable Claim Type (e.g. Other Claim or configured Pay Limit claim types) */}
+                    {(() => {
+                      if (fullPaymentRequested) return false;
+                      if (hasStockPurchaseEntry) {
+                        const firstStockIdx = entries.findIndex((e) => e.expenseType === "STOCK_PURCHASE" || isTypeCfoApplicable(e?.expenseType));
+                        return (entry.expenseType === "STOCK_PURCHASE" || isTypeCfoApplicable(entry.expenseType)) && idx === firstStockIdx;
+                      }
+                      if (hasOtherOnlyEntry) {
+                        const firstOtherIdx = entries.findIndex((e) => isTypePayLimitApplicable(e?.expenseType) || e.expenseType === "OTHER");
+                        return (isTypePayLimitApplicable(entry.expenseType) || entry.expenseType === "OTHER") && idx === firstOtherIdx;
+                      }
+                      return false;
+                    })() && (
                       isCurrentUserManagement ? (
                         <View style={[styles.fieldBlock, { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
                           <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#f0fdf4", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#bbf7d0" }}>
@@ -3281,48 +5342,82 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                             </View>
                           </View>
                         </View>
-                      ) : (
-                        <View style={[styles.fieldBlock, { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
-                          <View style={styles.inputLabelRow}>
-                            <Text style={styles.inputLabel}>
-                              Reporting Manager <Text style={styles.reqStar}>*</Text>
+                      ) : (() => {
+                        const isStockEntry = entry.expenseType === "STOCK_PURCHASE" || isTypeCfoApplicable(entry.expenseType);
+                        const isPayLimitOnForType = isTypePayLimitApplicable(entry.expenseType);
+                        const effectiveOtherAmt = isStockEntry ? (parseFloat(entry.requestedAmount) || 0) : maxOtherOnlyEntryAmount;
+                        // Payment limit rules apply ONLY when Pay Limit is enabled for this claim type and not overridden by CFO rule
+                        const hasLimitConfigured = !isStockEntry && isPayLimitOnForType && directAccountLimit !== null && directAccountLimit > 0;
+                        const isWithinDirectLimit = hasLimitConfigured && effectiveOtherAmt <= directAccountLimit;
+
+                        if (isWithinDirectLimit) {
+                          return (
+                            <View style={[styles.fieldBlock, { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
+                              <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#f0fdf4", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#bbf7d0" }}>
+                                <CheckCircle2 size={16} color="#16a34a" />
+                                <View style={{ marginLeft: 8, flex: 1 }}>
+                                  <Text style={{ fontSize: 13, fontWeight: "700", color: "#15803d" }}>
+                                    Limit is ₹{Number(directAccountLimit).toLocaleString("en-IN")} · Direct to Accounts Admin
+                                  </Text>
+                                  <Text style={{ fontSize: 11, color: "#166534", marginTop: 2 }}>
+                                    {effectiveOtherAmt > 0
+                                      ? `Limit is ₹${Number(directAccountLimit).toLocaleString("en-IN")} — above ₹${Number(directAccountLimit).toLocaleString("en-IN")} pay goes for approval. Since ₹${effectiveOtherAmt.toLocaleString("en-IN")} is within the limit, this request goes directly to Accounts Admin.`
+                                      : `Limit is ₹${Number(directAccountLimit).toLocaleString("en-IN")} — up to ₹${Number(directAccountLimit).toLocaleString("en-IN")} goes directly to Accounts Admin; above ₹${Number(directAccountLimit).toLocaleString("en-IN")} pay goes for approval.`}
+                                  </Text>
+                                </View>
+                              </View>
+                            </View>
+                          );
+                        }
+
+                        const entryRes = resolveHierarchyManagerForAmount(effectiveOtherAmt);
+                        const resolvedMgr = entryRes.approver || reportingManagerApprover;
+                        const isEscalated = entryRes.isEscalated || entryRes.isTagEscalated;
+                        const badgeText = entryRes.isTagEscalated
+                          ? "Above Reporting Manager"
+                          : isStockEntry
+                            ? (entry.expenseType === "STOCK_PURCHASE" ? "Stock Purchase Approval" : "1st + CFO Approval Required")
+                            : hasLimitConfigured
+                              ? `Above ₹${Number(directAccountLimit).toLocaleString("en-IN")} · Approval Required`
+                              : "Reporting Manager Approval";
+                        return (
+                          <View style={[styles.fieldBlock, { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
+                            <View style={styles.inputLabelRow}>
+                              <Text style={styles.inputLabel}>Reporting Manager</Text>
+                              <View style={[styles.badgeSuccess, isEscalated && { backgroundColor: "#fef3c7", borderColor: "#fde68a" }]}>
+                                <CheckCircle2 size={12} color={isEscalated ? "#d97706" : "#059669"} />
+                                <Text style={[styles.badgeSuccessText, isEscalated && { color: "#b45309" }]}>{badgeText}</Text>
+                              </View>
+                            </View>
+                            <View style={[styles.selectorBox, { backgroundColor: "#f8fafc", borderColor: isEscalated ? "#fcd34d" : "#cbd5e1" }]}>
+                              <ShieldCheck size={16} color={isEscalated ? "#d97706" : "#4f46e5"} />
+                              <View style={{ flex: 1, marginLeft: 8 }}>
+                                <Text style={[styles.selectorText, { color: "#0f172a", fontWeight: "700" }]} numberOfLines={1}>
+                                  {loadingReportingManagers
+                                    ? "Loading Reporting Manager..."
+                                    : resolvedMgr
+                                      ? `${resolvedMgr.name}${resolvedMgr.employeeIdCode ? ` (${resolvedMgr.employeeIdCode})` : ""}`
+                                      : (currentUser?.reportsTo?.name || currentUser?.reportingManager || currentUser?.approverName || "Assigned Reporting Manager")}
+                                </Text>
+                                {resolvedMgr && (resolvedMgr.designation || resolvedMgr.department) ? (
+                                  <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2 }} numberOfLines={1}>
+                                    {[resolvedMgr.designation, resolvedMgr.department].filter(Boolean).join(" · ")}
+                                  </Text>
+                                ) : null}
+                              </View>
+                            </View>
+                            <Text style={styles.fullPaymentRadioSub}>
+                              {entryRes.isTagEscalated
+                                ? `${hasLimitConfigured ? `Limit is ₹${Number(directAccountLimit).toLocaleString("en-IN")} — above ₹${Number(directAccountLimit).toLocaleString("en-IN")} pay goes for approval. ` : ""}Because ${entryRes.tagEscalatedFrom || "a Team Lead / Reporting Manager"} is tagged in this claim, this request automatically routes to the above-level Reporting Manager (${resolvedMgr?.name || "higher authority"}). ${isStockEntry ? "After 1st approval, it goes to CFO / Finance Head for 2nd approval, then Accounts." : "After approval it goes to Accounts."}`
+                                : hasLimitConfigured
+                                  ? `Limit is ₹${Number(directAccountLimit).toLocaleString("en-IN")} — above ₹${Number(directAccountLimit).toLocaleString("en-IN")} pay goes to your Reporting Manager (${resolvedMgr?.name || "Reporting Manager"}) for approval. After approval it goes to Accounts.`
+                                  : isStockEntry
+                                    ? `${foundType?.name || "This"} claim automatically routes to your Reporting Manager (1st approval) and then CFO / Finance Head (2nd approval) before Accounts.`
+                                    : `${foundType?.name || "This"} expense automatically routes to your Reporting Manager based on your department hierarchy. After approval it goes to Accounts.`}
                             </Text>
-                            {reportingManagerApprover ? (
-                              <View style={styles.badgeSuccess}>
-                                <CheckCircle2 size={12} color="#059669" />
-                                <Text style={styles.badgeSuccessText}>Selected</Text>
-                              </View>
-                            ) : (
-                              <View style={styles.badgeCompulsory}>
-                                <AlertCircle size={12} color="#dc2626" />
-                                <Text style={styles.badgeCompulsoryText}>Required</Text>
-                              </View>
-                            )}
                           </View>
-                          <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
-                            Other expense requires approval. Please select your Reporting Manager.
-                          </Text>
-                          <TouchableOpacity
-                            style={styles.selectorBox}
-                            activeOpacity={0.8}
-                            onPress={() => {
-                              setSearchModalQuery("");
-                              setActiveModal({ kind: "reportingManager" });
-                            }}
-                          >
-                            <ShieldCheck size={16} color={reportingManagerApprover ? "#4f46e5" : "#94a3b8"} />
-                            <Text style={[styles.selectorText, { flex: 1, marginLeft: 8 }, !reportingManagerApprover && { color: "#94a3b8" }]} numberOfLines={1}>
-                              {reportingManagerApprover
-                                ? `${reportingManagerApprover.name}${reportingManagerApprover.employeeIdCode ? ` (${reportingManagerApprover.employeeIdCode})` : ""}`
-                                : "Select Reporting Manager"}
-                            </Text>
-                            <ChevronDown size={16} color="#64748b" />
-                          </TouchableOpacity>
-                          <Text style={styles.fullPaymentRadioSub}>
-                            Other expense needs approval. Only this Reporting Manager will see and approve it. After approval it goes to Accounts.
-                          </Text>
-                        </View>
-                      )
+                        );
+                      })()
                     )}
 
                     {/* In-Card Add Another Entry Button (Only shown on the latest entry) */}
@@ -3345,7 +5440,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           {/* Bills / Receipt Proof (Lodging only) + Service Report (Lodging & Normal, hidden when all entries are Local Conveyance or Other expense) */}
           {(needsServiceReport || isLodging) && (
             <View style={styles.itemCard}>
-              {isLodging && !isRelativeStay && (
+              {isLodging && !isRelativeStay && lodgingNights > 0 && (
                 <View style={styles.fieldBlock}>
                   <View style={styles.inputLabelRow}>
                     <Text style={styles.inputLabel}>
@@ -3465,7 +5560,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   </View>
                   <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
                     {!isLodging && normalVisitType === "VISIT"
-                      ? "Compulsory for client / site visit. Upload service report via live photo or gallery."
+                      ? "Compulsory for Service Call. Upload service report via live photo or gallery."
                       : "Upload service report (multiple upload) via live photo or gallery."}
                   </Text>
 
@@ -3581,7 +5676,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               <View style={{ flex: 1, marginLeft: 10 }}>
                 <Text style={styles.fullPaymentRadioTitle}>Full Payment</Text>
                 <Text style={styles.fullPaymentRadioSub}>
-                  Click this if this is a full payment claim. A Management user you select must approve it before Accounts processes payment.
+                  Click this if this is a full payment claim. Your Reporting Manager must approve it before Accounts processes payment.
                 </Text>
               </View>
             </TouchableOpacity>
@@ -3604,7 +5699,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   />
                 </View>
 
-                {/* Management Approver picker for Full Payment */}
+                {/* Read-only Reporting Manager for Full Payment */}
                 {isCurrentUserManagement ? (
                   <View style={[styles.fieldBlock, { marginTop: 14 }]}>
                     <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#f0fdf4", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#bbf7d0" }}>
@@ -3618,41 +5713,47 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     </View>
                   </View>
                 ) : (
-                  <View style={[styles.fieldBlock, { marginTop: 14 }]}>
-                    <View style={styles.inputLabelRow}>
-                      <Text style={styles.inputLabel}>
-                        Management Approver <Text style={styles.reqStar}>*</Text>
-                      </Text>
-                      {managementApprover ? (
-                        <View style={styles.badgeSuccess}>
-                          <CheckCircle2 size={12} color="#059669" />
-                          <Text style={styles.badgeSuccessText}>Selected</Text>
+                  (() => {
+                    const fpRes = resolveHierarchyManagerForAmount(totalClaimRequestedAmount);
+                    const resolvedMgr = fpRes.approver || reportingManagerApprover;
+                    const isEscalated = fpRes.isEscalated || fpRes.isTagEscalated;
+                    const badgeText = fpRes.isTagEscalated
+                      ? "Above Reporting Manager"
+                      : "Reporting Manager Approval";
+                    return (
+                      <View style={[styles.fieldBlock, { marginTop: 14 }]}>
+                        <View style={styles.inputLabelRow}>
+                          <Text style={styles.inputLabel}>Reporting Manager</Text>
+                          <View style={[styles.badgeSuccess, isEscalated && { backgroundColor: "#fef3c7", borderColor: "#fde68a" }]}>
+                            <CheckCircle2 size={12} color={isEscalated ? "#d97706" : "#059669"} />
+                            <Text style={[styles.badgeSuccessText, isEscalated && { color: "#b45309" }]}>{badgeText}</Text>
+                          </View>
                         </View>
-                      ) : (
-                        <View style={styles.badgeCompulsory}>
-                          <AlertCircle size={12} color="#dc2626" />
-                          <Text style={styles.badgeCompulsoryText}>Required</Text>
+                        <View style={[styles.selectorBox, { backgroundColor: "#f8fafc", borderColor: isEscalated ? "#fcd34d" : "#cbd5e1" }]}>
+                          <ShieldCheck size={16} color={isEscalated ? "#d97706" : "#4f46e5"} />
+                          <View style={{ flex: 1, marginLeft: 8 }}>
+                            <Text style={[styles.selectorText, { color: "#0f172a", fontWeight: "700" }]} numberOfLines={1}>
+                              {loadingReportingManagers
+                                ? "Loading Reporting Manager..."
+                                : resolvedMgr
+                                  ? `${resolvedMgr.name}${resolvedMgr.employeeIdCode ? ` (${resolvedMgr.employeeIdCode})` : ""}`
+                                  : (currentUser?.reportsTo?.name || currentUser?.reportingManager || currentUser?.approverName || "Assigned Reporting Manager")}
+                            </Text>
+                            {resolvedMgr && (resolvedMgr.designation || resolvedMgr.department) ? (
+                              <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2 }} numberOfLines={1}>
+                                {[resolvedMgr.designation, resolvedMgr.department].filter(Boolean).join(" · ")}
+                              </Text>
+                            ) : null}
+                          </View>
                         </View>
-                      )}
-                    </View>
-                    <TouchableOpacity
-                      style={styles.selectorBox}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        setSearchModalQuery("");
-                        setActiveModal({ kind: "managementApprover" });
-                      }}
-                    >
-                      <ShieldCheck size={16} color={managementApprover ? "#4f46e5" : "#94a3b8"} />
-                      <Text style={[styles.selectorText, { flex: 1, marginLeft: 8 }, !managementApprover && { color: "#94a3b8" }]} numberOfLines={1}>
-                        {managementApprover ? managementApprover.name : "Select Management Approver"}
-                      </Text>
-                      <ChevronDown size={16} color="#64748b" />
-                    </TouchableOpacity>
-                    <Text style={styles.fullPaymentRadioSub}>
-                      Only this Management user will see and approve your full payment request. After approval it goes to Accounts.
-                    </Text>
-                  </View>
+                        <Text style={styles.fullPaymentRadioSub}>
+                          {fpRes.isTagEscalated
+                            ? `Because ${fpRes.tagEscalatedFrom || "a Team Lead / Reporting Manager"} is tagged in this claim, this full payment request automatically routes to the above-level Reporting Manager (${resolvedMgr?.name || "higher authority"}).${cfoApprovalConfig?.enabled !== false && cfoApprovalConfig?.applyOnFullPayment !== false ? " After 1st approval, it goes to CFO / Finance Head for 2nd approval, then Accounts." : " After approval it goes to Accounts."}`
+                            : `Your full payment request automatically routes to your Reporting Manager based on your department hierarchy.${cfoApprovalConfig?.enabled !== false && cfoApprovalConfig?.applyOnFullPayment !== false ? " After 1st approval, it goes to CFO / Finance Head for 2nd approval, then Accounts." : " After approval it goes to Accounts."}`}
+                        </Text>
+                      </View>
+                    );
+                  })()
                 )}
               </View>
             ) : null}
@@ -3673,10 +5774,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     <Text style={styles.previewMainTitle}>Policy Entitlement Breakdown</Text>
                     <Text style={styles.previewSubTitle}>
                       {isLodging
-                        ? `Lodging (${previewData.numberOfDays || previewData.numberOfNights || days} Day${(previewData.numberOfDays || previewData.numberOfNights || days) > 1 ? "s" : ""})`
+                        ? `Lodging (${previewData.lodgingNights ?? lodgingNights} Night${(previewData.lodgingNights ?? lodgingNights) === 1 ? "" : "s"}${includeFood ? ` · ${previewData.foodDays ?? foodDays} Food Day${(previewData.foodDays ?? foodDays) === 1 ? "" : "s"}` : ""})`
                         : entries.length > 1
-                          ? `${entries.length} Expense Entries (${entries.map((e) => NORMAL_EXPENSE_TYPES.find((t) => t.code === e.expenseType)?.name || e.expenseType).join(", ")})`
-                          : `${NORMAL_EXPENSE_TYPES.find((t) => t.code === (entries[0]?.expenseType || expenseType))?.name || expenseType} Claim`} · {destinationCity} (Class {previewData.destinationClass || "A"})
+                          ? `${entries.length} Expense Entries (${entries.map((e) => availableNormalExpenseTypes.find((t) => t.code === e.expenseType)?.name || e.expenseType).join(", ")})`
+                          : `${availableNormalExpenseTypes.find((t) => t.code === (entries[0]?.expenseType || expenseType))?.name || expenseType} Claim`} · {destinationCity} (Class {previewData.destinationClass || "A"})
                     </Text>
                   </View>
                 </View>
@@ -3685,7 +5786,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 <View style={styles.grandSummaryGrid}>
                   <View style={styles.grandSummaryCol}>
                     <Text style={styles.grandSummaryLabel}>Policy Limit</Text>
-                    <Text style={styles.grandSummaryValLimit} numberOfLines={1}>
+                    <Text style={styles.grandSummaryValLimit} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
                       {formatINR(
                         (previewData.grandPolicyLimit !== undefined && previewData.grandPolicyLimit > 0)
                           ? previewData.grandPolicyLimit
@@ -3700,14 +5801,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <View style={styles.grandSummaryDivider} />
                   <View style={styles.grandSummaryCol}>
                     <Text style={styles.grandSummaryLabel}>Claimed</Text>
-                    <Text style={styles.grandSummaryValClaimed} numberOfLines={1}>
+                    <Text style={styles.grandSummaryValClaimed} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
                       {formatINR(previewData.requestedAmount || requestedAmount)}
                     </Text>
                   </View>
                   <View style={styles.grandSummaryDivider} />
                   <View style={styles.grandSummaryCol}>
                     <Text style={styles.grandSummaryLabel}>Allowed</Text>
-                    <Text style={styles.grandSummaryValAllowed} numberOfLines={1}>
+                    <Text style={styles.grandSummaryValAllowed} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
                       {formatINR(
                         previewData.standardAllowedAmount !== undefined
                           ? previewData.standardAllowedAmount
@@ -3733,6 +5834,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                         },
                       ]}
                       numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.75}
                     >
                       {formatINR(
                         previewData.standardExcessAmount !== undefined
@@ -3792,6 +5895,50 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 );
               })()}
 
+              {/* Shared Food Entitlement Summary (when Food or Lodging+Food is calculated) */}
+              {previewData.foodSummary ? (
+                <View style={{ backgroundColor: "#ffffff", borderRadius: 12, padding: 12, marginTop: 10, borderWidth: 1, borderColor: "#e2e8f0" }}>
+                  <Text style={{ fontSize: 12, fontWeight: "800", color: "#0f172a", marginBottom: 6 }}>
+                    Food Allowance Breakdown ({previewData.foodSummary.foodDays || foodDays} Day{(previewData.foodSummary.foodDays || foodDays) === 1 ? "" : "s"})
+                  </Text>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 3 }}>
+                    <Text style={{ fontSize: 11, color: "#64748b" }}>Period Food Entitlement:</Text>
+                    <Text style={{ fontSize: 11, fontWeight: "700", color: "#0f172a" }}>
+                      {formatINR(previewData.foodSummary.entitlement ?? previewData.foodSummary.totalPeriodLimit ?? 0)}
+                    </Text>
+                  </View>
+                  {Number(previewData.foodSummary.priorConsumed || 0) > 0 && (
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 3 }}>
+                      <Text style={{ fontSize: 11, color: "#dc2626", fontWeight: "600" }}>Previously Claimed Food Allowance:</Text>
+                      <Text style={{ fontSize: 11, fontWeight: "700", color: "#dc2626" }}>-{formatINR(previewData.foodSummary.priorConsumed)}</Text>
+                    </View>
+                  )}
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 3 }}>
+                    <Text style={{ fontSize: 11, color: "#059669", fontWeight: "700" }}>Remaining Food Entitlement:</Text>
+                    <Text style={{ fontSize: 11, fontWeight: "800", color: "#059669" }}>
+                      {formatINR(
+                        previewData.foodSummary.remainingBefore ??
+                        previewData.foodSummary.totalRemainingLimit ??
+                        previewData.foodSummary.entitlement ??
+                        previewData.foodSummary.totalPeriodLimit ??
+                        0
+                      )}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", paddingTop: 4, borderTopWidth: 1, borderTopColor: "#f1f5f9" }}>
+                    <Text style={{ fontSize: 11, color: "#334155" }}>
+                      Food Claimed: <Text style={{ fontWeight: "700" }}>{formatINR(previewData.foodSummary.requested ?? previewData.foodSummary.claimedAmount ?? 0)}</Text>
+                    </Text>
+                    <Text style={{ fontSize: 11, color: "#059669" }}>
+                      Allowed: <Text style={{ fontWeight: "700" }}>{formatINR(previewData.foodSummary.allowed ?? previewData.foodSummary.allowedAmount ?? 0)}</Text>
+                    </Text>
+                    <Text style={{ fontSize: 11, color: Number(previewData.foodSummary.excess ?? previewData.foodSummary.excessAmount ?? 0) > 0 ? "#dc2626" : "#64748b" }}>
+                      Excess: <Text style={{ fontWeight: "700" }}>{formatINR(previewData.foodSummary.excess ?? previewData.foodSummary.excessAmount ?? 0)}</Text>
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+
               {/* Full Payment Special Note Callout Box */}
               {(previewData.fullPaymentRequested || fullPaymentRequested) ? (
                 <View style={styles.fullPaymentNoticeBox}>
@@ -3801,7 +5948,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     <Text style={styles.fullPaymentNoticeText}>
                       {isCurrentUserManagement
                         ? `Because you are a Management user, approval is not applicable for full payment and the full amount of ${formatINR(previewData.requestedAmount || requestedAmount)} routes directly to Accounts.`
-                        : `Because you requested full payment, the full amount of ${formatINR(previewData.requestedAmount || requestedAmount)} becomes payable once ${approver?.name || "the selected Management user"} approves it.`}
+                        : `Because you requested full payment, the full amount of ${formatINR(previewData.requestedAmount || requestedAmount)} becomes payable once ${approver?.name || "your Reporting Manager"} approves it.`}
                     </Text>
                   </View>
                 </View>
@@ -3831,19 +5978,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             </TouchableOpacity>
 
             <View style={styles.submitRow}>
-              <TouchableOpacity
-                style={styles.draftBtn}
-                onPress={handleSaveDraft}
-                disabled={savingDraft || submitting || previewing}
-              >
-                {savingDraft ? (
-                  <ActivityIndicator size="small" color="#4f46e5" />
-                ) : (
-                  <Text style={styles.draftBtnText}>
-                    {isEditingSubmittedClaim ? "Update Claim" : isEditingRejectedClaim ? "Save as Draft" : editClaimId ? "Update Draft" : "Save Draft"}
-                  </Text>
-                )}
-              </TouchableOpacity>
+              {!isEditingSubmittedClaim ? (
+                <TouchableOpacity
+                  style={styles.draftBtn}
+                  onPress={handleSaveDraft}
+                  disabled={savingDraft || submitting || previewing}
+                >
+                  {savingDraft ? (
+                    <ActivityIndicator size="small" color="#4f46e5" />
+                  ) : (
+                    <Text style={styles.draftBtnText}>
+                      {isEditingRejectedClaim ? "Save as Draft" : editClaimId ? "Update Draft" : "Save Draft"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
 
               <TouchableOpacity
                 style={styles.submitBtn}
@@ -3884,24 +6033,22 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 ? typeof activeModal?.targetEntryIndex === "number"
                   ? `Select Expense Type (Entry #${activeModal.targetEntryIndex + 1})`
                   : "Select Expense Type"
-                : activeModal?.kind === "conveyanceMode"
+                : activeModal?.kind === "conveyanceMode" || activeModal?.kind === "travelMode"
                   ? typeof activeModal?.targetEntryIndex === "number"
                     ? `Select Travel Mode (Entry #${activeModal.targetEntryIndex + 1})`
                     : "Select Travel Mode"
-                  : activeModal?.kind === "city"
-                    ? "Select Destination City"
-                    : activeModal?.kind === "count"
-                      ? "Number of Employees"
-                      : activeModal?.kind === "reportingManager"
-                        ? "Select Reporting Manager"
-                        : activeModal?.kind === "managementApprover"
-                          ? "Select Management Approver"
-                          : activeModal?.kind === "approver"
-                            ? `Select ${approverLabel}`
-                            : `Select Employee #${(activeModal?.targetSlot ?? 0) + 1}`}
+                  : activeModal?.kind === "travelSubtype"
+                    ? typeof activeModal?.targetEntryIndex === "number"
+                      ? `Select Travel Subtype (Entry #${activeModal.targetEntryIndex + 1})`
+                      : "Select Travel Subtype"
+                    : activeModal?.kind === "city"
+                      ? "Select Destination City"
+                      : activeModal?.kind === "count"
+                        ? "Number of Employees"
+                        : `Select Employee #${(activeModal?.targetSlot ?? 0) + 1}`}
             </Text>
 
-            {activeModal?.kind !== "count" && activeModal?.kind !== "type" && activeModal?.kind !== "conveyanceMode" && (
+            {activeModal?.kind !== "count" && activeModal?.kind !== "type" && activeModal?.kind !== "conveyanceMode" && activeModal?.kind !== "travelMode" && activeModal?.kind !== "travelSubtype" && (
               <View style={styles.modalSearchRow}>
                 <Search size={14} color="#64748b" />
                 <TextInput
@@ -3909,9 +6056,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   placeholder={
                     activeModal?.kind === "city"
                       ? "Search city..."
-                      : activeModal?.kind === "reportingManager" || activeModal?.kind === "managementApprover" || activeModal?.kind === "approver"
-                        ? "Search manager by name, ID, dept..."
-                        : "Search employee by name, ID, dept..."
+                      : "Search employee by name, ID, dept..."
                   }
                   placeholderTextColor="#94a3b8"
                   value={searchModalQuery}
@@ -3922,7 +6067,142 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             )}
 
             <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
-              {activeModal?.kind === "conveyanceMode" ? (
+              {activeModal?.kind === "travelMode" ? (
+                sanitizeTravelModesList(travelModes).map((mode, modeIdx) => {
+                  const targetIdx =
+                    typeof activeModal?.targetEntryIndex === "number"
+                      ? activeModal.targetEntryIndex
+                      : 0;
+                  const currentCode = entries[targetIdx]?.travelModeCode || "";
+                  const isSelected = String(currentCode).toUpperCase() === String(mode.code).toUpperCase();
+                  const activeModeSubs = sanitizeTravelSubtypesList(mode.subtypes);
+                  const activeSubCount = activeModeSubs.length;
+                  const ModeIcon = getTravelModeIconComponent(mode.code || mode.name);
+
+                  return (
+                    <TouchableOpacity
+                      key={`tm_${mode._id || mode.code}_${modeIdx}`}
+                      style={styles.modalItem}
+                      onPress={() => {
+                        handleSelectTravelMode(targetIdx, mode);
+                        setActiveModal(null);
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: 34,
+                          height: 34,
+                          borderRadius: 10,
+                          backgroundColor: isSelected ? "#eef2ff" : "#f1f5f9",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          marginRight: 10,
+                        }}
+                      >
+                        <ModeIcon size={17} color={isSelected ? "#4f46e5" : "#475569"} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.modalItemText,
+                            isSelected && { color: "#4f46e5", fontWeight: "800" },
+                          ]}
+                        >
+                          {mode.name}
+                        </Text>
+                        <Text style={styles.modalItemSubtext}>
+                          {activeSubCount > 0
+                            ? `${activeSubCount} subtype${activeSubCount === 1 ? "" : "s"} (${activeModeSubs.map((s) => s.name).join(", ")})`
+                            : "Standard Travel Mode (No subtype selection required)"}
+                        </Text>
+                      </View>
+                      {isSelected && <CheckCircle2 size={16} color="#4f46e5" style={{ marginLeft: 8 }} />}
+                    </TouchableOpacity>
+                  );
+                })
+              ) : activeModal?.kind === "travelSubtype" ? (
+                (() => {
+                  const targetIdx =
+                    typeof activeModal?.targetEntryIndex === "number"
+                      ? activeModal.targetEntryIndex
+                      : 0;
+                  const currentModeCode = entries[targetIdx]?.travelModeCode || "";
+                  const selectedMode = sanitizeTravelModesList(travelModes).find(
+                    (m) => String(m.code).toUpperCase() === String(currentModeCode).toUpperCase()
+                  );
+                  const subs = sanitizeTravelSubtypesList(selectedMode?.subtypes);
+                  const currentSubCode = entries[targetIdx]?.travelSubtypeCode || "";
+
+                  return subs.map((sub, subIdx) => {
+                    const isSelected = String(currentSubCode).toUpperCase() === String(sub.code).toUpperCase();
+                    const isKm = sub.workflow === "KM_RATE";
+                    const rateKey = resolveSubtypeRateKey(selectedMode, sub);
+                    const rate = Number(
+                      (Number(sub.ratePerKm) > 0 ? sub.ratePerKm : null) ??
+                      (Number(selectedMode?.ratePerKm) > 0 ? selectedMode.ratePerKm : null) ??
+                      conveyanceRates?.[rateKey] ??
+                      0
+                    );
+                    const subEntStatus = sub.entitlement?.status;
+                    const isNotEntitled = sub.entitled === false || subEntStatus === "NOT_ENTITLED";
+                    const maxCap = sub.entitlement?.maxAmount ?? sub.maxAllowed;
+                    const SubIcon = getTravelModeIconComponent(sub.code || sub.name || selectedMode?.code || selectedMode?.name);
+
+                    return (
+                      <TouchableOpacity
+                        key={`ts_${selectedMode?.code || "MODE"}_${sub._id || sub.code}_${subIdx}`}
+                        style={styles.modalItem}
+                        onPress={() => {
+                          handleSelectTravelSubtype(targetIdx, selectedMode, sub);
+                          setActiveModal(null);
+                        }}
+                      >
+                        <View
+                          style={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: 10,
+                            backgroundColor: isSelected ? "#eef2ff" : "#f1f5f9",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            marginRight: 10,
+                          }}
+                        >
+                          <SubIcon size={17} color={isSelected ? "#4f46e5" : "#475569"} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={[
+                              styles.modalItemText,
+                              isSelected && { color: "#4f46e5", fontWeight: "800" },
+                            ]}
+                          >
+                            {sub.name}
+                          </Text>
+                          <Text style={[styles.modalItemSubtext, isNotEntitled && { color: "#dc2626" }]}>
+                            {isKm
+                              ? `Distance (KM) × ₹${rate}/km Rule`
+                              : "Standard Bill & Amount Workflow"}
+                            {isNotEntitled
+                              ? " · Not in your level entitlement (Excess)"
+                              : maxCap !== null && maxCap !== undefined
+                                ? ` · Cap: ₹${maxCap}`
+                                : ""}
+                          </Text>
+                        </View>
+                        {isKm && rate > 0 && (
+                          <View style={[styles.modeRatePill, isSelected && styles.modeRatePillActive, { marginRight: 6 }]}>
+                            <Text style={[styles.modeRatePillText, isSelected && styles.modeRatePillTextActive]}>
+                              ₹{rate}/km
+                            </Text>
+                          </View>
+                        )}
+                        {isSelected && <CheckCircle2 size={16} color="#4f46e5" style={{ marginLeft: 8 }} />}
+                      </TouchableOpacity>
+                    );
+                  });
+                })()
+              ) : activeModal?.kind === "conveyanceMode" ? (
                 CONVEYANCE_MODES.map((mode) => {
                   const Icon = mode.icon;
                   const targetIdx =
@@ -3982,7 +6262,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   );
                 })
               ) : activeModal?.kind === "type" ? (
-                NORMAL_EXPENSE_TYPES.map((t) => {
+                availableNormalExpenseTypes.map((t) => {
                   const Icon = t.icon;
                   const targetIdx = activeModal?.targetEntryIndex;
                   const currentSelectedType = typeof targetIdx === "number"
@@ -4064,169 +6344,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     )}
                   </TouchableOpacity>
                 ))
-              ) : activeModal?.kind === "reportingManager" || activeModal?.kind === "managementApprover" || activeModal?.kind === "approver" ? (
-                (() => {
-                  const isMgmt = activeModal?.kind === "managementApprover" || (activeModal?.kind === "approver" && approvalKind === "FULL_PAYMENT");
-                  const isLoading = isMgmt ? loadingManagementApprovers : loadingReportingManagers;
-                  if (isLoading) {
-                    return (
-                      <View style={{ padding: 28, alignItems: "center" }}>
-                        <ActivityIndicator size="small" color="#4f46e5" />
-                      </View>
-                    );
-                  }
-                  const q = (searchModalQuery || "").trim().toLowerCase();
-
-                  const isCeoUserClient = (u) => {
-                    if (!u) return false;
-                    const r = String(u.role || "").trim().toLowerCase();
-                    const rc = String(u.roleCode || "").trim().toUpperCase();
-                    const d = String(u.designation || "").trim().toLowerCase();
-                    const dept = String(u.department || "").trim().toLowerCase();
-                    const levelName = String(u.levelRef?.name || u.levelName || "").trim().toUpperCase();
-                    const levelCode = String(u.levelRef?.code || "").trim().toUpperCase();
-
-                    if (r === "ceo" || rc === "CEO" || /^CEO\b/i.test(rc)) return true;
-                    if (/(^|\b)ceo(\b|$)|chief\s*executive\s*officer/i.test(d)) return true;
-                    if (levelName === "CEO" || /(^|\b)CEO(\b|$)/.test(levelName)) return true;
-                    if (levelCode === "CEO" || /(^|\b)CEO(\b|$)/.test(levelCode)) return true;
-                    if (/(^|\b)ceo(\b|$)/i.test(dept)) return true;
-                    return false;
-                  };
-
-                  const isDirectorRoleClient = (u) => {
-                    if (!u) return false;
-                    if (isCeoUserClient(u)) return false; // CEO is allowed!
-
-                    const r = String(u.role || "").trim().toLowerCase();
-                    const rc = String(u.roleCode || "").trim().toUpperCase();
-                    const d = String(u.designation || "").trim().toLowerCase();
-                    const dept = String(u.department || "").trim().toLowerCase();
-                    const levelName = String(u.levelRef?.name || u.levelName || "").trim().toUpperCase();
-                    const cat = String(u.levelRef?.category || u.effectiveCategory || "").toUpperCase();
-
-                    if (levelName === "BOD" || /(^|\b)(bod|director|directors)(\b|$)/i.test(levelName)) return true;
-                    if (cat === "DIRECTOR") return true;
-                    if (r === "director" || rc === "DIRECTOR" || /^TC(DR|DI)/i.test(rc)) return true;
-                    if (/^(director|directors|board of directors|bod)$/i.test(dept)) return true;
-                    if (/(director|board of directors|bod)/i.test(d)) return true;
-                    return false;
-                  };
-
-                  const isManagementUserClient = (u) => {
-                    if (!u) return false;
-                    if (isDirectorRoleClient(u)) return false;
-                    if (isCeoUserClient(u)) return true;
-                    const r = String(u.role || "").toLowerCase();
-                    const rc = String(u.roleCode || "").toUpperCase();
-                    const d = String(u.designation || "").toLowerCase();
-                    const dept = String(u.department || "").toLowerCase();
-                    const dt = String(u.departmentAdminType || u.adminType || "").toLowerCase();
-                    const cat = String(u.levelRef?.category || u.effectiveCategory || "").toUpperCase();
-                    if (cat === "MANAGEMENT") return true;
-                    if (["management", "general_manager", "vp", "avp", "ceo"].includes(r)) return true;
-                    if (["MANAGEMENT", "TCMGT", "VP", "AVP", "GM", "CEO"].includes(rc)) return true;
-                    if (/^(TC(MN)|MANAGEMENT|TCMGT|VP|AVP|GM|CEO)/i.test(rc)) return true;
-                    if (dt === "management") return true;
-                    if (/^(management|executive)$/i.test(dept)) return true;
-                    if (/(ceo|vp|vice president|general manager|president|chairman|^management$)/i.test(d)) return true;
-                    return false;
-                  };
-
-                  const isExcludedAdmin = (u) => {
-                    if (!u) return true;
-                    if (isCeoUserClient(u)) return false;
-                    if (isDirectorRoleClient(u)) return true;
-                    const r = String(u.role || "").toLowerCase();
-                    const rc = String(u.roleCode || "").toUpperCase();
-                    const d = String(u.designation || "").toLowerCase();
-                    const dt = String(u.departmentAdminType || u.adminType || "").toLowerCase();
-
-                    // 1. Company Admin / Super Admin
-                    if (["company_admin", "companyadmin", "super_admin", "superadmin"].includes(r)) return true;
-                    if (["TCCA1", "COMPANY_ADMIN", "COMPANYADMIN", "TCSA1", "SUPER_ADMIN", "SUPERADMIN", "APEXCA1"].includes(rc)) return true;
-                    if (/(company\s*admin|super\s*admin|company\s*administrator|super\s*administrator)/i.test(d)) return true;
-
-                    // Generic admin: only exclude if NOT management
-                    if ((r === "admin" || rc === "ADMIN") && !isManagementUserClient(u)) return true;
-
-                    // 2. HR Admin
-                    if (["hr_admin", "hradmin"].includes(r)) return true;
-                    if (["TCHR1", "HR_ADMIN", "HRADMIN", "TCSF2A", "TCSFA"].includes(rc)) return true;
-                    if (["hr"].includes(dt)) return true;
-                    if (/hr\s*admin/i.test(d)) return true;
-
-                    // 3. Accounts / Finance Admin
-                    if (["account_admin", "accounts_admin"].includes(r)) return true;
-                    if (["TCACC1", "TCACC2", "ACCOUNT_ADMIN", "ACCOUNTS_ADMIN"].includes(rc)) return true;
-                    if (["accounts", "account", "finance"].includes(dt)) return true;
-                    if (/accounts?\s*admin|finance\s*admin/i.test(d)) return true;
-
-                    // 4. Store Admin
-                    if (["store_admin", "storeadmin"].includes(r)) return true;
-                    if (["TCSTR1", "TCSTR2", "STORE_ADMIN", "STOREADMIN"].includes(rc)) return true;
-                    if (["store", "warehouse"].includes(dt)) return true;
-                    if (/store\s*admin|warehouse\s*admin/i.test(d)) return true;
-
-                    return false;
-                  };
-                  const selectedEmpIds = employeeSelections.map((s) => String(s.employeeId || ""));
-                  const filerId = String(currentUser?._id || currentUser?.id || "");
-                  const rawList = isMgmt ? managementApproverOptions : reportingManagerOptions;
-                  const list = (rawList || []).filter((a) => {
-                    if (selectedEmpIds.includes(String(a._id))) return false;
-                    if (String(a._id) === filerId) return false;
-                    if (q) {
-                      return (
-                        String(a.name || "").toLowerCase().includes(q) ||
-                        String(a.employeeIdCode || "").toLowerCase().includes(q) ||
-                        String(a.designation || "").toLowerCase().includes(q) ||
-                        String(a.department || "").toLowerCase().includes(q)
-                      );
-                    }
-                    return true;
-                  });
-                  if (list.length === 0) {
-                    return (
-                      <View style={{ padding: 20, alignItems: "center" }}>
-                        <Text style={{ fontSize: 12, color: "#94a3b8", textAlign: "center" }}>
-                          {isMgmt
-                            ? "No Management users found. Please contact HR."
-                            : "No Reporting Managers found. Please contact HR."}
-                        </Text>
-                      </View>
-                    );
-                  }
-                  const currentSelected = isMgmt ? managementApprover : reportingManagerApprover;
-                  return list.map((a) => {
-                    const isSel = currentSelected && String(currentSelected._id) === String(a._id);
-                    return (
-                      <TouchableOpacity
-                        key={a._id}
-                        style={styles.modalItem}
-                        onPress={() => {
-                          if (isMgmt) {
-                            setManagementApprover(a);
-                          } else {
-                            setReportingManagerApprover(a);
-                          }
-                          setPreviewData(null);
-                          setActiveModal(null);
-                        }}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.modalItemText, isSel && { color: "#4f46e5", fontWeight: "800" }]}>{a.name}</Text>
-                          <Text style={styles.modalItemSubtext}>
-                            {a.employeeIdCode ? `${a.employeeIdCode} · ` : ""}
-                            {a.designation || (isMgmt ? "Management" : "Reporting Manager")}
-                            {a.department ? ` · ${a.department}` : ""}
-                          </Text>
-                        </View>
-                        {isSel && <CheckCircle2 size={16} color="#4f46e5" />}
-                      </TouchableOpacity>
-                    );
-                  });
-                })()
               ) : (
                 (() => {
                   if (loadingEmployees && employeesList.length === 0) {
@@ -4366,8 +6483,8 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   selectorText: { fontSize: 13, color: "#0f172a", fontWeight: "600" },
-  inputLabel: { fontSize: 11, fontWeight: "700", color: "#475569", marginBottom: 6 },
-  inputLabelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
+  inputLabel: { fontSize: 11, fontWeight: "700", color: "#475569", marginBottom: 6, flexShrink: 1 },
+  inputLabelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 4, marginBottom: 6 },
   charCounter: { fontSize: 10, color: "#64748b", fontWeight: "600" },
 
   itemCard: {
@@ -4562,6 +6679,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 8,
     backgroundColor: "#ffffff",
     borderRadius: 12,
     padding: 12,
@@ -4668,34 +6787,6 @@ const styles = StyleSheet.create({
   typeCardText: { fontSize: 12, fontWeight: "700", color: "#64748b" },
   typeCardTextSelected: { color: "#4f46e5", fontWeight: "800" },
 
-  // Other Expense Sub-Type Selection (Purchase vs Normal)
-  otherSubTypeContainer: {
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  otherOptionBoxesRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 6,
-  },
-  otherOptionBox: {
-    flex: 1,
-    backgroundColor: "#ffffff",
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1.5,
-    borderColor: "#e2e8f0",
-  },
-  otherOptionBoxActive: {
-    backgroundColor: "#f5f3ff",
-    borderColor: "#6366f1",
-  },
-  otherOptionBoxHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
-  },
   radioCircle: {
     width: 18,
     height: 18,
@@ -4713,20 +6804,6 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: "#6366f1",
-  },
-  otherOptionBoxTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#334155",
-  },
-  otherOptionBoxTitleActive: {
-    color: "#4338ca",
-    fontWeight: "800",
-  },
-  otherOptionBoxSub: {
-    fontSize: 10,
-    color: "#64748b",
-    marginTop: 2,
   },
 
   // Conveyance Mode Styles
@@ -5197,9 +7274,10 @@ const styles = StyleSheet.create({
     borderColor: "#c7d2fe",
   },
   previewBtnText: { fontSize: 13, fontWeight: "800", color: "#4f46e5" },
-  submitRow: { flexDirection: "row", gap: 10 },
+  submitRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   draftBtn: {
     flex: 1,
+    minWidth: 125,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -5207,12 +7285,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#f1f5f9",
     borderRadius: 12,
     paddingVertical: 14,
+    paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: "#cbd5e1",
   },
-  draftBtnText: { fontSize: 13, fontWeight: "800", color: "#334155" },
+  draftBtnText: { fontSize: 13, fontWeight: "800", color: "#334155", flexShrink: 1 },
   submitBtn: {
     flex: 1.5,
+    minWidth: 155,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -5220,8 +7300,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#4f46e5",
     borderRadius: 12,
     paddingVertical: 14,
+    paddingHorizontal: 10,
   },
-  submitBtnText: { fontSize: 14, fontWeight: "800", color: "#ffffff" },
+  submitBtnText: { fontSize: 14, fontWeight: "800", color: "#ffffff", flexShrink: 1 },
 
   missingProofBanner: {
     flexDirection: "row",
@@ -5340,11 +7421,13 @@ const styles = StyleSheet.create({
   },
   visitToggleRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
     marginBottom: 10,
   },
   visitOptionBtn: {
     flex: 1,
+    minWidth: 135,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,

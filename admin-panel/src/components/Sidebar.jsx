@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Smartphone,
   Users,
+  Wallet,
   X
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
@@ -188,6 +189,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Tracking Dashboard', icon: <Activity size={18} />, path: '/tracking-dashboard' },
     { name: 'Customer Visit', icon: <MapPin size={18} />, path: '/visits-dashboard' },
     { name: 'Expense Dashboard', icon: <Receipt size={18} />, path: '/expense-dashboard' },
+    { name: 'Petty Cash Wallet', icon: <Wallet size={18} />, path: '/petty-cash' },
     { name: 'Notifications', icon: <Bell size={18} />, path: '/notifications/dashboard' },
   ];
 
@@ -232,9 +234,9 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports'].includes(item.name));
     }
     if (isAccountAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Expense Dashboard'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Expense Dashboard', 'Petty Cash Wallet'].includes(item.name));
     }
-    return navItems.filter(item => item.name !== 'Expense Dashboard');
+    return navItems.filter(item => item.name !== 'Expense Dashboard' && item.name !== 'Petty Cash Wallet');
   })();
 
   const visibleSettingsItems = (() => {

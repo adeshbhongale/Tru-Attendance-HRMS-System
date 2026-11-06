@@ -1,5 +1,6 @@
 import api from "../../../../api/axios";
 import { Platform } from "react-native";
+import * as FileSystem from "expo-file-system";
 
 /**
  * Expense module API. Mutating calls return `{ success, data, message, errors, status, network }`
@@ -105,7 +106,7 @@ export const expenseApi = {
       let b64 = isImg ? (base64 || (uri && uri.startsWith("data:image") ? uri : null)) : null;
       if (isImg && !b64 && uri && Platform.OS !== "web") {
         try {
-          if (FileSystem && typeof FileSystem.readAsStringAsync === "function") {
+          if (typeof FileSystem !== "undefined" && FileSystem && typeof FileSystem.readAsStringAsync === "function") {
             b64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
           }
         } catch {
@@ -183,6 +184,19 @@ export const expenseApi = {
     }
   },
 
+  /**
+   * Travel modes / subtypes with the logged-in employee's entitlement hints.
+   * -> { data: { modes, employee, travelEntitlementsConfigured } }
+   */
+  getTravelConfig: (destinationCity = "") =>
+    call(() => api.get("/expense/travel-config", { params: { destinationCity } })),
+
+  /**
+   * Remaining shared food entitlement for a lodging date range (informational; server is authoritative).
+   * payload: { fromDate, toDate, employeeIds, destinationCity, claimId? }
+   */
+  getFoodEntitlement: (payload) => call(() => api.post("/expense/claims/food-entitlement", payload)),
+
   /** Server-side validation + calculation without saving (review step). */
   previewClaim: (payload) => call(() => api.post("/expense/claims/preview", payload)),
 
@@ -195,11 +209,39 @@ export const expenseApi = {
 
   submitClaim: (id) => call(() => api.post(`/expense/claims/${id}/submit`)),
 
-  /** Approver picker: kind = FULL_PAYMENT (Management users) | OTHER_EXPENSE (Reporting Managers). */
-  getApprovers: async (kind, search = "") => {
+  /** Approver picker: kind = FULL_PAYMENT | OTHER_EXPENSE (Reporting Managers). */
+  getApprovers: async (kind, search = "", amount = undefined, excludeIds = undefined) => {
     try {
-      const res = await api.get("/expense/approvers", { params: { kind, search } });
-      return res.data?.data || [];
+      const params = { kind, search };
+      if (amount !== undefined && amount !== null && amount !== "") {
+        params.amount = amount;
+      }
+      if (excludeIds !== undefined && excludeIds !== null) {
+        const cleanExclude = Array.isArray(excludeIds)
+          ? excludeIds.filter(Boolean).join(",")
+          : String(excludeIds).trim();
+        if (cleanExclude) {
+          params.excludeIds = cleanExclude;
+        }
+      }
+      const res = await api.get("/expense/approvers", { params });
+      const list = Array.isArray(res.data?.data) ? [...res.data.data] : [];
+      if (res.data?.defaultApprover) {
+        list.defaultApprover = res.data.defaultApprover;
+      }
+      if (Array.isArray(res.data?.approvalLimitRules)) {
+        list.approvalLimitRules = res.data.approvalLimitRules;
+      }
+      if (res.data?.directLimit !== undefined) {
+        list.directLimit = res.data.directLimit;
+      }
+      if (res.data?.matchedRule) {
+        list.matchedRule = res.data.matchedRule;
+      }
+      if (Array.isArray(res.data?.exceededRules)) {
+        list.exceededRules = res.data.exceededRules;
+      }
+      return list;
     } catch {
       return [];
     }
@@ -252,6 +294,15 @@ export const expenseApi = {
       return [];
     }
   },
+
+  /** Petty Cash Wallet (employee portal: always scoped to logged-in employee on server). */
+  getMyPettyCashWallet: () => call(() => api.get("/expense/petty-cash/wallet")),
+  getMyPettyCashTransactions: (params = {}) => call(() => api.get("/expense/petty-cash/transactions", { params })),
+  getMyPettyCashRequests: () => call(() => api.get("/expense/petty-cash/requests")),
+  createPettyCashRequest: (payload) => call(() => api.post("/expense/petty-cash/requests", payload)),
+  getMyPettyCashReturnRequests: () => call(() => api.get("/expense/petty-cash/return-requests")),
+  createPettyCashReturnRequest: (payload) => call(() => api.post("/expense/petty-cash/return-requests", payload)),
+
 };
 
 export default expenseApi;

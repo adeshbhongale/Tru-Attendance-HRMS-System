@@ -10,13 +10,31 @@ const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
 const access = require('../services/expenseAccess');
 const { computePayable, formatINR, approvalKindFor } = require('../services/claimRules');
 const { round2 } = require('../services/calculationEngine');
+const pettyCash = require('../services/pettyCashService');
+
+/**
+ * Conditional claim update + petty cash wallet effect in ONE transaction.
+ * walletFn = pettyCash.creditClaimPayment (Paid) or pettyCash.syncClaimDebit (Rejected / Reopened).
+ * Returns null (and touches no wallet) when the claim was already processed.
+ */
+async function updateWithWallet(query, update, walletFn, req) {
+  return pettyCash.runAtomic(async (session) => {
+    const u = await ExpenseClaim.findOneAndUpdate(query, update, { new: true, session: session || undefined });
+    if (u) {
+      const res = await walletFn(u, { session, req });
+      if (res?.wallet) u._walletBalancePaise = res.wallet.balancePaise;
+    }
+    return u;
+  });
+}
 
 /**
  * Expense claim decisions + reporting.
- * Workflow: DRAFT -> SUBMITTED ("Pending") -> PAID | REJECTED.
- * An authorised user marks a Pending claim Paid or Rejected directly; there is no
- * approval or disbursement stage. Rejected claims can only be reopened (to Pending)
- * by a Company Admin / Super Admin through the audited /reopen endpoint.
+ * Workflow:
+ * - Standard claims: DRAFT -> SUBMITTED -> Step 1 Accounts Approval (ACCOUNTS_APPROVED) -> Step 2 Mark Paid (PAID) | REJECTED.
+ * - Full Payment & Stock Purchase: DRAFT -> Step 1 Reporting Manager (APPROVAL_PENDING) -> Step 2 CFO / Finance Head (FINANCE_APPROVAL_PENDING) -> SUBMITTED -> Accounts Approval -> PAID.
+ * - Other Expense (above direct account limit): DRAFT -> Step 1 Reporting Manager (APPROVAL_PENDING) -> SUBMITTED -> Accounts Approval -> PAID.
+ * Rejected claims can only be reopened by a Company Admin / Super Admin through the audited /reopen endpoint.
  */
 
 const resolveTenantCompanyId = async (req) => access.resolveCompanyId(req, { allowAll: true });
@@ -37,12 +55,23 @@ const POPULATE_QUEUE = [
   { path: 'submittedBy', select: 'name employeeIdCode department designation' },
   { path: 'companyId', select: 'name code' },
   { path: 'managerApproval.approver', select: 'name employeeIdCode department designation role roleCode' },
+  { path: 'financeApproval.approver', select: 'name employeeIdCode department designation role roleCode' },
+  { path: 'accountsApproval.approvedBy', select: 'name employeeIdCode department designation role roleCode' },
   { path: 'fullPayment.decidedBy', select: 'name employeeIdCode department designation' },
+  { path: 'disbursement.recordedBy', select: 'name employeeIdCode department designation' },
+  { path: 'rejection.rejectedBy', select: 'name employeeIdCode department designation' },
 ];
 
 const withPermissions = (req, claim) => {
   const c = claim.toObject ? claim.toObject() : claim;
-  return { ...c, permissions: access.claimPermissions(req, c) };
+  const pc = c.pettyCash || {};
+  const isPaid = access.businessStatus(c) === 'PAID';
+  const pettyCashSummary = {
+    debitedAmount: pettyCash.fromPaise(pc.debitedPaise || 0),
+    creditedAmount: isPaid ? pettyCash.fromPaise(pc.creditedPaise || 0) : 0,
+    ...(claim._walletBalancePaise !== undefined ? { walletBalance: pettyCash.fromPaise(claim._walletBalancePaise) } : {}),
+  };
+  return { ...c, pettyCashSummary, permissions: access.claimPermissions(req, c) };
 };
 
 /**
@@ -52,12 +81,16 @@ exports.pendingQueue = async (req, res) => {
   try {
     if (!isAccounts(req.user) && !isHR(req.user)) return fail(res, 403, 'Accounts, HR or Admin role required.');
     const companyId = await resolveTenantCompanyId(req);
-    const filter = { status: { $in: access.PENDING_STATUSES } };
+    const filter = {
+      status: { $in: access.PENDING_STATUSES },
+      'managerApproval.status': { $nin: ['PENDING', 'REJECTED'] },
+      'financeApproval.status': { $nin: ['PENDING', 'REJECTED'] },
+    };
     if (companyId && companyId !== 'ALL') filter.companyId = companyId;
     const claims = await ExpenseClaim.find(filter).populate(POPULATE_QUEUE).sort({ submittedAt: 1, createdAt: 1 }).lean();
     res.json({ success: true, data: claims.map((c) => withPermissions(req, c)) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -66,18 +99,36 @@ function denyReason(req, perms, action) {
   const bs = perms.businessStatus;
   const isAdm = access.isCompanyAdmin(req.user);
   if (bs === 'PAID') return [409, 'Payment has already been recorded for this claim. Paid claims are locked.'];
+  if (action === 'accounts_approve' && bs === 'REJECTED') return [409, 'Rejected claims cannot be approved. Reopen the claim first.'];
   if (action === 'pay' && bs === 'REJECTED') return [409, 'Rejected claims cannot be marked Paid. Reopen the claim first.'];
   if (action === 'reject' && bs === 'REJECTED') return [409, 'This claim has already been rejected.'];
   if (action === 'reopen' && bs !== 'REJECTED') return [409, 'Only rejected claims can be reopened.'];
   if (bs === 'DRAFT') return [409, 'Draft claims must be submitted first.'];
-  if ((action === 'pay' || action === 'reject') && perms.awaitingApproval && !isAdm) {
+  if ((action === 'accounts_approve' || action === 'pay' || action === 'reject') && perms.awaitingApproval && !isAdm) {
     return [409, 'This claim is still waiting for approval from the selected Management user / Reporting Manager.'];
   }
-  const roleOk = { pay: isAccounts(req.user), reject: isAccounts(req.user) || isHR(req.user), reopen: access.isCompanyAdmin(req.user) }[action];
+  if (action === 'accounts_approve' && perms.isAccountsApproved) {
+    return [409, 'This claim has already been approved by Accounts and is awaiting payment.'];
+  }
+  if (action === 'pay' && !perms.isAccountsApproved) {
+    return [409, 'Claim must be approved by Accounts Admin first before recording payment.'];
+  }
+  if (action === 'reject' && perms.isAccountsApproved && !access.isSuperAdmin(req.user)) {
+    return [403, 'Only Super Admin can reject a claim after it has been approved by Accounts.'];
+  }
+  const roleOk = {
+    accounts_approve: isAccounts(req.user),
+    pay: isAccounts(req.user),
+    reject: perms.isAccountsApproved ? access.isSuperAdmin(req.user) : (isAccounts(req.user) || isHR(req.user)),
+    reopen: access.isCompanyAdmin(req.user),
+  }[action];
   if (!roleOk) {
     return [403, {
+      accounts_approve: 'Only Accounts, Company Admin or Super Admin can approve claims.',
       pay: 'Only Accounts, Company Admin or Super Admin can mark claims as Paid.',
-      reject: 'Only Accounts, HR, Company Admin or Super Admin can reject claims.',
+      reject: perms.isAccountsApproved
+        ? 'Only Super Admin can reject a claim after it has been approved by Accounts.'
+        : 'Only Accounts, HR, Company Admin or Super Admin can reject claims.',
       reopen: 'Only Company Admin or Super Admin can reopen rejected claims.',
     }[action]];
   }
@@ -94,7 +145,121 @@ function parsePaymentDate(value, now = new Date()) {
 }
 
 /**
- * POST /api/expense/claims/:id/payment — Mark as Paid.
+ * POST /api/expense/claims/:id/accounts-approve — Step 1 of Accounts Admin workflow:
+ * Accounts Admin approves the claim -> status becomes ACCOUNTS_APPROVED (Awaiting Payment).
+ * Body: { remarks? }
+ */
+exports.accountsApproveClaim = async (req, res) => {
+  try {
+    const claim = await loadClaim(req, res);
+    if (!claim) return;
+    const perms = access.claimPermissions(req, claim);
+    if (!perms.canAccountsApprove) {
+      const [code, msg] = denyReason(req, perms, 'accounts_approve');
+      return fail(res, code, msg);
+    }
+
+    const body = req.body || {};
+    const remarks = str(body.remarks || body.reason || body.adminNote, 500);
+    if (!remarks) return fail(res, 422, 'Approval remark is required.');
+    const now = new Date();
+    const before = access.snapshot(claim);
+    const approvedByName = req.user.name || '';
+    const isApprovalPending = claim.status === 'APPROVAL_PENDING';
+
+    const payable = round2(
+      claim.payableAmount > 0
+        ? claim.payableAmount
+        : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0)
+    );
+
+    const updateSet = {
+      status: 'ACCOUNTS_APPROVED',
+      approvalStatus: 'APPROVED',
+      paymentStatus: 'AWAITING_DISBURSEMENT',
+      accountsRemarks: remarks,
+      accountsApproval: {
+        status: 'APPROVED',
+        approvedBy: req.user._id,
+        approvedByName,
+        approvedAt: now,
+        remarks,
+      },
+    };
+
+    if (isApprovalPending) {
+      updateSet['managerApproval.status'] = 'APPROVED';
+      updateSet['managerApproval.decidedAt'] = now;
+      updateSet['managerApproval.decidedBy'] = req.user._id;
+      updateSet['managerApproval.remarks'] = remarks || 'Approved by Admin';
+      if (claim.financeApproval?.status === 'PENDING') {
+        updateSet['financeApproval.status'] = 'APPROVED';
+        updateSet['financeApproval.decidedAt'] = now;
+        updateSet['financeApproval.remarks'] = remarks || 'Approved by Admin';
+        delete updateSet['managerApproval.status'];
+        delete updateSet['managerApproval.decidedAt'];
+        delete updateSet['managerApproval.decidedBy'];
+        delete updateSet['managerApproval.remarks'];
+      }
+      if (claim.fullPayment?.requested) {
+        const fullPayable = round2(claim.grandRequested || payable);
+        updateSet['fullPayment.status'] = 'APPROVED';
+        updateSet['fullPayment.approvedAmount'] = fullPayable;
+        updateSet['fullPayment.decidedBy'] = req.user._id;
+        updateSet['fullPayment.decidedByName'] = approvedByName;
+        updateSet['fullPayment.decidedAt'] = now;
+        updateSet['fullPayment.decisionRemarks'] = remarks || 'Approved by Admin';
+        updateSet.payableAmount = fullPayable;
+      }
+    }
+
+    const preApproveStatuses = access.PENDING_STATUSES.filter((s) => s !== 'ACCOUNTS_APPROVED');
+    const updated = await ExpenseClaim.findOneAndUpdate(
+      {
+        _id: claim._id,
+        status: { $in: [...preApproveStatuses, 'PENDING', 'APPROVAL_PENDING'] },
+        paymentStatus: { $nin: ['PAID', 'DISBURSED', 'AWAITING_DISBURSEMENT'] },
+      },
+      {
+        $set: updateSet,
+        $push: {
+          approvalHistory: {
+            user: req.user._id,
+            role: req.user.role,
+            action: 'accounts_approved',
+            timestamp: now,
+            remarks: remarks || `Approved by Accounts (${formatINR(updateSet.payableAmount || payable)}). Awaiting payment.`,
+          },
+          timeline: {
+            action: 'ACCOUNTS_APPROVED',
+            description: `Claim approved by ${approvedByName || 'Accounts Admin'}. Awaiting payment disbursement.${remarks ? ` Remarks: ${remarks}` : ''}`,
+            user: req.user._id,
+            timestamp: now,
+          },
+        },
+      },
+      { new: true }
+    );
+    if (!updated) return fail(res, 409, 'This claim was already processed by someone else.');
+
+    await access.audit({
+      req,
+      action: 'ACCOUNTS_CLAIM_APPROVED',
+      claim: updated,
+      description: `Claim ${updated.claimNumber} approved by Accounts (${formatINR(updated.payableAmount || payable)}). Awaiting payment.`,
+      before,
+      after: access.snapshot(updated),
+      metadata: { payableAmount: updated.payableAmount || payable, remarks },
+    });
+
+    res.json({ success: true, data: withPermissions(req, updated) });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /api/expense/claims/:id/payment — Step 2 of Accounts Admin workflow: Mark as Paid (requires ACCOUNTS_APPROVED).
  * Body: { paymentDate?, paidAmount?, paymentMethod?, paymentReference?, remarks? }
  */
 exports.markPaid = async (req, res) => {
@@ -105,7 +270,9 @@ exports.markPaid = async (req, res) => {
     if (!perms.canMarkPaid) { const [code, msg] = denyReason(req, perms, 'pay'); return fail(res, code, msg); }
 
     const body = req.body || {};
-    const paymentDate = parsePaymentDate(body.paymentDate) || new Date();
+    if (!body.paymentDate) return fail(res, 422, 'Please select the payment date.');
+    const paymentDate = parsePaymentDate(body.paymentDate);
+    if (!paymentDate) return fail(res, 422, 'Please select a valid payment date (cannot be in the future).');
 
     const payable = round2(claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0));
     let paidAmount = payable > 0 ? payable : round2(claim.grandRequested || claim.grandAllowed || 0);
@@ -125,6 +292,31 @@ exports.markPaid = async (req, res) => {
     const paymentMethod = str(body.paymentMethod || 'Bank Transfer', 60);
     const reference = str(body.paymentReference || body.utr, 100);
     const remarks = str(body.remarks || body.paymentRemarks || body.reason || body.adminNote, 500);
+    if (!remarks) return fail(res, 422, 'Payment remark is required.');
+
+    const rawProofs = Array.isArray(body.paymentProofs)
+      ? body.paymentProofs
+      : (body.paymentProof
+        ? [body.paymentProof]
+        : (body.paymentProofUrl
+          ? [{ url: body.paymentProofUrl, name: body.paymentProofName || 'Payment Confirmation Proof', type: body.paymentProofType || '' }]
+          : []));
+    const paymentProofs = rawProofs
+      .filter((p) => p && (typeof p === 'string' ? p.trim() : (p.url || p.uri)))
+      .map((p) => {
+        if (typeof p === 'string') {
+          return { name: 'Payment Confirmation Proof', url: p.trim(), type: '', size: 0 };
+        }
+        return {
+          name: str(p.name || 'Payment Confirmation Proof', 200),
+          url: str(p.url || p.uri, 1000),
+          publicId: str(p.publicId, 200),
+          type: str(p.type, 100),
+          size: Number(p.size) || 0,
+        };
+      });
+    if (paymentProofs.length === 0) return fail(res, 422, 'Payment confirmation proof is required.');
+
     const now = new Date();
     const before = access.snapshot(claim);
     const recordedByName = req.user.name || '';
@@ -139,6 +331,7 @@ exports.markPaid = async (req, res) => {
       paymentMethod,
       utr: reference,
       accountsRemarks: remarks,
+      paymentProofs,
       lockedAt: now,
       disbursement: {
         amount: paidAmount,
@@ -148,6 +341,8 @@ exports.markPaid = async (req, res) => {
         recordedBy: req.user._id,
         recordedByName,
         remarks,
+        paymentProof: paymentProofs[0] || null,
+        paymentProofs,
       },
     };
     if (isApprovalPending) {
@@ -155,6 +350,17 @@ exports.markPaid = async (req, res) => {
       updateSet['managerApproval.decidedAt'] = now;
       updateSet['managerApproval.decidedBy'] = req.user._id;
       updateSet['managerApproval.remarks'] = remarks || 'Approved & paid by Admin';
+      if (claim.financeApproval?.status === 'PENDING') {
+        // Admin override also closes a pending 2nd approval (CFO / Finance Head)
+        updateSet['financeApproval.status'] = 'APPROVED';
+        updateSet['financeApproval.decidedAt'] = now;
+        updateSet['financeApproval.remarks'] = remarks || 'Approved & paid by Admin';
+        // keep the Reporting Manager's own decision
+        delete updateSet['managerApproval.status'];
+        delete updateSet['managerApproval.decidedAt'];
+        delete updateSet['managerApproval.decidedBy'];
+        delete updateSet['managerApproval.remarks'];
+      }
       if (claim.fullPayment?.requested) {
         updateSet['fullPayment.status'] = 'APPROVED';
         updateSet['fullPayment.approvedAmount'] = paidAmount;
@@ -165,9 +371,16 @@ exports.markPaid = async (req, res) => {
       }
     }
 
-    // Atomic: only a still-Pending, not-yet-paid claim can be updated -> no duplicate payments.
-    const updated = await ExpenseClaim.findOneAndUpdate(
-      { _id: claim._id, status: { $in: [...access.PENDING_STATUSES, 'PENDING', 'APPROVAL_PENDING'] }, paymentStatus: { $nin: ['PAID', 'DISBURSED'] } },
+    // Atomic: only an Accounts-Approved, not-yet-paid claim can be updated -> no duplicate or unapproved payments.
+    const updated = await updateWithWallet(
+      {
+        _id: claim._id,
+        $or: [
+          { status: 'ACCOUNTS_APPROVED' },
+          { paymentStatus: 'AWAITING_DISBURSEMENT' },
+        ],
+        paymentStatus: { $nin: ['PAID', 'DISBURSED'] },
+      },
       {
         $set: updateSet,
         $push: {
@@ -180,7 +393,8 @@ exports.markPaid = async (req, res) => {
           },
         },
       },
-      { new: true }
+      pettyCash.creditClaimPayment,
+      req
     );
     if (!updated) return fail(res, 409, 'This claim was already processed by someone else.');
 
@@ -204,7 +418,7 @@ exports.markPaid = async (req, res) => {
     }
     res.json({ success: true, data: withPermissions(req, updated) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -236,14 +450,29 @@ exports.rejectClaim = async (req, res) => {
 
     const updateSet = {
       status: 'REJECTED',
+      approvalStatus: 'REJECTED',
       paymentStatus: 'REJECTED',
       accountsRemarks: reason,
       rejection: { reason, rejectedAt: now, rejectedBy: req.user._id, rejectedByName },
+      accountsApproval: {
+        status: 'REJECTED',
+        approvedBy: req.user._id,
+        approvedByName: rejectedByName,
+        approvedAt: now,
+        remarks: reason,
+      },
     };
     if (isApprovalPending) {
-      updateSet['managerApproval.status'] = 'REJECTED';
-      updateSet['managerApproval.decidedAt'] = now;
-      updateSet['managerApproval.remarks'] = reason;
+      if (claim.financeApproval?.status === 'PENDING') {
+        // Rejected while waiting for the 2nd approval (CFO / Finance Head)
+        updateSet['financeApproval.status'] = 'REJECTED';
+        updateSet['financeApproval.decidedAt'] = now;
+        updateSet['financeApproval.remarks'] = reason;
+      } else {
+        updateSet['managerApproval.status'] = 'REJECTED';
+        updateSet['managerApproval.decidedAt'] = now;
+        updateSet['managerApproval.remarks'] = reason;
+      }
       if (claim.fullPayment?.requested) {
         updateSet['fullPayment.status'] = 'REJECTED';
         updateSet['fullPayment.decidedBy'] = req.user._id;
@@ -253,7 +482,7 @@ exports.rejectClaim = async (req, res) => {
       }
     }
 
-    const updated = await ExpenseClaim.findOneAndUpdate(
+    const updated = await updateWithWallet(
       { _id: claim._id, status: { $in: [...access.PENDING_STATUSES, 'PENDING', 'APPROVAL_PENDING'] }, paymentStatus: { $nin: ['PAID', 'DISBURSED'] } },
       {
         $set: updateSet,
@@ -262,7 +491,8 @@ exports.rejectClaim = async (req, res) => {
           timeline: { action: 'REJECTED', description: `Rejected by ${rejectedByName || 'admin'}: ${reason}`, user: req.user._id, timestamp: now },
         },
       },
-      { new: true }
+      pettyCash.syncClaimDebit,
+      req
     );
     if (!updated) return fail(res, 409, 'This claim was already processed by someone else.');
 
@@ -277,7 +507,7 @@ exports.rejectClaim = async (req, res) => {
     });
     res.json({ success: true, data: withPermissions(req, updated) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -299,8 +529,10 @@ exports.reopenClaim = async (req, res) => {
     const needsApproval = kind !== 'NONE' && !!claim.managerApproval?.approver;
     const set = {
       status: needsApproval ? 'APPROVAL_PENDING' : 'SUBMITTED',
+      approvalStatus: 'PENDING',
       paymentStatus: 'PENDING',
       rejection: { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' },
+      accountsApproval: { status: 'PENDING', approvedBy: null, approvedByName: '', approvedAt: null, remarks: '' },
     };
     if (needsApproval) {
       Object.assign(set, {
@@ -309,12 +541,14 @@ exports.reopenClaim = async (req, res) => {
         'managerApproval.requestedAt': now,
         'managerApproval.decidedAt': null,
         'managerApproval.remarks': '',
+        // 2nd approval (CFO / Finance Head) is requested again after the Reporting Manager approves
+        financeApproval: { approver: null, approverName: '', status: 'NOT_REQUIRED', requestedAt: null, decidedAt: null, remarks: '' },
       });
       if (claim.fullPayment?.requested) {
         Object.assign(set, { 'fullPayment.status': 'PENDING', 'fullPayment.approvedAmount': 0, payableAmount: round2(claim.grandAllowed || 0) });
       }
     }
-    const updated = await ExpenseClaim.findOneAndUpdate(
+    const updated = await updateWithWallet(
       { _id: claim._id, status: { $in: access.REJECTED_STATUSES } },
       {
         $set: set,
@@ -329,7 +563,8 @@ exports.reopenClaim = async (req, res) => {
           },
         },
       },
-      { new: true }
+      pettyCash.syncClaimDebit,
+      req
     );
     if (!updated) return fail(res, 409, 'This claim was already processed by someone else.');
 
@@ -344,7 +579,7 @@ exports.reopenClaim = async (req, res) => {
     });
     res.json({ success: true, data: withPermissions(req, updated) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -372,7 +607,7 @@ exports.auditLogs = async (req, res) => {
       .lean();
     res.json({ success: true, data: logs });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -535,7 +770,7 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -557,8 +792,47 @@ function buildReportFilter(q = {}, { scopeConditions = [], userIds = {} } = {}) 
   const status = String(q.status || '').toUpperCase();
   if (status === 'PENDING') {
     and.push({ status: { $in: access.PENDING_STATUSES } });
+  } else if (status === 'PENDING_APPROVAL' || status === 'SUBMITTED') {
+    and.push({ status: { $in: access.ACCOUNTS_APPROVAL_PENDING_STATUSES } });
+  } else if (status === 'APPROVED' || status === 'ACCOUNTS_APPROVED') {
+    and.push({ status: { $in: access.ACCOUNTS_APPROVED_STATUSES } });
   } else if (['PAID', 'REJECTED'].includes(status)) {
     and.push({ status: { $in: access.STATUS_LISTS[status] } });
+  } else if (status === 'FULL_PAYMENT') {
+    and.push({
+      $or: [{ 'fullPayment.requested': true }, { fullPaymentRequested: true }],
+    });
+  }
+
+  if (isSet(q.visitType)) {
+    const vt = String(q.visitType).trim().toUpperCase();
+    if (vt === 'VISIT') {
+      and.push({
+        claimMode: { $ne: 'LODGING' },
+        claimType: { $nin: ['LODGING', 'LODGING_EXPENSE'] },
+        $or: [
+          { isVisit: true },
+          { visitType: 'VISIT' },
+          { 'entries.isVisit': true },
+          { 'entries.visitType': 'VISIT' },
+          { 'employeeClaims.items.isVisit': true },
+          { 'employeeClaims.items.visitType': 'VISIT' },
+          { 'serviceReports.0': { $exists: true } },
+        ],
+      });
+    } else if (vt === 'NO_VISIT') {
+      and.push({
+        claimMode: { $ne: 'LODGING' },
+        claimType: { $nin: ['LODGING', 'LODGING_EXPENSE'] },
+        isVisit: { $ne: true },
+        visitType: { $ne: 'VISIT' },
+        'entries.isVisit': { $ne: true },
+        'entries.visitType': { $ne: 'VISIT' },
+        'employeeClaims.items.isVisit': { $ne: true },
+        'employeeClaims.items.visitType': { $ne: 'VISIT' },
+        'serviceReports.0': { $exists: false },
+      });
+    }
   }
 
   // Reports do not show tagged claims for tagged employees: filter strictly by submitter
@@ -577,7 +851,16 @@ function buildReportFilter(q = {}, { scopeConditions = [], userIds = {} } = {}) 
       });
     }
   }
-  if (isSet(q.city)) and.push({ 'trip.destination': { $regex: escapeRegex(String(q.city).trim()), $options: 'i' } });
+  if (isSet(q.city)) {
+    const cityRx = { $regex: escapeRegex(String(q.city).trim()), $options: 'i' };
+    and.push({
+      $or: [
+        { 'trip.destination': cityRx },
+        { destinationCity: cityRx },
+        { city: cityRx },
+      ],
+    });
+  }
   if (isSet(q.department)) {
     const dept = { $regex: `^${escapeRegex(String(q.department).trim())}$`, $options: 'i' };
     and.push({ $or: [{ 'employeeClaims.employee.department': dept }, { submittedBy: { $in: userIds.department || [] } }] });
@@ -586,7 +869,91 @@ function buildReportFilter(q = {}, { scopeConditions = [], userIds = {} } = {}) 
   if (isSet(q.workLocation)) and.push(anyEmployeeIn(userIds.workLocation || []));
   if (isSet(q.expenseType)) {
     const t = String(q.expenseType).trim().toUpperCase();
-    and.push({ $or: [{ claimType: t }, { 'employeeClaims.items.expenseType': t }, { 'entries.expenseType': t }] });
+    if (t === 'COMBINE' || t === 'COMBINED') {
+      and.push({
+        $or: [
+          { claimType: { $in: ['COMBINE', 'COMBINED'] } },
+          { 'entries.1': { $exists: true } },
+          { 'employeeClaims.0.items.1': { $exists: true } },
+          { claimMode: 'LODGING', includeFood: true },
+          { claimMode: 'LODGING', 'foodEntries.0': { $exists: true } },
+        ],
+      });
+    } else if (t === 'LODGING') {
+      and.push({
+        'entries.1': { $exists: false },
+        'employeeClaims.0.items.1': { $exists: false },
+        includeFood: { $ne: true },
+        $or: [
+          { claimMode: 'LODGING' },
+          { claimType: 'LODGING' },
+          { claimType: 'LODGING_EXPENSE' },
+          { 'entries.expenseType': { $in: ['LODGING', 'LODGING_EXPENSE'] } },
+          { 'employeeClaims.items.expenseType': { $in: ['LODGING', 'LODGING_EXPENSE'] } },
+        ],
+      });
+    } else if (t === 'FOOD') {
+      and.push({
+        'entries.1': { $exists: false },
+        'employeeClaims.0.items.1': { $exists: false },
+        includeFood: { $ne: true },
+        $or: [
+          { claimType: 'FOOD' },
+          { claimType: 'FOOD_DA' },
+          { 'entries.expenseType': { $in: ['FOOD', 'FOOD_DA'] } },
+          { 'employeeClaims.items.expenseType': { $in: ['FOOD', 'FOOD_DA'] } },
+        ],
+      });
+    } else if (t === 'CONVEYANCE' || t === 'LOCAL_CONVEYANCE' || t === 'LOCAL') {
+      and.push({
+        'entries.1': { $exists: false },
+        'employeeClaims.0.items.1': { $exists: false },
+        includeFood: { $ne: true },
+        $or: [
+          { claimType: t },
+          { claimType: { $in: ['CONVEYANCE', 'LOCAL_CONVEYANCE', 'LOCAL_TRAVEL'] } },
+          { 'entries.expenseType': { $in: ['CONVEYANCE', 'LOCAL_CONVEYANCE', 'LOCAL_TRAVEL'] } },
+          { 'employeeClaims.items.expenseType': { $in: ['CONVEYANCE', 'LOCAL_CONVEYANCE', 'LOCAL_TRAVEL'] } },
+        ],
+      });
+    } else if (t === 'STOCK_PURCHASE') {
+      and.push({
+        'entries.1': { $exists: false },
+        'employeeClaims.0.items.1': { $exists: false },
+        includeFood: { $ne: true },
+        $or: [
+          { claimType: 'STOCK_PURCHASE' },
+          { 'entries.expenseType': 'STOCK_PURCHASE' },
+          { 'employeeClaims.items.expenseType': 'STOCK_PURCHASE' },
+          { otherSubType: { $in: ['PURCHASE', 'STOCK_PURCHASE'] } },
+          { 'entries.otherSubType': { $in: ['PURCHASE', 'STOCK_PURCHASE'] } },
+          { 'employeeClaims.items.otherSubType': { $in: ['PURCHASE', 'STOCK_PURCHASE'] } },
+        ],
+      });
+    } else if (t === 'OTHER') {
+      and.push({
+        'entries.1': { $exists: false },
+        'employeeClaims.0.items.1': { $exists: false },
+        includeFood: { $ne: true },
+        claimType: { $ne: 'STOCK_PURCHASE' },
+        otherSubType: { $nin: ['PURCHASE', 'STOCK_PURCHASE'] },
+        'entries.otherSubType': { $nin: ['PURCHASE', 'STOCK_PURCHASE'] },
+        'employeeClaims.items.otherSubType': { $nin: ['PURCHASE', 'STOCK_PURCHASE'] },
+        $or: [
+          { claimType: 'OTHER' },
+          { claimType: 'OTHER_EXPENSE' },
+          { 'entries.expenseType': { $in: ['OTHER', 'OTHER_EXPENSE'] } },
+          { 'employeeClaims.items.expenseType': { $in: ['OTHER', 'OTHER_EXPENSE'] } },
+        ],
+      });
+    } else {
+      and.push({
+        'entries.1': { $exists: false },
+        'employeeClaims.0.items.1': { $exists: false },
+        includeFood: { $ne: true },
+        $or: [{ claimType: t }, { 'employeeClaims.items.expenseType': t }, { 'entries.expenseType': t }],
+      });
+    }
   }
 
   const submitted = timeRange(q.submittedFrom, q.submittedTo);
@@ -672,7 +1039,11 @@ const REPORT_POPULATE = [
   { path: 'disbursedBy', select: 'name' },
   { path: 'companyId', select: 'name code' },
   { path: 'managerApproval.approver', select: 'name employeeIdCode department designation role roleCode' },
+  { path: 'financeApproval.approver', select: 'name employeeIdCode department designation role roleCode' },
+  { path: 'accountsApproval.approvedBy', select: 'name employeeIdCode department designation role roleCode' },
   { path: 'fullPayment.decidedBy', select: 'name employeeIdCode department designation' },
+  { path: 'disbursement.recordedBy', select: 'name employeeIdCode department designation' },
+  { path: 'rejection.rejectedBy', select: 'name employeeIdCode department designation' },
 ];
 
 const SORT_FIELDS = {
@@ -752,6 +1123,68 @@ function computeCategoryBreakdown(claim) {
   return breakdown;
 }
 
+/**
+ * Resolves single entry claim type vs "Combine" when a claim holds multiple claim type entries.
+ */
+function resolveClaimTypeInfo(c) {
+  if (!c) return { code: '', label: '' };
+  const rawEntries = Array.isArray(c.entries) ? c.entries : [];
+  const firstEcItems = Array.isArray(c.employeeClaims?.[0]?.items) ? c.employeeClaims[0].items : [];
+  const cMode = String(c.claimMode || '').toUpperCase().trim();
+  const hasLodgingWithFood = cMode === 'LODGING' && Boolean(c.includeFood || (Array.isArray(c.foodEntries) && c.foodEntries.length > 0));
+  const rawClaimType = String(c.claimType || c.expenseType || '').toUpperCase().trim();
+
+  if (
+    rawEntries.length > 1 ||
+    firstEcItems.length > 1 ||
+    hasLodgingWithFood ||
+    rawClaimType === 'COMBINE' ||
+    rawClaimType === 'COMBINED'
+  ) {
+    return { code: 'COMBINE', label: 'Combine' };
+  }
+
+  const singleEntry = rawEntries[0] || firstEcItems[0] || {};
+  const rawType = String(
+    singleEntry.expenseType ||
+    singleEntry.claimType ||
+    singleEntry.type ||
+    rawClaimType ||
+    (cMode === 'LODGING' ? 'LODGING' : '')
+  ).toUpperCase().trim();
+  const rawSub = String(
+    singleEntry.otherSubType ||
+    singleEntry.subType ||
+    c.otherSubType ||
+    ''
+  ).toUpperCase().trim();
+
+  if (!rawType) return { code: '', label: '' };
+
+  if (
+    rawType === 'STOCK_PURCHASE' ||
+    ((rawType === 'OTHER' || rawType === 'OTHER_EXPENSE') && (rawSub === 'PURCHASE' || rawSub === 'STOCK_PURCHASE'))
+  ) {
+    return { code: 'STOCK_PURCHASE', label: 'Stock Purchase' };
+  }
+  if (rawType === 'LODGING' || rawType === 'LODGING_EXPENSE' || cMode === 'LODGING') {
+    return { code: 'LODGING', label: 'Lodging' };
+  }
+  if (rawType === 'FOOD' || rawType === 'FOOD_DA' || rawType === 'FOOD_EXPENSE') {
+    return { code: 'FOOD', label: 'Food' };
+  }
+  if (rawType === 'TRAVEL' || rawType === 'TRAVEL_EXPENSE') {
+    return { code: 'TRAVEL', label: 'Travel' };
+  }
+  if (rawType === 'CONVEYANCE' || rawType === 'LOCAL_CONVEYANCE' || rawType === 'LOCAL_TRAVEL' || rawType === 'LOCAL') {
+    return { code: 'CONVEYANCE', label: 'Local Conveyance' };
+  }
+  if (rawType === 'OTHER' || rawType === 'OTHER_EXPENSE') {
+    return { code: 'OTHER', label: 'Other Expense' };
+  }
+  return { code: rawType, label: rawType };
+}
+
 /** Flat report row (only Pending / Paid / Rejected labels). */
 function normalizeClaimForReport(c) {
   const bs = access.businessStatus(c);
@@ -762,12 +1195,27 @@ function normalizeClaimForReport(c) {
   const excess = c.grandExcess !== undefined && c.grandExcess !== null ? c.grandExcess : Math.max(0, claimed - allowed);
   const payable = c.payableAmount || computePayable(c) || allowed;
   const breakdown = computeCategoryBreakdown(c);
+  const resolvedType = resolveClaimTypeInfo(c);
   const lastRejection = [...(c.approvalHistory || [])].reverse().find((h) => h.action === 'rejected');
+  const isAccApproved = c.status === 'ACCOUNTS_APPROVED' || c.accountsApproval?.status === 'APPROVED';
+  const isVisitClaim = Boolean(
+    c.isVisit ||
+    c.visitType === 'VISIT' ||
+    (Array.isArray(c.entries) && c.entries.some((e) => e?.isVisit || e?.visitType === 'VISIT')) ||
+    (Array.isArray(c.employeeClaims) && c.employeeClaims.some((ec) => Array.isArray(ec?.items) && ec.items.some((it) => it?.isVisit || it?.visitType === 'VISIT')))
+  );
   return {
     _id: c._id,
     claimNumber: c.claimNumber,
     status: bs,
     statusLabel: STATUS_LABEL[bs],
+    rawStatus: c.status || '',
+    isAccountsApproved: isAccApproved,
+    displayStatus: isAccApproved && bs === 'PENDING' ? 'ACCOUNTS_APPROVED' : bs,
+    displayStatusLabel: isAccApproved && bs === 'PENDING' ? 'Approved (Payment Pending)' : STATUS_LABEL[bs],
+    managerApprovalStatus: c.managerApproval?.status || '',
+    financeApprovalStatus: c.financeApproval?.status || '',
+    visitType: isVisitClaim ? 'VISIT' : 'NO_VISIT',
     employeeId: submitter._id || c.submittedBy,
     employeeName: submitter.name || c.submittedByName || firstEmp.name || 'Employee',
     employeeCode: submitter.employeeIdCode || firstEmp.employeeIdCode || '',
@@ -777,7 +1225,8 @@ function normalizeClaimForReport(c) {
     workLocation: submitter.workingPlace?.name || '',
     customerName: c.trip?.customerName || '',
     purpose: c.trip?.purpose || '',
-    expenseType: c.claimType || '',
+    expenseType: resolvedType.label,
+    expenseTypeCode: resolvedType.code,
     claimMode: c.claimMode,
     expenseDate: c.claimDate || c.fromDate || null,
     fromDate: c.fromDate || null,
@@ -792,9 +1241,20 @@ function normalizeClaimForReport(c) {
     paymentMethod: bs === 'PAID' ? (c.disbursement?.paymentMethod || c.paymentMethod || '') : '',
     paymentReference: bs === 'PAID' ? (c.disbursement?.paymentReference || c.utr || '') : '',
     paidByName: bs === 'PAID' ? (c.disbursement?.recordedByName || c.disbursedBy?.name || '') : '',
+    paymentRemarks: bs === 'PAID' ? (c.disbursement?.remarks || c.accountsRemarks || '') : '',
+    paymentProofs: c.paymentProofs?.length ? c.paymentProofs : (c.disbursement?.paymentProofs || (c.disbursement?.paymentProof ? [c.disbursement.paymentProof] : [])),
+    accountsApprovedByName: c.accountsApproval?.approvedByName || c.accountsApproval?.approvedBy?.name || '',
+    accountsApprovedAt: c.accountsApproval?.approvedAt || null,
+    accountsApprovalRemarks: c.accountsApproval?.remarks || '',
     rejectionReason: bs === 'REJECTED' ? (c.rejection?.reason || lastRejection?.remarks || c.accountsRemarks || c.hrRemarks || '') : '',
     rejectedAt: bs === 'REJECTED' ? (c.rejection?.rejectedAt || lastRejection?.timestamp || null) : null,
-    rejectedByName: bs === 'REJECTED' ? (c.rejection?.rejectedByName || '') : '',
+    rejectedByName: bs === 'REJECTED' ? (c.rejection?.rejectedByName || c.rejection?.rejectedBy?.name || '') : '',
+    managerApproval: c.managerApproval || null,
+    financeApproval: c.financeApproval || null,
+    accountsApproval: c.accountsApproval || null,
+    disbursement: c.disbursement || null,
+    rejection: c.rejection || null,
+    fullPayment: c.fullPayment || null,
     isFullPayment: !!c.fullPayment?.requested,
     employeeCount: c.employeeCount || c.employeeClaims?.length || 1,
     companyName: c.companyId?.name || '',
@@ -805,6 +1265,12 @@ function normalizeClaimForReport(c) {
     local: breakdown.local,
     other: breakdown.other,
     breakdown,
+    lodgingNights: c.lodgingNights ?? c.numberOfNights ?? null,
+    foodDays: c.foodDays ?? null,
+    includeFood: !!c.includeFood,
+    stayType: c.stayType || '',
+    lodgingSummary: c.lodgingSummary || null,
+    foodSummary: c.foodSummary || null,
   };
 }
 
@@ -836,7 +1302,7 @@ exports.getExpenseReports = async (req, res) => {
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -852,6 +1318,8 @@ async function summarize(filter) {
         totalClaims: { $sum: 1 },
         totalClaimedAmount: { $sum: { $ifNull: ['$grandRequested', 0] } },
         pendingClaims: { $sum: { $cond: [inList(PENDING_ALL), 1, 0] } },
+        pendingApprovalClaims: { $sum: { $cond: [inList(access.ACCOUNTS_APPROVAL_PENDING_STATUSES), 1, 0] } },
+        approvedClaims: { $sum: { $cond: [inList(access.ACCOUNTS_APPROVED_STATUSES), 1, 0] } },
         paidClaims: { $sum: { $cond: [inList(access.PAID_STATUSES), 1, 0] } },
         rejectedClaims: { $sum: { $cond: [inList(access.REJECTED_STATUSES), 1, 0] } },
         totalPaidAmount: {
@@ -860,6 +1328,8 @@ async function summarize(filter) {
         totalPaidClaimedAmount: { $sum: { $cond: [inList(access.PAID_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
         totalRejectedAmount: { $sum: { $cond: [inList(access.REJECTED_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
         totalPendingAmount: { $sum: { $cond: [inList(PENDING_ALL), { $ifNull: ['$grandRequested', 0] }, 0] } },
+        totalPendingApprovalAmount: { $sum: { $cond: [inList(access.ACCOUNTS_APPROVAL_PENDING_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
+        totalApprovedAmount: { $sum: { $cond: [inList(access.ACCOUNTS_APPROVED_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
       },
     },
   ]);
@@ -867,7 +1337,11 @@ async function summarize(filter) {
     totalClaims: s.totalClaims || 0,
     totalClaimedAmount: round2(s.totalClaimedAmount || 0),
     pendingClaims: s.pendingClaims || 0,
+    pendingApprovalClaims: s.pendingApprovalClaims || 0,
+    approvedClaims: s.approvedClaims || 0,
     totalPendingAmount: round2(s.totalPendingAmount || 0),
+    totalPendingApprovalAmount: round2(s.totalPendingApprovalAmount || 0),
+    totalApprovedAmount: round2(s.totalApprovedAmount || 0),
     paidClaims: s.paidClaims || 0,
     totalPaidAmount: round2(s.totalPaidAmount || 0),
     totalPaidClaimedAmount: round2(s.totalPaidClaimedAmount || 0),
@@ -883,7 +1357,7 @@ exports.getExpenseReportsSummary = async (req, res) => {
     if (blocked) return fail(res, 403, 'Access denied: expense reports are not available for your role.');
     res.json({ success: true, data: await summarize(filter) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -971,8 +1445,6 @@ exports.getReportFilterOptions = async (req, res) => {
       cityFilter.$or = [
         { companyId: { $in: ids } },
         { company: { $in: ids } },
-        { companyId: null },
-        { companyId: { $exists: false } },
       ];
     }
 
@@ -1032,11 +1504,11 @@ exports.getReportFilterOptions = async (req, res) => {
         workLocations: uniqBy(eligibleEmployees.map((u) => (u.workingPlace?._id ? { _id: u.workingPlace._id, name: u.workingPlace.name } : null)), '_id').sort(byName),
         departments: [...new Set(eligibleEmployees.map((u) => u.department).filter(Boolean))].sort(),
         cities: sortedCities,
-        expenseTypes: types.filter(Boolean).sort(),
+        expenseTypes: Array.from(new Set(['COMBINE', 'LODGING', 'FOOD', 'TRAVEL', 'CONVEYANCE', 'OTHER', 'STOCK_PURCHASE', ...(types || []).filter(Boolean)])),
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -1086,9 +1558,9 @@ exports.exportExpenseReportsCSV = async (req, res) => {
     res.end();
   } catch (err) {
     if (res.headersSent) return res.end();
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
-exports._internal = { buildReportFilter, normalizeClaimForReport, computeCategoryBreakdown, parsePaymentDate, denyReason, CSV_COLUMNS };
-
+exports._internal = { buildReportFilter, normalizeClaimForReport, resolveClaimTypeInfo, computeCategoryBreakdown, parsePaymentDate, denyReason, CSV_COLUMNS };
+

@@ -23,7 +23,7 @@ const ExpenseTypeSchema = new mongoose.Schema({
   description: { type: String, default: '' },
   category: {
     type: String,
-    enum: ['LODGING', 'FOOD', 'CONVEYANCE', 'TRAVEL', 'OTHER'],
+    enum: ['LODGING', 'FOOD', 'CONVEYANCE', 'TRAVEL', 'OTHER', 'STOCK_PURCHASE'],
     default: 'OTHER',
   },
   // dynamic field configuration
@@ -60,6 +60,12 @@ const ExpenseTypeSchema = new mongoose.Schema({
   maxClaimAmount: { type: Number, min: 0 },
   // Only claimable when attendance/GPS recorded outstation duty for the date(s)
   requiresOutstation: { type: Boolean },
+  // Separate "Pay Limit Set or Not" module: whether Payment Limit Rule applies to this claim type
+  payLimitEnabled: { type: Boolean, default: undefined },
+  // Dynamic CFO / Finance Head 2nd Approval rule: whether CFO approval applies to this claim type
+  cfoApprovalRequired: { type: Boolean, default: undefined },
+  // Whether Reporting Manager 1st Approval applies to this claim type
+  managerApprovalRequired: { type: Boolean, default: undefined },
   status: {
     type: String,
     enum: ['active', 'inactive'],

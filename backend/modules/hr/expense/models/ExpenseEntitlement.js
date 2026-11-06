@@ -43,6 +43,23 @@ const ExpenseEntitlementSchema = new mongoose.Schema({
   unit: { type: String, enum: ['per_day', 'per_km', 'per_item', 'percentage', 'flat'], default: 'per_day' },
   formula: { type: String, default: '' },
   ruleCode: { type: String, default: '' },
+  // ── TRAVEL rows (expenseTypeCode = 'TRAVEL') ──
+  // One row per Level × Grade × City Class × Travel Mode. levelNumber 0 = "All Levels" default row.
+  travelModeId: { type: mongoose.Schema.Types.ObjectId, ref: 'TravelMode', default: null },
+  travelModeCode: { type: String, default: '', uppercase: true, trim: true },
+  travelModeName: { type: String, default: '' },
+  // Subtypes this row permits, each with its own maximum (null = actuals / no cap, 0 = nothing payable).
+  allowedSubtypes: {
+    type: [new mongoose.Schema({
+      subtypeId: { type: mongoose.Schema.Types.ObjectId, required: true },
+      code: { type: String, default: '', uppercase: true, trim: true },
+      name: { type: String, default: '' },
+      maxAmount: { type: Number, default: null, min: 0 },
+    }, { _id: false })],
+    default: undefined,
+  },
+  // Modes without subtypes (e.g. Taxi/Auto): maximum per claim item (null = actuals / no cap).
+  maxAmount: { type: Number, default: null, min: 0 },
   status: {
     type: String,
     enum: ['active', 'inactive'],
@@ -53,7 +70,9 @@ const ExpenseEntitlementSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-ExpenseEntitlementSchema.index({ companyId: 1, policyId: 1, levelNumber: 1, gradeCode: 1, cityClass: 1, expenseTypeCode: 1 }, { unique: true, name: 'uniq_entitlement_key', background: true });
+// v2 key adds travelModeCode so a level/class can hold one TRAVEL row per mode. The legacy
+// 'uniq_entitlement_key' index is dropped once by ensureEntitlementIndexes() (seedExpenseMasters).
+ExpenseEntitlementSchema.index({ companyId: 1, policyId: 1, levelNumber: 1, gradeCode: 1, cityClass: 1, expenseTypeCode: 1, travelModeCode: 1 }, { unique: true, name: 'uniq_entitlement_key_v2', background: true });
 ExpenseEntitlementSchema.index({ companyId: 1, levelNumber: 1 });
 
 module.exports = mongoose.models.ExpenseEntitlement || mongoose.model('ExpenseEntitlement', ExpenseEntitlementSchema);

@@ -16,6 +16,7 @@ const types = {
   TRAVEL: rules.resolveTypeConfig({ code: 'TRAVEL', name: 'Travel', category: 'TRAVEL', proofRequired: true }),
   CONVEYANCE: rules.resolveTypeConfig({ code: 'CONVEYANCE', name: 'Local Conveyance', category: 'CONVEYANCE' }),
   OTHER: rules.resolveTypeConfig({ code: 'OTHER', name: 'Other', category: 'OTHER' }),
+  STOCK_PURCHASE: rules.resolveTypeConfig({ code: 'STOCK_PURCHASE', name: 'Stock Purchase', category: 'STOCK_PURCHASE' }),
   LODGING: rules.resolveTypeConfig({ code: 'LODGING', name: 'Lodging', category: 'LODGING' }),
 };
 const EMP1 = '64b000000000000000000001';
@@ -69,9 +70,14 @@ const conveyanceFields = {
 };
 
 // ── TC01-TC04: valid normal claims ──
-for (const [tc, type] of [['TC01', 'FOOD'], ['TC02', 'TRAVEL'], ['TC03', 'CONVEYANCE'], ['TC04', 'OTHER']]) {
+for (const [tc, type] of [['TC01', 'FOOD'], ['TC02', 'TRAVEL'], ['TC03', 'CONVEYANCE'], ['TC04', 'OTHER'], ['TC04b', 'STOCK_PURCHASE']]) {
   test(`${tc} valid ${type} claim passes validation`, () => {
-    assert.deepEqual(validate(normalBody({ expenseType: type, ...(type === 'CONVEYANCE' ? conveyanceFields : {}), ...(type === 'OTHER' ? { approverId: EMP2 } : {}) })), []);
+    assert.deepEqual(validate(normalBody({
+      expenseType: type,
+      ...(type === 'CONVEYANCE' ? conveyanceFields : {}),
+      ...(type === 'OTHER' ? { approverId: EMP2 } : {}),
+      ...(type === 'STOCK_PURCHASE' ? { barcodeNumber: 'BC-101', quantity: '2 pcs', approverId: EMP2 } : {}),
+    })), []);
   });
 }
 
@@ -93,27 +99,36 @@ test('Local Conveyance: number plate, Start KM and End KM photos required; no bi
   assert.equal(input.entries[0].numberPlatePhotos.length, 1);
 });
 
-test('OTHER claim: Purchase option requires barcode number and text quantity, but does not require supporting document', () => {
+test('STOCK_PURCHASE claim: requires barcode number and text quantity, and routes to Reporting Manager approval', () => {
   // Missing both barcode and quantity
-  const errs1 = validate(normalBody({ expenseType: 'OTHER', otherSubType: 'PURCHASE', barcodeNumber: '', quantity: '' }));
+  const errs1 = validate(normalBody({ expenseType: 'STOCK_PURCHASE', barcodeNumber: '', quantity: '', approverId: EMP2 }));
   assert.ok(codes(errs1).includes('BARCODE_REQUIRED'));
   assert.ok(codes(errs1).includes('QUANTITY_REQUIRED'));
   assert.ok(!codes(errs1).includes('SUPPORTING_DOC_REQUIRED'));
 
   // Has barcode but missing/empty quantity
-  const errs2 = validate(normalBody({ expenseType: 'OTHER', otherSubType: 'PURCHASE', barcodeNumber: 'BC-12345', quantity: '   ' }));
+  const errs2 = validate(normalBody({ expenseType: 'STOCK_PURCHASE', barcodeNumber: 'BC-12345', quantity: '   ', approverId: EMP2 }));
   assert.ok(!codes(errs2).includes('BARCODE_REQUIRED'));
   assert.ok(codes(errs2).includes('QUANTITY_REQUIRED'));
 
-  // Valid Purchase claim passes (barcode + text quantity, e.g. "5 pcs")
+  // Valid Stock Purchase claim passes (barcode + text quantity, e.g. "5 pcs")
   const validPurchase = validate(normalBody({
+    expenseType: 'STOCK_PURCHASE',
+    barcodeNumber: 'BC-12345',
+    quantity: '5 pcs',
+    approverId: EMP2,
+  }));
+  assert.deepEqual(validPurchase, []);
+
+  // Legacy Purchase inside OTHER is rejected with migration guidance
+  const legacyPurchaseInOther = validate(normalBody({
     expenseType: 'OTHER',
     otherSubType: 'PURCHASE',
     barcodeNumber: 'BC-12345',
     quantity: '5 pcs',
     approverId: EMP2,
   }));
-  assert.deepEqual(validPurchase, []);
+  assert.ok(codes(legacyPurchaseInOther).includes('PURCHASE_MOVED_TO_STOCK_PURCHASE'));
 });
 
 test('Lodging claim requires service report document (single or multiple upload)', () => {
@@ -148,19 +163,14 @@ test('Normal claim: No Visit skips service report; Visit requires service report
   assert.ok(!codes(validate(normalBody({ visitType: 'VISIT', serviceReports: [] }), { isDraft: true }).filter((e) => !e.required)).includes('SERVICE_REPORT_REQUIRED'));
 });
 
-test('OTHER claim: Normal option does not require barcode number, quantity, or supporting document', () => {
-  // Valid Normal claim passes directly with standard fields (no barcode, no quantity, no supporting doc needed)
+test('OTHER claim: normal-only claim does not require otherSubType, barcode number, quantity, or supporting document', () => {
+  // Valid Other claim passes directly with standard fields (no otherSubType, no barcode, no quantity needed)
   const validNormal = validate(normalBody({
     expenseType: 'OTHER',
-    otherSubType: 'NORMAL',
+    otherSubType: '',
     approverId: EMP2,
   }));
   assert.deepEqual(validNormal, []);
-});
-
-test('OTHER claim: Unselected otherSubType is rejected on final submit', () => {
-  const errs = validate(normalBody({ expenseType: 'OTHER', otherSubType: '' }));
-  assert.ok(codes(errs).includes('OTHER_SUBTYPE_REQUIRED'));
 });
 
 test('TC05 valid Lodging claim uses From/To date and 3 nights', () => {
@@ -228,16 +238,20 @@ test('TC16 full payment / OTHER expense without approver is rejected; drafts may
   assert.ok(!codes(validate(normalBody())).includes('APPROVER_REQUIRED'), 'TRAVEL without FP needs no approver');
 });
 
-test('approvalKindFor: FP -> FULL_PAYMENT (wins over OTHER), OTHER -> OTHER_EXPENSE, lodging/others -> NONE', () => {
+test('approvalKindFor: FP -> FULL_PAYMENT (wins over OTHER/STOCK_PURCHASE), OTHER/STOCK_PURCHASE -> OTHER_EXPENSE, lodging/others -> NONE', () => {
   const kind = (b) => rules.approvalKindFor(rules.normalizeInput(b));
   assert.equal(kind(normalBody()), 'NONE');
   assert.equal(kind(normalBody({ expenseType: 'OTHER' })), 'OTHER_EXPENSE');
+  assert.equal(kind(normalBody({ expenseType: 'STOCK_PURCHASE', barcodeNumber: 'BC-1', quantity: '1' })), 'OTHER_EXPENSE');
   assert.equal(kind(normalBody({ entries: [{ expenseType: 'FOOD', requestedAmount: 100 }, { expenseType: 'OTHER', requestedAmount: 50 }] })), 'OTHER_EXPENSE');
+  assert.equal(kind(normalBody({ entries: [{ expenseType: 'FOOD', requestedAmount: 100 }, { expenseType: 'STOCK_PURCHASE', requestedAmount: 50, barcodeNumber: 'BC-1', quantity: '1' }] })), 'OTHER_EXPENSE');
   assert.equal(kind(normalBody({ expenseType: 'OTHER', fullPayment: { requested: true, reason: 'x' } })), 'FULL_PAYMENT');
+  assert.equal(kind(normalBody({ expenseType: 'STOCK_PURCHASE', barcodeNumber: 'BC-1', quantity: '1', fullPayment: { requested: true, reason: 'x' } })), 'FULL_PAYMENT');
   assert.equal(kind(lodgingBody()), 'NONE');
   assert.equal(kind(lodgingBody({ fullPayment: { requested: true, reason: 'x' } })), 'FULL_PAYMENT');
   // Stored claim shape
   assert.equal(rules.approvalKindFor({ claimMode: 'NORMAL', employeeClaims: [{ items: [{ expenseType: 'OTHER' }] }] }), 'OTHER_EXPENSE');
+  assert.equal(rules.approvalKindFor({ claimMode: 'NORMAL', employeeClaims: [{ items: [{ expenseType: 'STOCK_PURCHASE' }] }] }), 'OTHER_EXPENSE');
 });
 
 test('TC17 requested / allowed / excess / payable are calculated separately', async () => {
@@ -302,7 +316,12 @@ test('approval stage permissions: only the selected approver decides; Accounts w
   assert.equal(accounts.canApprove, false);
 
   const approved = access.claimPermissions(reqOf({ _id: '64b000000000000000000005', role: 'accounts' }), { ...claim, status: 'SUBMITTED' });
-  assert.equal(approved.canMarkPaid, true, 'after approval Accounts can pay');
+  assert.equal(approved.canAccountsApprove, true, 'after manager approval Accounts can approve in Step 1');
+  assert.equal(approved.canMarkPaid, false, 'Accounts must approve first before marking paid');
+
+  const accountsApproved = access.claimPermissions(reqOf({ _id: '64b000000000000000000005', role: 'accounts' }), { ...claim, status: 'ACCOUNTS_APPROVED', accountsApproval: { status: 'APPROVED' } });
+  assert.equal(accountsApproved.canMarkPaid, true, 'after Accounts Step 1 approval Accounts can pay');
+  assert.equal(accountsApproved.canReject, false, 'Accounts cannot reject after Accounts Step 1 approval');
 
   const employee = access.claimPermissions(reqOf({ _id: EMP1, role: 'employee' }), claim);
   assert.equal(employee.canApprove, false);
@@ -336,9 +355,16 @@ test('TC21b nobody decides a claim they are on; HR can reject but not mark paid'
   assert.equal(access.claimPermissions(other, claim).canReject, true);
   assert.equal(access.claimPermissions(other, claim).canMarkPaid, false);
   const accounts = { ...req, user: { _id: EMP2, role: 'account_admin' } };
-  assert.equal(access.claimPermissions(accounts, claim).canMarkPaid, true);
+  assert.equal(access.claimPermissions(accounts, claim).canAccountsApprove, true);
+  assert.equal(access.claimPermissions(accounts, claim).canMarkPaid, false);
+  const accountsApprovedClaim = { ...claim, status: 'ACCOUNTS_APPROVED', accountsApproval: { status: 'APPROVED' } };
+  assert.equal(access.claimPermissions(accounts, accountsApprovedClaim).canMarkPaid, true);
+  assert.equal(access.claimPermissions(accounts, accountsApprovedClaim).canReject, false);
+  const superAdmin = { ...req, user: { _id: EMP2, role: 'superadmin' } };
+  assert.equal(access.claimPermissions(superAdmin, accountsApprovedClaim).canReject, true);
   const ownAccounts = { ...req, user: { _id: EMP1, role: 'account_admin' } };
-  assert.equal(access.claimPermissions(ownAccounts, claim).canMarkPaid, false);
+  assert.equal(access.claimPermissions(ownAccounts, claim).canAccountsApprove, false);
+  assert.equal(access.claimPermissions(ownAccounts, accountsApprovedClaim).canMarkPaid, false);
 });
 
 test('TC23 deadline rules removed: claims never expire and have no deadline warnings', () => {
@@ -401,7 +427,9 @@ test('expense types are mode-locked (Lodging only in Lodging claim and vice vers
 });
 
 test('invalid lodging date range and future dates are rejected', () => {
-  assert.ok(codes(validate(lodgingBody({ toDate: '2026-09-29' }))).includes('INVALID_DATE_RANGE'));
+  // Same-day stay (fromDate === toDate, 0 nights) is rejected in Lodging claim
+  const sameDay = codes(validate(lodgingBody({ toDate: '2026-09-29' })));
+  assert.ok(sameDay.includes('INVALID_DATE_RANGE'));
   assert.ok(codes(validate(lodgingBody({ fromDate: '2026-10-02', toDate: '2026-09-29' }))).includes('INVALID_DATE_RANGE'));
   assert.ok(codes(validate(normalBody({ claimDate: '2026-12-01' }))).includes('FUTURE_DATE'));
   assert.ok(codes(validate(normalBody({ claimDate: '2026-02-31' }))).includes('INVALID_DATE'));
@@ -412,28 +440,32 @@ test('drafts skip required-field errors but keep format errors', () => {
   assert.deepEqual(codes(draft), ['AMOUNT_NEGATIVE']);
 });
 
-test('type defaults: Food/Travel one per day, Lodging is a lodging type', () => {
+test('type defaults: Food one per day, Travel/Conveyance/Other/StockPurchase have no same-date limit, Lodging is a lodging type', () => {
   assert.equal(types.FOOD.sameDateLimit, 1);
-  assert.equal(types.TRAVEL.sameDateLimit, 1);
+  assert.equal(types.TRAVEL.sameDateLimit, 0);
   assert.equal(types.CONVEYANCE.sameDateLimit, 0);
   assert.equal(types.OTHER.sameDateLimit, 0);
+  assert.equal(types.STOCK_PURCHASE.sameDateLimit, 0);
   assert.equal(types.LODGING.claimMode, 'LODGING');
-  assert.equal(rules.resolveTypeConfig({ code: 'OTHER', sameDateLimit: 2 }).sameDateLimit, 2);
+  assert.equal(rules.resolveTypeConfig({ code: 'OTHER', sameDateLimit: 2 }).sameDateLimit, 0);
+  assert.equal(rules.resolveTypeConfig({ code: 'STOCK_PURCHASE', sameDateLimit: 2 }).sameDateLimit, 0);
+  assert.equal(rules.resolveTypeConfig({ code: 'FOOD', sameDateLimit: 2 }).sameDateLimit, 2);
 });
 
-test('Other (both sub types) and Local Conveyance directly show all payment is allowed with no limit caps', async () => {
+test('Other, Stock Purchase, and Local Conveyance directly show all payment is allowed with no limit caps', async () => {
   const noEnt = await calculateItem({ item: { expenseType: 'OTHER', requestedAmount: 900 }, employeeLevelNumber: 1, entitlements: [], cityClass: 'C', policy: {} });
   assert.equal(noEnt.allowedAmount, 900);
   assert.equal(noEnt.excessAmount, 0);
 
   const ents = [{ levelNumber: 1, cityClass: 'C', expenseTypeCode: 'OTHER', amount: 500, gradeCode: '' }, { levelNumber: 1, cityClass: 'C', expenseTypeCode: 'CONVEYANCE', amount: 300, gradeCode: '' }];
-  const otherNormal = await calculateItem({ item: { expenseType: 'OTHER', otherSubType: 'NORMAL', requestedAmount: 900 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
+  const otherNormal = await calculateItem({ item: { expenseType: 'OTHER', requestedAmount: 900 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
   assert.equal(otherNormal.allowedAmount, 900);
   assert.equal(otherNormal.excessAmount, 0);
 
-  const otherPurchase = await calculateItem({ item: { expenseType: 'OTHER', otherSubType: 'PURCHASE', requestedAmount: 1500 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
-  assert.equal(otherPurchase.allowedAmount, 1500);
-  assert.equal(otherPurchase.excessAmount, 0);
+  const stockPurchase = await calculateItem({ item: { expenseType: 'STOCK_PURCHASE', requestedAmount: 1500 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
+  assert.equal(stockPurchase.allowedAmount, 1500);
+  assert.equal(stockPurchase.excessAmount, 0);
+  assert.equal(stockPurchase.ruleCode, 'STOCK_PURCHASE_FULLY_ALLOWED');
 
   const conv = await calculateItem({ item: { expenseType: 'CONVEYANCE', requestedAmount: 450 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
   assert.equal(conv.allowedAmount, 450);
@@ -540,7 +572,7 @@ test('calculateAmounts: multi-employee lodging claim gives all employees individ
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-03',
+    toDate: '2026-10-04',
     requestedAmount: 15000,
     numberOfEmployees: 2,
     employeeIds: [EMP1, EMP2],
@@ -561,7 +593,8 @@ test('calculateAmounts: multi-employee lodging claim gives all employees individ
     actor: EMP1,
   });
 
-  assert.equal(amounts.numberOfDays, 3);
+  assert.equal(amounts.numberOfNights, 3);
+  assert.equal(amounts.numberOfDays, 4); // inclusive calendar days of 01-04 Oct
   assert.equal(amounts.grandRequested, 15000);
   assert.equal(amounts.employeeClaims.length, 2);
 
@@ -600,7 +633,7 @@ test('calculateAmounts: lodging pooled limit (Me 2000 + TL 4000 = 6000 limit, re
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-01', // 1 day
+    toDate: '2026-10-02', // 1 night
     requestedAmount: 5000,
     numberOfEmployees: 2,
     employeeIds: [EMP1, EMP2],
@@ -653,7 +686,7 @@ test('calculateAmounts: lodging pooled limit when requested exceeds combined lim
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-01',
+    toDate: '2026-10-02',
     requestedAmount: 7000,
     numberOfEmployees: 2,
     employeeIds: [EMP1, EMP2],
@@ -709,7 +742,7 @@ test('calculateAmounts: official FAQ Section B (2 employees: 75% of combined bud
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-01', // 1 day
+    toDate: '2026-10-02', // 1 night
     requestedAmount: 2500,
     numberOfEmployees: 2,
     employeeIds: [eng1Id, eng2Id],
@@ -772,7 +805,7 @@ test('calculateAmounts: official FAQ Section C (3 employees: combined of highest
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-01',
+    toDate: '2026-10-02',
     requestedAmount: 3000,
     numberOfEmployees: 3,
     employeeIds: [e1Id, e2Id, e3Id],
@@ -829,7 +862,7 @@ test('calculateAmounts: official FAQ Section D (4 employees: split in 2s with 75
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-01',
+    toDate: '2026-10-02',
     requestedAmount: 5000,
     numberOfEmployees: 4,
     employeeIds: ids,
@@ -876,7 +909,7 @@ test('calculateAmounts: single employee lodging claim (100% individual entitleme
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-03', // 3 days
+    toDate: '2026-10-04', // 3 nights
     requestedAmount: 5000,
     numberOfEmployees: 1,
     employeeIds: [empId],
@@ -908,8 +941,8 @@ test('calculateAmounts: single employee lodging claim (100% individual entitleme
   assert.equal(c.allowedTotal, 4500);
   assert.equal(c.excessTotal, 500);
   assert.equal(amounts.perDayLimit, 1500);
-  assert.ok(c.items[0].plainExplanation.includes('Solo Engg: ₹1,500/day'));
-  assert.ok(c.items[0].plainExplanation.includes('₹1,500/day × 3 days = ₹4,500'));
+  assert.ok(c.items[0].plainExplanation.includes('Solo Engg: ₹1,500/night'));
+  assert.ok(c.items[0].plainExplanation.includes('₹1,500/night × 3 nights = ₹4,500'));
 });
 
 test('calculateAmounts: 3 employees with custom COMBINED_PERCENT (70% of combined budget)', async () => {
@@ -928,7 +961,7 @@ test('calculateAmounts: 3 employees with custom COMBINED_PERCENT (70% of combine
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-01',
+    toDate: '2026-10-02',
     requestedAmount: 3600,
     numberOfEmployees: 3,
     employeeIds: [e1Id, e2Id, e3Id],
@@ -991,7 +1024,7 @@ test('calculateAmounts: 4 employees with custom COMBINED_PERCENT (60% of combine
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-01',
+    toDate: '2026-10-02',
     requestedAmount: 4890,
     numberOfEmployees: 4,
     employeeIds: ids,
@@ -1049,7 +1082,7 @@ test('calculateAmounts: 2 employees with HIGHER_ONLY lodging rule', async () => 
   const input = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-01',
+    toDate: '2026-10-02',
     requestedAmount: 2000,
     numberOfEmployees: 2,
     employeeIds: [e1Id, e2Id],
@@ -1321,7 +1354,7 @@ test('calculateAmounts: add employee and remove employee in lodging claim correc
   const inputSingle = {
     claimMode: 'LODGING',
     fromDate: '2026-10-01',
-    toDate: '2026-10-03', // 3 days
+    toDate: '2026-10-04', // 3 nights
     requestedAmount: 7000,
     numberOfEmployees: 1,
     employeeIds: [emp1Id],
@@ -1347,7 +1380,7 @@ test('calculateAmounts: add employee and remove employee in lodging claim correc
   assert.equal(amountsSingle.grandAllowed, 6000);
   assert.equal(amountsSingle.grandExcess, 1000);
   assert.equal(amountsSingle.perDayLimit, 2000);
-  assert.ok(amountsSingle.employeeClaims[0].items[0].plainExplanation.includes('Adesh: ₹2,000/day'));
+  assert.ok(amountsSingle.employeeClaims[0].items[0].plainExplanation.includes('Adesh: ₹2,000/night'));
   assert.ok(amountsSingle.employeeClaims[0].items[0].plainExplanation.includes('₹6,000'));
 
   // 2. Add one more employee (2 employees)
@@ -1394,7 +1427,7 @@ test('calculateAmounts: add employee and remove employee in lodging claim correc
   assert.equal(amountsBack.grandAllowed, 6000);
   assert.equal(amountsBack.grandExcess, 1000);
   assert.equal(amountsBack.employeeClaims.length, 1);
-  assert.ok(amountsBack.employeeClaims[0].items[0].plainExplanation.includes('Adesh: ₹2,000/day'));
+  assert.ok(amountsBack.employeeClaims[0].items[0].plainExplanation.includes('Adesh: ₹2,000/night'));
 });
 
 test('calculateAmounts: normal claim single entry calculates correctly and returns clear explanation and breakdown', async () => {
@@ -2322,7 +2355,7 @@ const emp = (_id, levelNumber, name = `Emp L${levelNumber}`) => ({ _id, name, ro
 const lodgingInput = (over = {}) => ({
   claimMode: 'LODGING',
   fromDate: '2026-10-01',
-  toDate: '2026-10-01', // 1 day
+  toDate: '2026-10-02', // 1 night
   requestedAmount: 3000,
   numberOfEmployees: 1,
   employeeIds: [EMP1],
@@ -2425,11 +2458,11 @@ test('6. Multi-employee With Relative uses days * (pct of emp1 1-day + pct of em
   assert.equal(rel.employeeClaims[0].items[0].policyLimit, 1000);
   assert.equal(rel.employeeClaims[1].items[0].policyLimit, 2000);
   rel.employeeClaims.forEach((ec) => assert.equal(ec.excessTotal, 0));
-  assert.match(rel.plainExplanation, /Stay with relative/);
+  assert.match(rel.plainExplanation, /Stay (with|at) relative/);
 
   // 3 days: 3 * (50% of 2000 + 50% of 4000) = 3 * (1000 + 2000) = 9000
-  const rel3Days = await calc({ ...base, toDate: '2026-10-03', stayType: 'WITH_RELATIVE' }, { employees, policy });
-  assert.equal(rel3Days.numberOfDays, 3);
+  const rel3Days = await calc({ ...base, toDate: '2026-10-04', stayType: 'WITH_RELATIVE' }, { employees, policy });
+  assert.equal(rel3Days.numberOfNights, 3);
   assert.equal(rel3Days.grandPolicyLimit, 9000);
   assert.equal(rel3Days.grandAllowed, 9000);
   assert.equal(rel3Days.employeeClaims[0].items[0].policyLimit, 3000);
@@ -2446,7 +2479,7 @@ test('6b. 2, 3 and 4+ employee With Relative claims ignore hotel sharing rules a
     { ids: [EMP1, EMP2, EMP3, EMP4], emps: [emp(EMP1, 8), emp(EMP2, 1), emp(EMP3, 5), emp(EMP4, 10)], lr: {}, hotel1Day: 7875, rel1Day: 5250 },
   ];
   for (const c of cases) {
-    const base = lodgingInput({ requestedAmount: 50000, numberOfEmployees: c.ids.length, employeeIds: c.ids, toDate: '2026-10-02' }); // 2 days
+    const base = lodgingInput({ requestedAmount: 50000, numberOfEmployees: c.ids.length, employeeIds: c.ids, toDate: '2026-10-03' }); // 2 nights
     const policy = { relativeStayPercent: 50, lodgingRules: c.lr };
     const hotel = await calc({ ...base, stayType: 'IN_HOTEL' }, { employees: c.emps, policy });
     const rel = await calc({ ...base, stayType: 'WITH_RELATIVE' }, { employees: c.emps, policy });
@@ -2457,8 +2490,8 @@ test('6b. 2, 3 and 4+ employee With Relative claims ignore hotel sharing rules a
 });
 
 test('7. Multiple days use the existing day calculation (3 days x ₹2000 = ₹6000 -> 50% = ₹3000)', async () => {
-  const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE', toDate: '2026-10-03', requestedAmount: 7000 }));
-  assert.equal(r.numberOfDays, 3);
+  const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE', toDate: '2026-10-04', requestedAmount: 7000 }));
+  assert.equal(r.numberOfNights, 3);
   assert.equal(r.grandPolicyLimit, 3000);
   assert.equal(r.grandAllowed, 3000);
   assert.equal(r.perDayLimit, 1000);
@@ -2478,7 +2511,7 @@ test('9. Percentage is applied exactly once (50% -> 1000, never 25% -> 500)', as
   const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE' }));
   assert.equal(r.grandPolicyLimit, 1000);
   const it = r.employeeClaims[0].items[0];
-  assert.equal((it.formula.match(/Stay with relative/g) || []).length, 1);
+  assert.equal((it.formula.match(/Stay (with|at) relative/g) || []).length, 1);
   // Re-evaluating the same stored claim (resubmission path) recalculates from the base entitlement
   const again = await calc(lodgingInput({ stayType: 'WITH_RELATIVE' }));
   assert.equal(again.grandPolicyLimit, 1000);
@@ -2714,7 +2747,7 @@ test('PDF generation: Lodging claim with Stay Type (IN_HOTEL and WITH_RELATIVE) 
   const employees = [emp(EMP1, 8, 'Adesh Bhongale'), emp(EMP2, 1, 'Rahul Patil')];
   const policy = { relativeStayPercent: 50, lodgingRules: { twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: 75 } } };
   const relCalc = await calc(
-    lodgingInput({ stayType: 'WITH_RELATIVE', fromDate: '2026-10-01', toDate: '2026-10-02', numberOfEmployees: 2, employeeIds: [EMP1, EMP2] }),
+    lodgingInput({ stayType: 'WITH_RELATIVE', fromDate: '2026-10-01', toDate: '2026-10-03', numberOfEmployees: 2, employeeIds: [EMP1, EMP2] }),
     { employees, policy }
   );
 
@@ -2728,7 +2761,7 @@ test('PDF generation: Lodging claim with Stay Type (IN_HOTEL and WITH_RELATIVE) 
     stayType: 'WITH_RELATIVE',
     relativeStayPercent: 50,
     fromDate: '2026-10-01',
-    toDate: '2026-10-02',
+    toDate: '2026-10-03',
     numberOfNights: relCalc.numberOfDays,
     numberOfEmployees: 2,
     submittedBy: { name: 'Adesh Bhongale', employeeIdCode: 'EMP1001', department: 'Engineering', designation: 'Engineer' },
@@ -2749,11 +2782,11 @@ test('PDF generation: Lodging claim with Stay Type (IN_HOTEL and WITH_RELATIVE) 
   const relText = extractPdfText(Buffer.concat(relChunks));
 
   assert.ok(relText.includes('Stay Type:'), 'PDF must show Stay Type label');
-  assert.ok(relText.includes('With Relative (50% Allowance)'), 'PDF must show With Relative (50% Allowance)');
-  assert.ok(relText.includes('1,000.00/day'), 'PDF must show Emp1 relative daily limit Rs. 1,000.00/day');
-  assert.ok(relText.includes('2,000.00/day'), 'PDF must show Emp2 relative daily limit Rs. 2,000.00/day');
-  assert.ok(relText.includes('2,000.00 (2 Days)'), 'PDF must show Emp1 relative 2-day total Rs. 2,000.00 (2 Days)');
-  assert.ok(relText.includes('4,000.00 (2 Days)'), 'PDF must show Emp2 relative 2-day total Rs. 4,000.00 (2 Days)');
+  assert.ok(relText.includes('At Relative (50% Allowance)') || relText.includes('With Relative (50% Allowance)'), 'PDF must show At/With Relative (50% Allowance)');
+  assert.ok(relText.includes('1,000.00/day') || relText.includes('1,000.00/night'), 'PDF must show Emp1 relative daily limit');
+  assert.ok(relText.includes('2,000.00/day') || relText.includes('2,000.00/night'), 'PDF must show Emp2 relative daily limit');
+  assert.ok(relText.includes('2,000.00 (2 Days)') || relText.includes('2,000.00 (2 Nights)'), 'PDF must show Emp1 relative 2-day total');
+  assert.ok(relText.includes('4,000.00 (2 Days)') || relText.includes('4,000.00 (2 Nights)'), 'PDF must show Emp2 relative 2-day total');
   assert.ok(relText.includes('6,000.00'), 'PDF must show total allowed Rs. 6,000.00');
 
   // 2. Single-employee IN_HOTEL claim
@@ -2777,6 +2810,173 @@ test('PDF generation: Lodging claim with Stay Type (IN_HOTEL and WITH_RELATIVE) 
   const hotelText = extractPdfText(Buffer.concat(hotelChunks));
   assert.ok(hotelText.includes('Stay Type:'), 'PDF must show Stay Type label for In Hotel');
   assert.ok(hotelText.includes('In Hotel'), 'PDF must show In Hotel');
+});
+
+test('Dynamic Approval Limit Rules: role/level matching and hierarchy level resolution', () => {
+  const approverService = require('../services/approverService');
+  const tlUser = { _id: '65e000000000000000000011', name: 'Rohan Lead', designation: 'Team Lead', isTeamLead: true, levelRef: { name: 'Team Lead', levelNumber: 7 } };
+  const vpUser = { _id: '65e000000000000000000012', name: 'Vikram VP', designation: 'Vice President', role: 'vp', levelRef: { name: 'VP', levelNumber: 3 } };
+  const ceoUser = { _id: '65e000000000000000000013', name: 'Minal Patil', designation: 'CEO', role: 'ceo', levelRef: { name: 'CEO', levelNumber: 2 } };
+
+  const ruleTeamLead = { roleName: 'Team Lead', roleKey: 'TEAM_LEAD', levelNumber: 7, maxAmount: 50, status: 'active' };
+  const ruleVp = { roleName: 'VP', roleKey: 'VP', levelNumber: 3, maxAmount: 100, status: 'active' };
+
+  assert.equal(approverService.getUserEffectiveLevel(tlUser), 7);
+  assert.equal(approverService.getUserEffectiveLevel(vpUser), 3);
+  assert.equal(approverService.getUserEffectiveLevel(ceoUser), 2);
+
+  assert.equal(approverService.getRuleEffectiveLevel(ruleTeamLead), 7);
+  assert.equal(approverService.getRuleEffectiveLevel(ruleVp), 3);
+
+  assert.equal(approverService.doesUserMatchRuleRole(tlUser, ruleTeamLead), true);
+  assert.equal(approverService.doesUserMatchRuleRole(tlUser, ruleVp), false);
+  assert.equal(approverService.doesUserMatchRuleRole(vpUser, ruleVp), true);
+  assert.equal(approverService.doesUserMatchRuleRole(vpUser, ruleTeamLead), false);
+});
+
+test('Reporting Manager Resolution: escalates to above Reporting Manager when direct Reporting Manager is tagged on claim', async () => {
+  const User = require('../../../../models/User');
+  const Level = require('../../../../models/Level');
+  const approverService = require('../services/approverService');
+
+  const COMP = '64b000000000000000000099';
+  const FILER_ID = '65e000000000000000000021';
+  const DIRECT_TL_ID = '65e000000000000000000022';
+  const PEER_TL_ID = '65e000000000000000000023';
+  const ABOVE_MGR_ID = '65e000000000000000000024';
+
+  const usersDb = [
+    {
+      _id: FILER_ID,
+      name: 'Filer Engineer',
+      department: 'Service',
+      designation: 'Service Engineer',
+      role: 'employee',
+      status: 'active',
+      companyId: COMP,
+      reportsTo: DIRECT_TL_ID,
+      levelRef: { _id: '65e000000000000000000088', name: 'Engineer', category: 'STAFF', levelNumber: 8 },
+    },
+    {
+      _id: DIRECT_TL_ID,
+      name: 'Direct Team Lead',
+      department: 'Service',
+      designation: 'Team Lead',
+      role: 'team_lead',
+      isTeamLead: true,
+      status: 'active',
+      companyId: COMP,
+      reportsTo: ABOVE_MGR_ID,
+      levelRef: { _id: '65e000000000000000000087', name: 'Team Lead', category: 'LEADERSHIP', levelNumber: 7, canManageTeam: true },
+    },
+    {
+      _id: PEER_TL_ID,
+      name: 'Peer Team Lead',
+      department: 'Service',
+      designation: 'Team Lead',
+      role: 'team_lead',
+      isTeamLead: true,
+      status: 'active',
+      companyId: COMP,
+      levelRef: { _id: '65e000000000000000000087', name: 'Team Lead', category: 'LEADERSHIP', levelNumber: 7, canManageTeam: true },
+    },
+    {
+      _id: ABOVE_MGR_ID,
+      name: 'Senior Service Manager',
+      department: 'Service',
+      designation: 'Manager',
+      role: 'manager',
+      status: 'active',
+      companyId: COMP,
+      levelRef: { _id: '65e000000000000000000086', name: 'Manager', category: 'LEADERSHIP', levelNumber: 6, canApprove: true },
+    },
+  ];
+
+  const makeChain = (val) => ({
+    select() { return this; },
+    populate() { return this; },
+    sort() { return this; },
+    limit() { return this; },
+    lean: async () => val,
+  });
+
+  const origFindById = User.findById;
+  const origFindOne = User.findOne;
+  const origFind = User.find;
+  const origDistinct = User.distinct;
+  const origLevelFind = Level.find;
+
+  User.findById = (id) => makeChain(usersDb.find((u) => String(u._id) === String(id)) || null);
+  User.findOne = (q) => {
+    const targetId = q?._id || q?.$and?.find((c) => c._id)?._id;
+    return makeChain(usersDb.find((u) => String(u._id) === String(targetId)) || null);
+  };
+  User.find = (q) => {
+    if (q?._id?.$in) {
+      const set = new Set(q._id.$in.map(String));
+      return makeChain(usersDb.filter((u) => set.has(String(u._id))));
+    }
+    const ninObj = q?._id?.$nin || q?.$and?.find((c) => c?._id?.$nin)?._id?.$nin || [];
+    const ninSet = new Set(ninObj.map(String));
+    return makeChain(usersDb.filter((u) => !ninSet.has(String(u._id)) && u.role !== 'employee'));
+  };
+  User.distinct = async () => [DIRECT_TL_ID, ABOVE_MGR_ID];
+  Level.find = () => makeChain([]);
+
+  try {
+    // 1. Single employee claim (only FILER_ID excluded): resolves to Direct Team Lead
+    const singleRes = await approverService.resolveEmployeeReportingManagerWithMeta(
+      FILER_ID,
+      COMP,
+      [FILER_ID],
+      { approvalLimitRules: [] }
+    );
+    assert.equal(String(singleRes.approver?._id), DIRECT_TL_ID, 'Single-person claim routes to direct Reporting Manager');
+
+    // 2. Multi-employee claim where Direct Team Lead IS tagged on the claim:
+    //    must escalate to Senior Service Manager (above Reporting Manager), NOT Direct Team Lead or Peer Team Lead
+    const taggedRes = await approverService.resolveEmployeeReportingManagerWithMeta(
+      FILER_ID,
+      COMP,
+      [FILER_ID, DIRECT_TL_ID],
+      { approvalLimitRules: [] }
+    );
+    assert.equal(String(taggedRes.approver?._id), ABOVE_MGR_ID, 'Tagged Reporting Manager escalates to their above Reporting Manager');
+
+    // 3. Single employee claim above the configured limit (e.g. ₹53 > ₹50) without tagging Team Lead:
+    //    must route to Direct Team Lead (Reporting Manager), NOT escalate one step above to Manager
+    const rulesWithTl = [
+      { roleName: 'Senior Executive', roleKey: 'SENIOR_EXECUTIVE', levelNumber: 8, maxAmount: 50, status: 'active' },
+      { roleName: 'Team Lead', roleKey: 'TEAM_LEAD', levelNumber: 7, maxAmount: 50, status: 'active' },
+      { roleName: 'Manager', roleKey: 'MANAGER', levelNumber: 6, maxAmount: 5000, status: 'active' },
+    ];
+    const aboveLimitSingleRes = await approverService.resolveEmployeeReportingManagerWithMeta(
+      FILER_ID,
+      COMP,
+      [FILER_ID],
+      { amount: 53, approvalLimitRules: rulesWithTl }
+    );
+    assert.equal(
+      String(aboveLimitSingleRes.approver?._id),
+      DIRECT_TL_ID,
+      'Single-employee claim above ₹50 limit (₹53) must route to direct Reporting Manager (Team Lead), not one step above'
+    );
+
+    // 4. When Direct Team Lead IS tagged on the claim, it escalates to the one-step-above Manager (level 6)
+    const taggedWithRulesRes = await approverService.resolveEmployeeReportingManagerWithMeta(
+      FILER_ID,
+      COMP,
+      [FILER_ID, DIRECT_TL_ID],
+      { amount: 53, approvalLimitRules: rulesWithTl }
+    );
+    assert.equal(String(taggedWithRulesRes.approver?._id), ABOVE_MGR_ID, 'Tagged Reporting Manager escalates above Team Lead tier to one-step-above Manager');
+  } finally {
+    User.findById = origFindById;
+    User.findOne = origFindOne;
+    User.find = origFind;
+    User.distinct = origDistinct;
+    Level.find = origLevelFind;
+  }
 });
 
 }

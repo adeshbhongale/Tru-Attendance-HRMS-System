@@ -72,6 +72,7 @@ import ExpenseDashboardScreen from "./src/modules/hr/expense/screens/ExpenseDash
 import CreateExpenseClaimScreen from "./src/modules/hr/expense/screens/CreateExpenseClaimScreen";
 import ExpenseClaimDetailScreen from "./src/modules/hr/expense/screens/ExpenseClaimDetailScreen";
 import OtherApprovalsScreen from "./src/modules/hr/expense/screens/OtherApprovalsScreen";
+import PettyCashWalletScreen from "./src/modules/hr/expense/screens/PettyCashWalletScreen";
 
 if (!__DEV__) {
   LogBox.ignoreAllLogs(true);
@@ -535,6 +536,10 @@ export default function App() {
                   <RootStack.Screen
                     name="OtherApprovals"
                     component={OtherApprovalsScreen}
+                  />
+                  <RootStack.Screen
+                    name="PettyCashWallet"
+                    component={PettyCashWalletScreen}
                   />
 
                   {/* Reports Module */}

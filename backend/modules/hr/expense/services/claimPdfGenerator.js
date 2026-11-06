@@ -3,6 +3,19 @@ const axios = require('axios');
 const { isManagementUser } = require('./expenseAccess');
 
 /**
+ * Format number into Indian numbering format without currency symbol
+ * (avoid font-encoding errors in standard PDF fonts).
+ */
+const formatINR = (val) => {
+  const num = Number(val || 0);
+  if (isNaN(num)) return '0.00';
+  return num.toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
+
+/**
  * Check if the claimant is an authorized Management user (approval not applicable).
  */
 function isClaimantManagement(claim) {
@@ -14,13 +27,11 @@ function isClaimantManagement(claim) {
     department: applicant.department || claim.applicantDept,
     category: applicant.category,
     responsibilityCodes: applicant.responsibilityCodes,
+    levelRef: applicant.levelRef,
+    departmentAdminType: applicant.departmentAdminType,
+    adminType: applicant.adminType,
   };
   if (isManagementUser(applicant) || isManagementUser(userObj)) return true;
-  if (claim.fullPayment?.requested) {
-    if (claim.managerApproval?.kind === 'NONE' || !claim.managerApproval?.approver) {
-      return true;
-    }
-  }
   return false;
 }
 
@@ -55,7 +66,7 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
     // Pattern 2: "Aditya Pise: ₹1,200.00/day (Total: ₹2,400.00 for 2 days) (Higher)"
     // or "Aditya Pise: ₹2,000/day"
     // or "Aditya Pise: Actuals"
-    const m = clean.match(/^([^:]+):\s*(?:[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*\/\s*day)?|Actuals)/i);
+    const m = clean.match(/^([^:]+):\s*(?:[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*\/\s*(?:day|night))?|Actuals)/i);
     if (m) {
       const empNameKey = m[1].trim().toLowerCase();
       const isActuals = !m[2] || /Actuals/i.test(clean);
@@ -71,7 +82,7 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
       // Stay total check: (Total: ₹2,400.00 for 2 days)
       let totalStay = null;
       let stayDays = null;
-      const mTot = clean.match(/\(Total:\s*[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*for\s*(\d+)\s*days?)?/i);
+      const mTot = clean.match(/\(Total:\s*[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*for\s*(\d+)\s*(?:days?|nights?))?/i);
       if (mTot) {
         totalStay = parseFloat(mTot[1].replace(/,/g, ''));
         if (mTot[2]) stayDays = parseInt(mTot[2], 10);
@@ -83,12 +94,12 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
 
   // Also check inline pattern if multi-entry: "Individual limits per day: Aditya Pise: 1,200.00/day, Rohan Sharma: 1,000.00/day"
   if (parsedMap.size === 0) {
-    const inlineMatch = text.match(/Individual limits per day:?\s*([^\n]+?)(?:\s*\(Combined|\n\n|\n[A-Z]|$)/i);
+    const inlineMatch = text.match(/Individual limits per (?:day|night):?\s*([^\n]+?)(?:\s*\(Combined|\n\n|\n[A-Z]|$)/i);
     if (inlineMatch && inlineMatch[1]) {
       const parts = inlineMatch[1].split(/\s*,\s*(?=[^,]+:)/);
       for (const p of parts) {
         const cleanP = p.trim();
-        const m = cleanP.match(/^([^:]+):\s*(?:[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*\/\s*day)?|Actuals)/i);
+        const m = cleanP.match(/^([^:]+):\s*(?:[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*\/\s*(?:day|night))?|Actuals)/i);
         if (m) {
           const empNameKey = m[1].trim().toLowerCase();
           const isActuals = !m[2] || /Actuals/i.test(cleanP);
@@ -180,7 +191,7 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
 
     if (!perDay && Array.isArray(breakdown.steps)) {
       for (const s of breakdown.steps) {
-        const m = String(s).match(/[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)\s*\/\s*day/i);
+        const m = String(s).match(/[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)\s*\/\s*(?:day|night)/i);
         if (m) {
           perDay = parseFloat(m[1].replace(/,/g, ''));
           break;
@@ -203,14 +214,15 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
 
     let totalLimitStr = '';
     if (isLodging) {
-      const stayAmt = isRelativeStay && (targetItem.policyLimit !== undefined || ec.policyLimitTotal !== undefined)
-        ? Number(targetItem.policyLimit ?? ec.policyLimitTotal ?? (perDay * days))
-        : ((parsedInfo && parsedInfo.totalStay > 0)
-          ? parsedInfo.totalStay
-          : (perDay > 0 && days > 0 ? perDay * days : (Number(targetItem.policyLimit || ec.policyLimitTotal || 0))));
+      const stayNights = Number(claim.lodgingNights ?? claim.numberOfNights ?? ((parsedInfo && parsedInfo.stayDays > 0) ? parsedInfo.stayDays : days)) || days || 1;
+      const stayAmt = (parsedInfo && parsedInfo.totalStay > 0)
+        ? parsedInfo.totalStay
+        : (perDay > 0 && stayNights > 0
+          ? perDay * stayNights
+          : Number(targetItem.policyLimit ?? ec.policyLimitTotal ?? 0));
 
-      let effectiveStayDays = (parsedInfo && parsedInfo.stayDays > 0) ? parsedInfo.stayDays : days;
-      if (stayAmt > 0 && perDay > 0) {
+      let effectiveStayDays = (parsedInfo && parsedInfo.stayDays > 0) ? parsedInfo.stayDays : stayNights;
+      if (!effectiveStayDays && stayAmt > 0 && perDay > 0) {
         const derived = Math.round(stayAmt / perDay);
         if (derived > 0) effectiveStayDays = derived;
       }
@@ -240,19 +252,6 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
     };
   });
 }
-
-/**
- * Format number into Indian numbering format without currency symbol
- * (avoid font-encoding errors in standard PDF fonts).
- */
-const formatINR = (val) => {
-  const num = Number(val || 0);
-  if (isNaN(num)) return '0.00';
-  return num.toLocaleString('en-IN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-};
 
 const formatDate = (dateStr) => {
   if (!dateStr) return 'N/A';
@@ -338,6 +337,9 @@ const getStatusBadge = (status, paymentStatus) => {
   }
   if (s === 'APPROVAL_PENDING') {
     return { text: 'AWAITING APPROVAL', bg: '#7c3aed', textColor: '#ffffff' };
+  }
+  if (s === 'ACCOUNTS_APPROVED' || ps === 'AWAITING_DISBURSEMENT') {
+    return { text: 'APPROVED', bg: '#2563eb', textColor: '#ffffff' };
   }
   return { text: 'PENDING', bg: '#d97706', textColor: '#ffffff' };
 };
@@ -586,6 +588,25 @@ async function generateClaimPdf(claim, res) {
     });
   });
 
+  // Payment confirmation proofs (uploaded by Accounts Admin during payment recording)
+  const payProofs = Array.isArray(claim.paymentProofs) && claim.paymentProofs.length > 0
+    ? claim.paymentProofs
+    : (Array.isArray(claim.disbursement?.paymentProofs) && claim.disbursement.paymentProofs.length > 0
+      ? claim.disbursement.paymentProofs
+      : (claim.disbursement?.paymentProof?.url ? [claim.disbursement.paymentProof] : []));
+  payProofs.forEach((p, pIdx) => {
+    addProof({
+      category: 'PAYMENT_PROOF',
+      tag: 'PAYMENT CONFIRMATION PROOF',
+      tagColor: '#059669',
+      title: `Payment Confirmation Proof #${pIdx + 1}`,
+      subtitle: p.name ? `${p.name}${p.size ? ` • ${Math.round(p.size / 1024)} KB` : ''}` : 'Accounts disbursement confirmation proof',
+      url: p.url,
+      name: p.name,
+      size: p.size,
+    });
+  });
+
   // Fetch images in parallel
   const fetchedProofs = await Promise.all(
     allProofs.map(async (proof) => {
@@ -611,20 +632,107 @@ async function generateClaimPdf(claim, res) {
   const pageWidth = doc.page.width;
   const pageHeight = doc.page.height;
   const margin = 36;
+  const topMargin = 24;
   const contentWidth = pageWidth - margin * 2; // 523.28pt
 
+  let contentPageCount = 1;
+  const pageBottomLimit = pageHeight - 28;
   const ensureSpace = (neededHeight) => {
-    if (doc.y + neededHeight > pageHeight - margin - 25) {
+    if (doc.y + neededHeight > pageBottomLimit) {
       doc.addPage();
+      contentPageCount += 1;
     }
+  };
+
+  const startX = margin;
+
+  /**
+   * Helper to render a clean, structured card matching ExpenseClaimDetailContent.jsx
+   * with full-width key-value rows (Label on left, Value on right) so text never overlaps.
+   */
+  const drawStructuredCard = ({
+    title,
+    badgeText = '',
+    badgeBg = '#f1f5f9',
+    badgeBorder = '#cbd5e1',
+    badgeColor = '#475569',
+    headerBg = '#f8fafc',
+    headerColor = '#0f172a',
+    borderColor = '#cbd5e1',
+    cardBg = '#ffffff',
+    rows = [],
+  }) => {
+    const headerH = 16;
+    const labelW = 148;
+    const valueW = contentWidth - labelW - 24;
+
+    const measuredRows = rows
+      .filter((r) => r && r.value !== undefined && r.value !== null && String(r.value).trim() !== '')
+      .map((r) => {
+        const lbl = String(r.label || '');
+        const val = String(r.value || '');
+        doc.fontSize(7.3).font('Helvetica');
+        const lH = doc.heightOfString(lbl, { width: labelW - 6 });
+        doc.fontSize(r.valueSize || 7.4).font(r.valueFont || 'Helvetica-Bold');
+        const vH = doc.heightOfString(val, { width: valueW, lineGap: 1 });
+        const rH = Math.max(13.5, Math.max(lH, vH) + 4.5);
+        return { ...r, lbl, val, rH };
+      });
+
+    const rowsTotalH = measuredRows.reduce((s, r) => s + r.rH, 0);
+    const totalCardH = headerH + rowsTotalH + 3;
+
+    ensureSpace(totalCardH + 4.5);
+    const cardTopY = doc.y;
+
+    doc.roundedRect(startX, cardTopY, contentWidth, totalCardH, 5).fillAndStroke(cardBg, borderColor);
+    doc.roundedRect(startX, cardTopY, contentWidth, headerH, 5).fill(headerBg);
+    doc.rect(startX, cardTopY + headerH - 5, contentWidth, 5).fill(headerBg);
+    doc.rect(startX, cardTopY + headerH, contentWidth, 0.5).fill(borderColor);
+
+    doc.fillColor(headerColor).fontSize(7.6).font('Helvetica-Bold').text(title, startX + 10, cardTopY + 4.2, {
+      width: badgeText ? contentWidth - 170 : contentWidth - 20,
+      lineBreak: false,
+      ellipsis: true,
+    });
+
+    if (badgeText) {
+      doc.fontSize(6.6).font('Helvetica-Bold');
+      const pillW = doc.widthOfString(badgeText) + 12;
+      const pillH = 11;
+      const pillX = startX + contentWidth - pillW - 8;
+      const pillY = cardTopY + 2.5;
+      doc.roundedRect(pillX, pillY, pillW, pillH, 3).fillAndStroke(badgeBg, badgeBorder);
+      doc.fillColor(badgeColor).text(badgeText, pillX, pillY + 2.2, { width: pillW, align: 'center', lineBreak: false });
+    }
+
+    let curRowY = cardTopY + headerH + 1.5;
+    measuredRows.forEach((r, idx) => {
+      if (idx < measuredRows.length - 1) {
+        doc.rect(startX + 8, curRowY + r.rH - 0.5, contentWidth - 16, 0.5).fill('#f1f5f9');
+      }
+      doc.fillColor('#64748b').fontSize(7.3).font('Helvetica').text(r.lbl, startX + 10, curRowY + 2.5, {
+        width: labelW - 6,
+      });
+      doc
+        .fillColor(r.valueColor || '#0f172a')
+        .fontSize(r.valueSize || 7.4)
+        .font(r.valueFont || 'Helvetica-Bold')
+        .text(r.val, startX + 10 + labelW, curRowY + 2.5, {
+          width: valueW,
+          lineGap: 1,
+        });
+      curRowY += r.rH;
+    });
+
+    doc.y = cardTopY + totalCardH + 4.5;
   };
 
   // ─────────────────────────────────────────────────────────────
   // 1. TOP HEADER BANNER
   // ─────────────────────────────────────────────────────────────
-  const headerHeight = 72;
-  const startX = margin;
-  const startY = margin;
+  const headerHeight = 54;
+  const startY = topMargin;
 
   // Background banner
   doc.rect(startX, startY, contentWidth, headerHeight).fill('#0f172a');
@@ -633,93 +741,95 @@ async function generateClaimPdf(claim, res) {
   const companyName = String(claim.companyId?.name || claim.companyName || 'TRUCODE ERP HRMS').toUpperCase();
   doc
     .fillColor('#ffffff')
-    .fontSize(13)
+    .fontSize(12)
     .font('Helvetica-Bold')
-    .text(companyName, startX + 16, startY + 12, { width: 330, ellipsis: true });
+    .text(companyName, startX + 14, startY + 8, { width: 330, ellipsis: true });
 
   doc
     .fillColor('#94a3b8')
-    .fontSize(8.5)
+    .fontSize(8)
     .font('Helvetica')
-    .text('EXPENSE REIMBURSEMENT CLAIM VOUCHER', startX + 16, startY + 32, { width: 330 });
+    .text('EXPENSE REIMBURSEMENT CLAIM VOUCHER', startX + 14, startY + 24, { width: 330 });
 
   doc
     .fillColor('#cbd5e1')
-    .fontSize(8)
+    .fontSize(7.8)
     .font('Helvetica')
-    .text(`Voucher ID: ${claim.claimNumber || claim.claimId || claim._id}`, startX + 16, startY + 48, { width: 330, ellipsis: true });
+    .text(`Reference / Voucher ID: ${claim.claimNumber || claim.claimId || claim._id}`, startX + 14, startY + 37, { width: 330, ellipsis: true });
 
   // Status Badge on Right
   const badge = getStatusBadge(claim.status, claim.paymentStatus);
-  const badgeWidth = 120;
-  const badgeHeight = 22;
-  const badgeX = startX + contentWidth - badgeWidth - 16;
-  const badgeY = startY + 14;
+  const badgeWidth = 124;
+  const badgeHeight = 19;
+  const badgeX = startX + contentWidth - badgeWidth - 14;
+  const badgeY = startY + 9;
 
   doc.roundedRect(badgeX, badgeY, badgeWidth, badgeHeight, 4).fill(badge.bg);
   doc
     .fillColor(badge.textColor)
-    .fontSize(9)
+    .fontSize(8.5)
     .font('Helvetica-Bold')
-    .text(badge.text, badgeX, badgeY + 6, { width: badgeWidth, align: 'center' });
+    .text(badge.text, badgeX, badgeY + 5, { width: badgeWidth, align: 'center' });
 
   // Applied Date below badge
   const appliedDateStr = formatDateTime(claim.submittedAt || claim.createdAt);
   doc
     .fillColor('#94a3b8')
-    .fontSize(7.5)
+    .fontSize(7.2)
     .font('Helvetica')
-    .text(`Applied: ${appliedDateStr}`, badgeX - 40, startY + 46, { width: badgeWidth + 40, align: 'right' });
+    .text(`Applied: ${appliedDateStr}`, badgeX - 40, startY + 35, { width: badgeWidth + 40, align: 'right' });
 
-  doc.y = startY + headerHeight + 12;
+  doc.y = startY + headerHeight + 6;
 
   // ─────────────────────────────────────────────────────────────
   // 2. FINANCIAL SUMMARY METRIC BOXES
   // ─────────────────────────────────────────────────────────────
   const grandReq = claim.grandRequested !== undefined ? claim.grandRequested : (claim.requestedAmount || claim.amount || 0);
   const grandAllow = claim.grandAllowed !== undefined ? claim.grandAllowed : (claim.allowedAmount !== undefined ? claim.allowedAmount : grandReq);
+  const grandPolicyLim = Number(claim.grandPolicyLimit || claim.policyLimit || grandAllow);
   const grandExc = claim.grandExcess !== undefined ? claim.grandExcess : (claim.excessAmount || 0);
   const payAmt = claim.payableAmount !== undefined ? claim.payableAmount : grandAllow;
   const isPaid = ['PAID', 'DISBURSED', 'SETTLED'].includes(String(claim.status || '').toUpperCase()) || ['PAID', 'DISBURSED'].includes(String(claim.paymentStatus || '').toUpperCase());
   const paidAmt = claim.paidAmount || claim.disbursement?.amount || (isPaid ? payAmt : 0);
 
   const boxes = [
-    { label: 'TOTAL CLAIMED', value: formatINR(grandReq), color: '#0f172a', bg: '#f8fafc' },
-    { label: 'TOTAL ALLOWED', value: formatINR(grandAllow), color: '#059669', bg: '#f0fdf4' },
-    { label: 'EXCESS AMOUNT', value: formatINR(grandExc), color: grandExc > 0 ? '#dc2626' : '#64748b', bg: grandExc > 0 ? '#fff1f2' : '#f8fafc' },
-    { label: isPaid ? 'PAID AMOUNT' : 'NET PAYABLE', value: formatINR(isPaid ? paidAmt : payAmt), color: '#4338ca', bg: '#eef2ff' },
+    { label: 'TOTAL CLAIMED', value: formatINR(grandReq), color: '#0f172a', bg: '#f8fafc', border: '#e2e8f0' },
+    { label: 'POLICY LIMIT', value: formatINR(grandPolicyLim), color: '#334155', bg: '#f8fafc', border: '#e2e8f0' },
+    { label: 'TOTAL ALLOWED', value: formatINR(grandAllow), color: '#059669', bg: '#f0fdf4', border: '#bbf7d0' },
+    { label: 'EXCESS AMOUNT', value: formatINR(grandExc), color: grandExc > 0 ? '#dc2626' : '#64748b', bg: grandExc > 0 ? '#fff1f2' : '#f8fafc', border: grandExc > 0 ? '#fecdd3' : '#e2e8f0' },
+    { label: isPaid ? 'PAID AMOUNT' : 'NET PAYABLE', value: formatINR(isPaid ? paidAmt : payAmt), color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
   ];
 
-  const boxGap = 8;
+  const boxGap = 6;
   const boxWidth = (contentWidth - boxGap * (boxes.length - 1)) / boxes.length;
-  const boxHeight = 44;
+  const boxHeight = 34;
   const metricsY = doc.y;
 
   boxes.forEach((b, idx) => {
     const bx = startX + idx * (boxWidth + boxGap);
-    doc.roundedRect(bx, metricsY, boxWidth, boxHeight, 6).fillAndStroke(b.bg, '#e2e8f0');
+    doc.roundedRect(bx, metricsY, boxWidth, boxHeight, 5).fillAndStroke(b.bg, b.border || '#e2e8f0');
     doc
-      .fillColor('#64748b')
-      .fontSize(7)
+      .fillColor(b.label === 'EXCESS AMOUNT' && grandExc > 0 ? '#dc2626' : '#64748b')
+      .fontSize(6.5)
       .font('Helvetica-Bold')
-      .text(b.label, bx, metricsY + 8, { width: boxWidth, align: 'center' });
+      .text(b.label, bx, metricsY + 5, { width: boxWidth, align: 'center' });
 
-    doc.fontSize(10).font('Helvetica-Bold');
+    doc.fontSize(9).font('Helvetica-Bold');
     const textWidth = doc.widthOfString(b.value);
-    const iconSize = 9;
+    const iconSize = 8;
     const iconGap = 2;
     const totalW = iconSize + iconGap + textWidth;
     const contentStartX = bx + (boxWidth - totalW) / 2;
 
-    drawRupee(doc, contentStartX, metricsY + 23, iconSize, b.color);
+    drawRupee(doc, contentStartX, metricsY + 18, iconSize, b.color);
     doc
       .fillColor(b.color)
-      .fontSize(10)
+      .fontSize(9)
       .font('Helvetica-Bold')
-      .text(b.value, contentStartX + iconSize + iconGap, metricsY + 22, { lineBreak: false });
+      .text(b.value, contentStartX + iconSize + iconGap, metricsY + 17, { lineBreak: false });
   });
 
-  doc.y = metricsY + boxHeight + 12;
+  doc.y = metricsY + boxHeight + 5;
 
   // ─────────────────────────────────────────────────────────────
   // 3. APPLICANT & CLAIM DETAILS (DYNAMIC DUAL-CARD GRID)
@@ -738,15 +848,30 @@ async function generateClaimPdf(claim, res) {
 
   const claimType = (claim.claimType || claim.expenseType || 'EXPENSE').toUpperCase();
   const trip = claim.trip || {};
-  const claimMode = (claim.claimMode || (claim.fromDate ? 'LODGING' : 'NORMAL')).toUpperCase();
-  const isLodging = claimMode === 'LODGING';
+  const rawClaimMode = (claim.claimMode || (claim.fromDate ? 'LODGING' : 'NORMAL')).toUpperCase();
+  const isLodging = rawClaimMode === 'LODGING' || rawClaimMode === 'LOGGING' || claimType === 'LODGING' || claimType === 'LODGING_EXPENSE' || Boolean(claim.fromDate && claim.toDate);
+  const claimMode = isLodging ? 'LODGING' : (rawClaimMode || 'NORMAL');
+
+  const fromDt = claim.fromDate || trip.startDate || trip.fromDate || claim.entries?.[0]?.fromDate || rawEcList[0]?.items?.[0]?.fromDate || null;
+  const toDt = claim.toDate || trip.endDate || trip.toDate || claim.entries?.[0]?.toDate || rawEcList[0]?.items?.[0]?.toDate || null;
+  const singleDt = claim.claimDate || claim.expenseDate || claim.date || fromDt || toDt || claim.entries?.[0]?.date || rawEcList[0]?.items?.[0]?.date || claim.submittedAt || claim.createdAt || null;
+
+  let derivedStayDays = Number(claim.lodgingNights ?? claim.numberOfNights ?? claim.numberOfDays ?? claim.days ?? 0);
+  if (!derivedStayDays && claim.plainExplanation) {
+    const mDays = String(claim.plainExplanation).match(/for\s+(\d+)\s*(?:days?|nights?)/i);
+    if (mDays) derivedStayDays = parseInt(mDays[1], 10);
+  }
 
   let dateInfo = 'N/A';
-  if (isLodging && claim.fromDate && claim.toDate) {
-    const nights = claim.numberOfNights || 1;
-    dateInfo = `${formatDate(claim.fromDate)} to ${formatDate(claim.toDate)} (${nights} ${nights > 1 ? 'Nights' : 'Night'})`;
-  } else if (claim.claimDate || claim.expenseDate || claim.date) {
-    dateInfo = formatDate(claim.claimDate || claim.expenseDate || claim.date);
+  if (isLodging && fromDt && toDt) {
+    const nights = derivedStayDays || 1;
+    const fDays = claim.foodDays || (claim.includeFood ? nights + 1 : 0);
+    dateInfo = `${formatDate(fromDt)} to ${formatDate(toDt)} (${nights} ${nights === 1 ? 'Night' : 'Nights'}${claim.includeFood ? `, ${fDays} Food ${fDays === 1 ? 'Day' : 'Days'}` : ''})`;
+  } else if (isLodging && singleDt) {
+    const nights = derivedStayDays || 1;
+    dateInfo = `${formatDate(singleDt)} (${nights} ${nights === 1 ? 'Day / Night' : 'Days / Nights'})`;
+  } else if (singleDt) {
+    dateInfo = formatDate(singleDt);
   }
 
   const colWidth = (contentWidth - 12) / 2;
@@ -773,15 +898,26 @@ async function generateClaimPdf(claim, res) {
     (Array.isArray(claim.entries) && claim.entries[0]?.description && claim.entries[0].description.trim()) ||
     'N/A';
 
-  const stayTypeRaw = isLodging ? String(claim.stayType || rawEcList[0]?.items?.[0]?.calculationBreakdown?.stayType || '').toUpperCase() : '';
+  const stayTypeRaw = isLodging ? String(claim.stayType || rawEcList[0]?.items?.[0]?.calculationBreakdown?.stayType || 'IN_HOTEL').toUpperCase() : '';
   const relStayPct = claim.relativeStayPercent ?? rawEcList[0]?.items?.[0]?.calculationBreakdown?.relativeStayPercent;
-  const stayTypeDisplay = stayTypeRaw === 'WITH_RELATIVE'
-    ? `With Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}`
-    : (stayTypeRaw === 'IN_HOTEL' ? 'In Hotel' : '');
+  const stayTypeDisplay = isLodging
+    ? (stayTypeRaw === 'WITH_RELATIVE'
+      ? `At Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}`
+      : 'In Hotel')
+    : '';
+  const isVisitClaim = Boolean(
+    claim.visitType === 'VISIT' ||
+    claim.isVisit ||
+    (Array.isArray(claim.entries) && claim.entries.some((e) => e?.visitType === 'VISIT' || e?.isVisit)) ||
+    rawEcList.some((ec) => (ec.items || []).some((it) => it?.visitType === 'VISIT' || it?.isVisit)) ||
+    (Array.isArray(claim.serviceReports) && claim.serviceReports.length > 0)
+  );
+  const expenseTypeDisplay = claimType === claimMode ? claimType : `${claimType} (${claimMode})`;
 
   const rightFields = [
-    ['Expense Type:', `${claimType} (${claimMode})`],
-    ...(stayTypeDisplay ? [['Stay Type:', stayTypeDisplay]] : []),
+    ['Expense Type:', expenseTypeDisplay],
+    ...(isLodging && stayTypeDisplay ? [['Stay Type:', stayTypeDisplay]] : []),
+    ['Visit Option:', isVisitClaim ? '2. Service Call' : '1. Normal Travel'],
     ['Dates / Period:', dateInfo],
     ['Destination:', trip.destination ? `${trip.destination} (Class ${trip.destinationClass || 'C'})` : (claim.city || 'Local / In-City')],
     ['Customer:', resolvedCustomer],
@@ -790,63 +926,63 @@ async function generateClaimPdf(claim, res) {
 
   // Calculate required heights dynamically to prevent any text clipping or box overflowing
   const valueWidth = colWidth - 92;
-  doc.fontSize(8).font('Helvetica-Bold');
+  doc.fontSize(7.5).font('Helvetica-Bold');
 
   let leftRowsHeight = 0;
   const leftMeasurements = leftFields.map(([lbl, val]) => {
-    const vH = Math.max(12, doc.heightOfString(String(val), { width: valueWidth }));
-    const rH = Math.min(26, vH + 3);
+    const vH = Math.max(9.5, doc.heightOfString(String(val), { width: valueWidth }));
+    const rH = Math.min(20, vH + 1.5);
     leftRowsHeight += rH;
     return { lbl, val: String(val), rH };
   });
 
   let rightRowsHeight = 0;
   const rightMeasurements = rightFields.map(([lbl, val]) => {
-    const vH = Math.max(12, doc.heightOfString(String(val), { width: valueWidth }));
-    const rH = Math.min(26, vH + 3);
+    const vH = Math.max(9.5, doc.heightOfString(String(val), { width: valueWidth }));
+    const rH = Math.min(20, vH + 1.5);
     rightRowsHeight += rH;
     return { lbl, val: String(val), rH };
   });
 
   const cardContentHeight = Math.max(leftRowsHeight, rightRowsHeight);
-  const cardTotalHeight = 24 + cardContentHeight + 10;
+  const cardTotalHeight = 18 + cardContentHeight + 4;
 
   ensureSpace(cardTotalHeight);
 
-  // Left Box: Applicant Info
-  doc.roundedRect(startX, cardY, colWidth, cardTotalHeight, 6).fillAndStroke('#ffffff', '#e2e8f0');
-  doc.rect(startX, cardY, colWidth, 22).fill('#f1f5f9');
+  // Left Box: Applicant & Dates Info
+  doc.roundedRect(startX, cardY, colWidth, cardTotalHeight, 5).fillAndStroke('#ffffff', '#e2e8f0');
+  doc.rect(startX, cardY, colWidth, 16).fill('#f1f5f9');
   doc
     .fillColor('#334155')
-    .fontSize(8)
+    .fontSize(7.5)
     .font('Helvetica-Bold')
-    .text('EMPLOYEE / CLAIMANT INFORMATION', startX + 10, cardY + 7);
+    .text(isLodging ? '1. LODGING STAY DATES & CLAIMANT INFO' : '1. CLAIM DATE & CLAIMANT INFO', startX + 8, cardY + 4.5);
 
-  let ly = cardY + 28;
+  let ly = cardY + 19;
   leftMeasurements.forEach(({ lbl, val, rH }) => {
-    doc.fillColor('#64748b').fontSize(7.5).font('Helvetica').text(lbl, startX + 10, ly, { width: 72 });
-    doc.fillColor('#0f172a').fontSize(7.5).font('Helvetica-Bold').text(val, startX + 84, ly, { width: valueWidth, ellipsis: true });
+    doc.fillColor('#64748b').fontSize(7.2).font('Helvetica').text(lbl, startX + 8, ly, { width: 72 });
+    doc.fillColor('#0f172a').fontSize(7.2).font('Helvetica-Bold').text(val, startX + 82, ly, { width: valueWidth, ellipsis: true });
     ly += rH;
   });
 
   // Right Box: Claim & Trip Details
   const rightX = startX + colWidth + 12;
-  doc.roundedRect(rightX, cardY, colWidth, cardTotalHeight, 6).fillAndStroke('#ffffff', '#e2e8f0');
-  doc.rect(rightX, cardY, colWidth, 22).fill('#f1f5f9');
+  doc.roundedRect(rightX, cardY, colWidth, cardTotalHeight, 5).fillAndStroke('#ffffff', '#e2e8f0');
+  doc.rect(rightX, cardY, colWidth, 16).fill('#f1f5f9');
   doc
     .fillColor('#334155')
-    .fontSize(8)
+    .fontSize(7.5)
     .font('Helvetica-Bold')
-    .text('CLAIM & JOURNEY INFORMATION', rightX + 10, cardY + 7);
+    .text('3. CUSTOMER & DESTINATION (CLAIM & JOURNEY)', rightX + 8, cardY + 4.5);
 
-  let ry = cardY + 28;
+  let ry = cardY + 19;
   rightMeasurements.forEach(({ lbl, val, rH }) => {
-    doc.fillColor('#64748b').fontSize(7.5).font('Helvetica').text(lbl, rightX + 10, ry, { width: 72 });
-    doc.fillColor('#0f172a').fontSize(7.5).font('Helvetica-Bold').text(val, rightX + 84, ry, { width: valueWidth, ellipsis: true });
+    doc.fillColor('#64748b').fontSize(7.2).font('Helvetica').text(lbl, rightX + 8, ry, { width: 72 });
+    doc.fillColor('#0f172a').fontSize(7.2).font('Helvetica-Bold').text(val, rightX + 82, ry, { width: valueWidth, ellipsis: true });
     ry += rH;
   });
 
-  doc.y = cardY + cardTotalHeight + 10;
+  doc.y = cardY + cardTotalHeight + 5;
 
   // ─────────────────────────────────────────────────────────────
   // 3B. ACCOMPANIED / CO-CLAIMANT EMPLOYEES & INDIVIDUAL LIMITS
@@ -861,109 +997,142 @@ async function generateClaimPdf(claim, res) {
         const d2 = new Date(claim.toDate);
         const diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
         if (diff > 0) days = diff;
-      } catch (_) {}
+      } catch (_) { }
     }
     if (!days) days = 1;
 
     const empBreakdown = getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging);
-    const rowH = 22;
-    const headerH = 22;
-    const colHeadH = 18;
-    const accCardH = headerH + colHeadH + (empBreakdown.length * rowH) + 6;
+    const headerH = 16;
+    const colHeadH = 15;
 
-    ensureSpace(accCardH + 10);
-    const accY = doc.y;
-
-    // Card border & background
-    doc.roundedRect(startX, accY, contentWidth, accCardH, 6).fillAndStroke('#ffffff', '#cbd5e1');
-
-    // Title banner
-    doc.rect(startX, accY, contentWidth, headerH).fill('#f8fafc');
-    doc
-      .fillColor('#1e293b')
-      .fontSize(8)
-      .font('Helvetica-Bold')
-      .text(
-        `ACCOMPANIED EMPLOYEES & INDIVIDUAL POLICY LIMITS (${empBreakdown.length} EMPLOYEES)`,
-        startX + 10,
-        accY + 7
-      );
-
-    // Column headers
-    const colHeadY = accY + headerH;
-    doc.rect(startX, colHeadY, contentWidth, colHeadH).fill('#f1f5f9');
-
-    // Total table width: 507 pt, leaving symmetrical 8 pt padding on left and right inside contentWidth (523.28 pt)
+    // Columns span exact contentWidth (523.28 pt) with vertical grid dividers & 5pt inner cell padding
     const accCols = isLodging
       ? [
-          { label: 'ROLE / SL', w: 65, align: 'left' },
-          { label: 'EMPLOYEE NAME', w: 128, align: 'left' },
-          { label: 'DEPARTMENT / DESIGNATION', w: 112, align: 'left' },
-          { label: 'DAILY LIMIT', w: 101, align: 'right' },
-          { label: 'STAY LIMIT', w: 101, align: 'right' },
-        ]
+        { label: 'ROLE / SL', w: 68, align: 'left' },
+        { label: 'EMPLOYEE NAME', w: 126, align: 'left' },
+        { label: 'DEPARTMENT / DESIGNATION', w: 173, align: 'left' },
+        { label: 'DAILY LIMIT', w: 74, align: 'right' },
+        { label: 'STAY LIMIT', w: contentWidth - 441, align: 'right' },
+      ]
       : [
-          { label: 'ROLE / SL', w: 75, align: 'left' },
-          { label: 'EMPLOYEE NAME', w: 150, align: 'left' },
-          { label: 'DEPARTMENT / DESIGNATION', w: 142, align: 'left' },
-          { label: 'INDIVIDUAL DAILY LIMIT', w: 140, align: 'right' },
-        ];
+        { label: 'ROLE / SL', w: 72, align: 'left' },
+        { label: 'EMPLOYEE NAME', w: 145, align: 'left' },
+        { label: 'DEPARTMENT / DESIGNATION', w: 194, align: 'left' },
+        { label: 'INDIVIDUAL DAILY LIMIT', w: contentWidth - 411, align: 'right' },
+      ];
 
-    let hx = startX + 8;
-    doc.fillColor('#475569').fontSize(7).font('Helvetica-Bold');
-    accCols.forEach((c) => {
-      doc.text(c.label, hx + (c.align === 'right' ? 0 : 2), colHeadY + 5, { width: c.w - 4, align: c.align });
-      hx += c.w;
+    // Pre-measure each employee row height dynamically so wrapped text never collides or overflows
+    const measuredEmpRows = empBreakdown.map((emp) => {
+      const nameText = emp.code ? `${emp.name} [${emp.code}]` : emp.name;
+      const deptDesig = [emp.desig, emp.dept].filter(Boolean).join(' • ') || 'N/A';
+
+      doc.fontSize(6.8).font('Helvetica-Bold');
+      const hRole = doc.heightOfString(String(emp.roleLabel || ''), { width: accCols[0].w - 10 });
+
+      doc.fontSize(7.2).font('Helvetica-Bold');
+      const hName = doc.heightOfString(String(nameText || ''), { width: accCols[1].w - 10 });
+
+      doc.fontSize(6.8).font('Helvetica');
+      const hDept = doc.heightOfString(String(deptDesig || ''), { width: accCols[2].w - 10 });
+
+      doc.fontSize(7.2).font('Helvetica-Bold');
+      const hDaily = doc.heightOfString(String(emp.dailyLimitStr || ''), { width: accCols[3].w - 10 });
+      const hStay = isLodging
+        ? doc.heightOfString(String(emp.totalLimitStr || 'N/A'), { width: accCols[4].w - 10 })
+        : 0;
+
+      const rowH = Math.max(17, Math.ceil(Math.max(hRole, hName, hDept, hDaily, hStay)) + 7);
+      return { emp, nameText, deptDesig, rowH };
     });
 
-    // Rows
-    let curRowY = colHeadY + colHeadH;
-    empBreakdown.forEach((emp, eIdx) => {
-      const isEven = eIdx % 2 === 0;
-      if (!isEven) {
-        doc.rect(startX, curRowY, contentWidth, rowH).fill('#f8fafc');
-      }
-      doc.rect(startX, curRowY + rowH - 1, contentWidth, 1).fill('#f1f5f9');
+    const firstRowH = measuredEmpRows[0]?.rowH || 17;
+    ensureSpace(headerH + colHeadH + firstRowH + 6);
 
-      let rx = startX + 8;
-      // Col 1: Role
+    const drawSec2Header = (topY, isContinuation = false) => {
+      // Title banner
+      doc.rect(startX, topY, contentWidth, headerH).fillAndStroke('#f8fafc', '#cbd5e1');
+      doc
+        .fillColor('#1e293b')
+        .fontSize(7.5)
+        .font('Helvetica-Bold')
+        .text(
+          `2. SELECTED EMPLOYEES — ACCOMPANIED EMPLOYEES & INDIVIDUAL POLICY LIMITS (${empBreakdown.length} EMPLOYEES)${isContinuation ? ' (CONT.)' : ''}`,
+          startX + 8,
+          topY + 4.5,
+          { width: contentWidth - 16, lineBreak: false }
+        );
+
+      // Column headers
+      const cHeadY = topY + headerH;
+      doc.rect(startX, cHeadY, contentWidth, colHeadH).fillAndStroke('#f1f5f9', '#cbd5e1');
+
+      let hx = startX;
+      doc.fillColor('#334155').fontSize(6.8).font('Helvetica-Bold');
+      accCols.forEach((c, cIdx) => {
+        if (cIdx > 0) {
+          doc.save().moveTo(hx, cHeadY).lineTo(hx, cHeadY + colHeadH).lineWidth(0.5).strokeColor('#cbd5e1').stroke().restore();
+        }
+        doc.text(c.label, hx + 5, cHeadY + 4, { width: c.w - 10, align: c.align, lineBreak: false });
+        hx += c.w;
+      });
+
+      return cHeadY + colHeadH;
+    };
+
+    let curRowY = drawSec2Header(doc.y, false);
+
+    measuredEmpRows.forEach(({ emp, nameText, deptDesig, rowH }, eIdx) => {
+      if (curRowY + rowH > pageBottomLimit) {
+        doc.y = curRowY;
+        ensureSpace(headerH + colHeadH + rowH + 6);
+        curRowY = drawSec2Header(doc.y, true);
+      }
+
+      const bg = eIdx % 2 === 0 ? '#ffffff' : '#f8fafc';
+      doc.rect(startX, curRowY, contentWidth, rowH).fillAndStroke(bg, '#cbd5e1');
+
+      // Draw vertical column dividers for clean cell separation
+      let divX = startX;
+      for (let cIdx = 0; cIdx < accCols.length - 1; cIdx++) {
+        divX += accCols[cIdx].w;
+        doc.save().moveTo(divX, curRowY).lineTo(divX, curRowY + rowH).lineWidth(0.5).strokeColor('#e2e8f0').stroke().restore();
+      }
+
+      let rx = startX;
+      // Col 1: Role / SL
       const roleColor = emp.isPrimary ? '#4338ca' : '#64748b';
-      doc.fillColor(roleColor).fontSize(7).font('Helvetica-Bold');
-      doc.text(emp.roleLabel, rx + 2, curRowY + 6, { width: accCols[0].w - 4, ellipsis: true });
+      doc.fillColor(roleColor).fontSize(6.8).font('Helvetica-Bold');
+      doc.text(emp.roleLabel, rx + 5, curRowY + 4.5, { width: accCols[0].w - 10 });
       rx += accCols[0].w;
 
-      // Col 2: Name
-      const nameText = emp.name;
-      doc.fillColor('#0f172a').fontSize(7.5).font('Helvetica-Bold');
-      doc.text(nameText, rx + 2, curRowY + 6, { width: accCols[1].w - 4, ellipsis: true });
+      // Col 2: Employee Name & Code
+      doc.fillColor('#0f172a').fontSize(7.2).font('Helvetica-Bold');
+      doc.text(nameText, rx + 5, curRowY + 4.5, { width: accCols[1].w - 10 });
       rx += accCols[1].w;
 
-      // Col 3: Dept / Desig
-      const deptDesig = [emp.dept, emp.desig].filter(Boolean).join(' • ') || 'N/A';
-      doc.fillColor('#475569').fontSize(7).font('Helvetica');
-      doc.text(deptDesig, rx + 2, curRowY + 6, { width: accCols[2].w - 4, ellipsis: true });
+      // Col 3: Department / Designation
+      doc.fillColor('#334155').fontSize(6.8).font('Helvetica');
+      doc.text(deptDesig, rx + 5, curRowY + 4.5, { width: accCols[2].w - 10 });
       rx += accCols[2].w;
 
       // Col 4: Daily Limit
-      doc.fillColor('#059669').fontSize(7.5).font('Helvetica-Bold');
-      doc.text(emp.dailyLimitStr, rx, curRowY + 6, { width: accCols[3].w - 4, align: 'right', ellipsis: true });
+      doc.fillColor('#059669').fontSize(7.2).font('Helvetica-Bold');
+      doc.text(emp.dailyLimitStr, rx + 5, curRowY + 4.5, { width: accCols[3].w - 10, align: 'right' });
       rx += accCols[3].w;
 
-      // Col 5: Total Limit (Lodging only)
+      // Col 5: Stay Limit (Lodging only)
       if (isLodging) {
-        doc.fillColor('#4338ca').fontSize(7.5).font('Helvetica-Bold');
-        doc.text(emp.totalLimitStr || 'N/A', rx, curRowY + 6, { width: accCols[4].w - 4, align: 'right', ellipsis: true });
+        doc.fillColor('#4338ca').fontSize(7.2).font('Helvetica-Bold');
+        doc.text(emp.totalLimitStr || 'N/A', rx + 5, curRowY + 4.5, { width: accCols[4].w - 10, align: 'right' });
       }
 
       curRowY += rowH;
     });
 
-    doc.y = accY + accCardH + 10;
+    doc.y = curRowY + 5;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // 4. CALCULATION BREAKDOWN & POLICY EXPLANATION
-  // ─────────────────────────────────────────────────────────────
+  // Prepare explanation text for Section 6 (rendered after Section 5 & Approvals)
   const ecList = Array.isArray(claim.employeeClaims) ? claim.employeeClaims : [];
   const entriesList = Array.isArray(claim.entries) ? claim.entries : [];
 
@@ -983,7 +1152,7 @@ async function generateClaimPdf(claim, res) {
     if (rawExp && (!rawExp.includes('claimed bill is') || rawExp.includes(String(Math.round(grandReq))))) {
       explanation = rawExp;
     } else if (stayTypeRaw === 'WITH_RELATIVE') {
-      explanation = `Stay Type: With Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}. No hotel bill required. Allowed amount of Rs. ${formatINR(grandAllow)} is auto-calculated per policy.`;
+      explanation = `Stay Type: At Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}. No hotel bill required. Allowed amount of Rs. ${formatINR(grandAllow)} is auto-calculated per policy.`;
     } else if (grandExc > 0) {
       explanation = `Claimed bill is Rs. ${formatINR(grandReq)}. Policy entitlement limit is Rs. ${formatINR(grandAllow)}. Excess Rs. ${formatINR(grandExc)} deducted per company entitlement policy.`;
     } else {
@@ -997,26 +1166,6 @@ async function generateClaimPdf(claim, res) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  doc.fontSize(8).font('Helvetica');
-  const expTextHeight = Math.min(60, doc.heightOfString(explanation, { width: contentWidth - 20 }));
-  const expBoxHeight = 18 + expTextHeight + 8;
-
-  ensureSpace(expBoxHeight);
-  const expBoxY = doc.y;
-  doc.roundedRect(startX, expBoxY, contentWidth, expBoxHeight, 6).fillAndStroke('#f8fafc', '#cbd5e1');
-  doc
-    .fillColor('#4338ca')
-    .fontSize(7.5)
-    .font('Helvetica-Bold')
-    .text('CALCULATION BREAKDOWN & POLICY COMPLIANCE:', startX + 10, expBoxY + 6);
-  doc
-    .fillColor('#334155')
-    .fontSize(8)
-    .font('Helvetica')
-    .text(explanation, startX + 10, expBoxY + 18, { width: contentWidth - 20, lineGap: 2 });
-
-  doc.y = expBoxY + expBoxHeight + 10;
-
   // ─────────────────────────────────────────────────────────────
   // 5. ITEMIZED ENTRIES / EMPLOYEE ALLOCATIONS TABLE
   // ─────────────────────────────────────────────────────────────
@@ -1027,6 +1176,7 @@ async function generateClaimPdf(claim, res) {
     tableRows = entriesList.map((entry, idx) => {
       const hasEcItems = ecList.some((ec) => Array.isArray(ec.items) && ec.items.length > idx);
       const ecAllowed = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) : null;
+      const ecPolicy = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.policyLimit ?? ec.items?.[idx]?.allowedAmount) || 0), 0) : null;
       const ecExcess = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0) : null;
       const ecClaimed = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0) : null;
 
@@ -1049,12 +1199,20 @@ async function generateClaimPdf(claim, res) {
         excess = grandExc === 0 ? 0 : 0;
       }
 
+      const policyLimit = Number(entry.policyLimit) || (ecPolicy !== null && ecPolicy > 0 ? ecPolicy : allowed);
+
       const firstEcItem = ecList[0]?.items?.[idx];
-      const isConv = (entry.expenseType || firstEcItem?.expenseType || claimType).toUpperCase() === 'CONVEYANCE';
+      const itemType = (entry.expenseType || firstEcItem?.expenseType || claimType).toUpperCase();
+      const isConv = itemType === 'CONVEYANCE';
       const isVisit = entry.visitType === 'VISIT' || firstEcItem?.visitType === 'VISIT' || entry.isVisit || firstEcItem?.isVisit;
       const visitTag = isConv ? (isVisit ? ' [Visit]' : ' [No Visit]') : '';
-      const stayTag = (isLodging && stayTypeDisplay)
-        ? ` [${stayTypeRaw === 'WITH_RELATIVE' ? `Stay with Relative${relStayPct !== undefined && relStayPct !== null ? ` - ${relStayPct}% Allowance` : ''}` : 'Stay in Hotel'}]`
+      const stayTag = (isLodging && itemType === 'LODGING' && stayTypeDisplay)
+        ? ` [${stayTypeRaw === 'WITH_RELATIVE' ? `Stay at Relative${relStayPct !== undefined && relStayPct !== null ? ` - ${relStayPct}% Allowance` : ''}` : 'Stay in Hotel'}]`
+        : '';
+      const modeName = entry.travelModeName || firstEcItem?.travelModeName || entry.mode || '';
+      const subName = entry.travelSubtypeName || firstEcItem?.travelSubtypeName || '';
+      const travelPrefix = itemType === 'TRAVEL' && (modeName || subName)
+        ? `${[modeName, subName].filter(Boolean).join(' - ')}${entry.distanceKm ? ` (${entry.distanceKm} km @ Rs.${entry.ratePerKm || 0}/km)` : ''}: `
         : '';
       const baseDesc =
         entry.description ||
@@ -1063,15 +1221,27 @@ async function generateClaimPdf(claim, res) {
         firstEcItem?.description ||
         firstEcItem?.remark ||
         entry.otherSubType ||
-        (entry.distanceKm ? `${entry.distanceKm} km (${entry.vehicle || 'Vehicle'})` : 'Expense item');
-      const hasStayText = /with relative|in hotel/i.test(String(baseDesc));
-      const details = `${baseDesc}${visitTag}${hasStayText ? '' : stayTag}`;
+        (entry.distanceKm ? `${entry.distanceKm} km (${entry.vehicle || modeName || 'Vehicle'})` : 'Expense item');
+      const materialName = entry.materialName || firstEcItem?.materialName || '';
+      const barcode = entry.barcodeNumber || firstEcItem?.barcodeNumber || '';
+      const qty = entry.quantity || firstEcItem?.quantity || '';
+      const isStockItem = itemType === 'STOCK_PURCHASE'
+        || (itemType === 'OTHER' && String(entry.otherSubType || firstEcItem?.otherSubType || '').toUpperCase() === 'PURCHASE')
+        || Boolean(materialName || barcode);
+      const stockTag = isStockItem
+        ? ` [${materialName ? `Material: ${materialName}, ` : ''}Barcode: ${barcode || 'N/A'}${qty ? `, Qty: ${qty}` : ''}]`
+        : '';
+      const hasStayText = /at relative|in hotel/i.test(String(baseDesc));
+      const hasModeText = modeName && String(baseDesc).toLowerCase().includes(String(modeName).toLowerCase());
+      const hasBarcodeText = barcode && String(baseDesc).includes(String(barcode));
+      const details = `${hasModeText ? '' : travelPrefix}${baseDesc}${hasBarcodeText ? '' : stockTag}${visitTag}${hasStayText ? '' : stayTag}`;
 
       return {
         sn: idx + 1,
         type: (entry.expenseType || firstEcItem?.expenseType || claimType).toUpperCase(),
         details,
         claimed,
+        policyLimit,
         allowed,
         excess,
       };
@@ -1082,22 +1252,26 @@ async function generateClaimPdf(claim, res) {
       const items = ec.items || [];
       if (items.length > 0) {
         items.forEach((it, itIdx) => {
+          const alw = Number(it.allowedAmount) || 0;
           tableRows.push({
             sn: `${ecIdx + 1}.${itIdx + 1}`,
             type: (it.expenseType || claimType).toUpperCase(),
             details: `${eName} - ${it.description || it.expenseTypeName || 'Stay / Travel'}`,
             claimed: Number(it.requestedAmount) || 0,
-            allowed: Number(it.allowedAmount) || 0,
+            policyLimit: Number(it.policyLimit || alw),
+            allowed: alw,
             excess: Number(it.excessAmount) || 0,
           });
         });
       } else {
+        const alw = Number(ec.allowedTotal) || 0;
         tableRows.push({
           sn: ecIdx + 1,
           type: claimType,
           details: `${eName} (Entitlement Share)`,
           claimed: Number(ec.requestedTotal) || 0,
-          allowed: Number(ec.allowedTotal) || 0,
+          policyLimit: alw,
+          allowed: alw,
           excess: Number(ec.excessTotal) || 0,
         });
       }
@@ -1110,101 +1284,190 @@ async function generateClaimPdf(claim, res) {
       type: claimType,
       details: resolvedPurpose !== 'N/A' ? resolvedPurpose : (trip.purpose || claim.remark || 'Claim Expense Amount'),
       claimed: grandReq,
+      policyLimit: grandPolicyLim,
       allowed: grandAllow,
       excess: grandExc,
     });
   }
 
-  ensureSpace(60);
+  // Group categories for Level 2 summary strip
+  const catCountsMap = new Map();
+  tableRows.forEach((r) => {
+    const k = r.type === 'LODGING' || r.type === 'LOGGING' ? 'Accommodation Claim' : `${r.type} Claim`;
+    catCountsMap.set(k, (catCountsMap.get(k) || 0) + 1);
+  });
+  const catSummaryStr = Array.from(catCountsMap.entries())
+    .map(([k, cnt]) => `${k} (${cnt} ${cnt === 1 ? 'entry' : 'entries'})`)
+    .join(', ');
 
+  // Columns total exact contentWidth (523.28 pt) with 5pt horizontal cell padding
+  const colW = {
+    sn: 24,
+    type: 68,
+    details: contentWidth - 368,
+    claimed: 69,
+    policyLimit: 69,
+    allowed: 69,
+    excess: 69,
+  };
+  const colKeys = ['sn', 'type', 'details', 'claimed', 'policyLimit', 'allowed', 'excess'];
+
+  const drawSec4TableHeader = (topY) => {
+    doc.rect(startX, topY, contentWidth, 16).fillAndStroke('#0f172a', '#0f172a');
+    doc.fillColor('#ffffff').fontSize(6.8).font('Helvetica-Bold');
+
+    const headers = [
+      { label: '#', w: colW.sn, align: 'center' },
+      { label: 'CATEGORY', w: colW.type, align: 'left' },
+      { label: 'DESCRIPTION / DETAILS', w: colW.details, align: 'left' },
+      { label: 'CLAIMED', w: colW.claimed, align: 'right' },
+      { label: 'POLICY LIMIT', w: colW.policyLimit, align: 'right' },
+      { label: 'ALLOWED', w: colW.allowed, align: 'right' },
+      { label: 'EXCESS', w: colW.excess, align: 'right' },
+    ];
+
+    let tx = startX;
+    headers.forEach((h, hIdx) => {
+      if (hIdx > 0) {
+        doc.save().moveTo(tx, topY).lineTo(tx, topY + 16).lineWidth(0.5).strokeColor('#334155').stroke().restore();
+      }
+      doc.text(h.label, tx + 4, topY + 4.5, { width: h.w - 8, align: h.align, lineBreak: false });
+      tx += h.w;
+    });
+
+    return topY + 16;
+  };
+
+  ensureSpace(56);
+
+  const sec4HeaderY = doc.y;
+  doc.rect(startX, sec4HeaderY, contentWidth, 16).fillAndStroke('#f8fafc', '#cbd5e1');
   doc
     .fillColor('#0f172a')
-    .fontSize(8.5)
+    .fontSize(7.5)
     .font('Helvetica-Bold')
-    .text('EXPENSE CLAIM BREAKDOWN & LINE ITEMS', startX, doc.y);
+    .text('4. EXPENSE DETAILS — EXPENSE CLAIM BREAKDOWN & LINE ITEMS', startX + 8, sec4HeaderY + 4.5, { lineBreak: false });
+  doc
+    .fillColor('#4338ca')
+    .fontSize(6.8)
+    .font('Helvetica-Bold')
+    .text(`Claim Categories (${catCountsMap.size}): ${catSummaryStr}`, startX + 268, sec4HeaderY + 4.5, {
+      width: contentWidth - 276,
+      align: 'right',
+      lineBreak: false,
+      ellipsis: true,
+    });
 
-  doc.y += 4;
-
-  const tableHeaderY = doc.y;
-  // Columns total 523pt = contentWidth
-  const colW = { sn: 26, type: 85, details: 205, claimed: 65, allowed: 65, excess: 77 };
-  doc.rect(startX, tableHeaderY, contentWidth, 20).fill('#0f172a');
-
-  doc.fillColor('#ffffff').fontSize(7.5).font('Helvetica-Bold');
-  let tx = startX;
-  doc.text('#', tx + 2, tableHeaderY + 6, { width: colW.sn, align: 'center' });
-  tx += colW.sn;
-  doc.text('CATEGORY', tx + 4, tableHeaderY + 6, { width: colW.type });
-  tx += colW.type;
-  doc.text('DESCRIPTION / DETAILS', tx + 4, tableHeaderY + 6, { width: colW.details });
-  tx += colW.details;
-  doc.text('CLAIMED', tx, tableHeaderY + 6, { width: colW.claimed, align: 'right' });
-  tx += colW.claimed;
-  doc.text('ALLOWED', tx, tableHeaderY + 6, { width: colW.allowed, align: 'right' });
-  tx += colW.allowed;
-  doc.text('EXCESS', tx, tableHeaderY + 6, { width: colW.excess - 6, align: 'right' });
-
-  let rowY = tableHeaderY + 20;
+  let rowY = drawSec4TableHeader(sec4HeaderY + 16);
 
   tableRows.forEach((row, rIdx) => {
-    doc.fontSize(7.5).font('Helvetica');
-    const descHeight = Math.max(12, doc.heightOfString(String(row.details), { width: colW.details - 8 }));
-    const rowHeight = Math.max(18, Math.min(32, descHeight + 6));
+    doc.fontSize(7).font('Helvetica-Bold');
+    const typeHeight = doc.heightOfString(String(row.type || ''), { width: colW.type - 10 });
+    doc.fontSize(7.2).font('Helvetica');
+    const descHeight = Math.max(10, doc.heightOfString(String(row.details || ''), { width: colW.details - 10 }));
+    const rowHeight = Math.max(16, Math.ceil(Math.max(typeHeight, descHeight)) + 6);
 
-    ensureSpace(rowHeight + 4);
-    if (doc.y > rowY) rowY = doc.y;
+    if (rowY + rowHeight > pageBottomLimit) {
+      doc.y = rowY;
+      ensureSpace(16 + rowHeight + 6);
+      rowY = drawSec4TableHeader(doc.y);
+    }
 
     const bg = rIdx % 2 === 0 ? '#ffffff' : '#f8fafc';
-    doc.rect(startX, rowY, contentWidth, rowHeight).fillAndStroke(bg, '#f1f5f9');
+    doc.rect(startX, rowY, contentWidth, rowHeight).fillAndStroke(bg, '#cbd5e1');
+
+    // Vertical column dividers
+    let divX = startX;
+    for (let cIdx = 0; cIdx < colKeys.length - 1; cIdx++) {
+      divX += colW[colKeys[cIdx]];
+      doc.save().moveTo(divX, rowY).lineTo(divX, rowY + rowHeight).lineWidth(0.5).strokeColor('#e2e8f0').stroke().restore();
+    }
 
     let rx = startX;
-    doc.fillColor('#334155').fontSize(7.5).font('Helvetica');
-    doc.text(String(row.sn), rx + 2, rowY + 5, { width: colW.sn, align: 'center' });
+    doc.fillColor('#334155').fontSize(7.2).font('Helvetica');
+    doc.text(String(row.sn), rx + 3, rowY + 4, { width: colW.sn - 6, align: 'center', lineBreak: false });
     rx += colW.sn;
 
-    doc.font('Helvetica-Bold').text(row.type, rx + 4, rowY + 5, { width: colW.type, ellipsis: true });
+    doc.fillColor('#0f172a').fontSize(7).font('Helvetica-Bold').text(String(row.type || ''), rx + 5, rowY + 4, { width: colW.type - 10 });
     rx += colW.type;
 
-    doc.font('Helvetica').text(row.details, rx + 4, rowY + 5, { width: colW.details - 6, ellipsis: true });
+    doc.fillColor('#334155').fontSize(7.2).font('Helvetica').text(String(row.details || ''), rx + 5, rowY + 4, { width: colW.details - 10 });
     rx += colW.details;
 
-    // Claimed amount with Rupee icon
-    drawAmountWithRupee(doc, rx, rowY + 5, colW.claimed, row.claimed, '#334155', 'right', 7.5);
+    // Claimed amount
+    doc.fillColor('#0f172a').fontSize(7).font('Helvetica-Bold');
+    doc.text(`Rs. ${formatINR(row.claimed)}`, rx + 4, rowY + 4, { width: colW.claimed - 8, align: 'right', lineBreak: false });
     rx += colW.claimed;
 
-    // Allowed amount with Rupee icon
-    drawAmountWithRupee(doc, rx, rowY + 5, colW.allowed, row.allowed, '#059669', 'right', 7.5);
+    // Policy Limit amount
+    const rowPolLim = row.policyLimit !== undefined ? row.policyLimit : row.allowed;
+    doc.fillColor('#475569').fontSize(7).font('Helvetica-Bold');
+    doc.text(`Rs. ${formatINR(rowPolLim)}`, rx + 4, rowY + 4, { width: colW.policyLimit - 8, align: 'right', lineBreak: false });
+    rx += colW.policyLimit;
+
+    // Allowed amount
+    doc.fillColor('#059669').fontSize(7).font('Helvetica-Bold');
+    doc.text(`Rs. ${formatINR(row.allowed)}`, rx + 4, rowY + 4, { width: colW.allowed - 8, align: 'right', lineBreak: false });
     rx += colW.allowed;
 
-    // Excess amount with Rupee icon
-    drawAmountWithRupee(doc, rx, rowY + 5, colW.excess - 6, row.excess, row.excess > 0 ? '#dc2626' : '#64748b', 'right', 7.5);
+    // Excess amount (Red when excess > 0)
+    doc.fillColor(row.excess > 0 ? '#dc2626' : '#64748b').fontSize(7).font('Helvetica-Bold');
+    doc.text(`Rs. ${formatINR(row.excess)}`, rx + 4, rowY + 4, { width: colW.excess - 8, align: 'right', lineBreak: false });
 
     rowY += rowHeight;
   });
 
-  // Table Total Row
-  ensureSpace(24);
-  if (doc.y > rowY) rowY = doc.y;
+  // Table Total Row (Total Claim Amount — matching Claim Details UI)
+  if (rowY + 20 > pageBottomLimit) {
+    doc.y = rowY;
+    ensureSpace(22);
+    rowY = doc.y;
+  }
 
-  doc.rect(startX, rowY, contentWidth, 20).fillAndStroke('#e2e8f0', '#cbd5e1');
-  doc.fillColor('#0f172a').fontSize(8).font('Helvetica-Bold');
-  doc.text('TOTAL AUDITED VALUES:', startX + 10, rowY + 6, { width: colW.sn + colW.type + colW.details - 10 });
+  const totalRowH = 18;
+  doc.rect(startX, rowY, contentWidth, totalRowH).fillAndStroke('#e2e8f0', '#cbd5e1');
+
+  // Vertical column dividers in Total Row for numeric columns
+  let totDivX = startX + colW.sn + colW.type + colW.details;
+  [colW.claimed, colW.policyLimit, colW.allowed, colW.excess].forEach((w) => {
+    doc.save().moveTo(totDivX, rowY).lineTo(totDivX, rowY + totalRowH).lineWidth(0.5).strokeColor('#cbd5e1').stroke().restore();
+    totDivX += w;
+  });
+
+  doc.fillColor('#0f172a').fontSize(7.4).font('Helvetica-Bold');
+  doc.text(`Total Claim Amount (Payable: Rs. ${formatINR(payAmt)}):`, startX + 8, rowY + 5, {
+    width: colW.sn + colW.type + colW.details - 12,
+    lineBreak: false,
+  });
 
   let rx = startX + colW.sn + colW.type + colW.details;
-  drawAmountWithRupee(doc, rx, rowY + 6, colW.claimed, grandReq, '#0f172a', 'right', 8);
+  doc.fillColor('#0f172a').fontSize(7.2).font('Helvetica-Bold');
+  doc.text(`Rs. ${formatINR(grandReq)}`, rx + 4, rowY + 5, { width: colW.claimed - 8, align: 'right', lineBreak: false });
   rx += colW.claimed;
-  drawAmountWithRupee(doc, rx, rowY + 6, colW.allowed, grandAllow, '#059669', 'right', 8);
-  rx += colW.allowed;
-  drawAmountWithRupee(doc, rx, rowY + 6, colW.excess - 6, grandExc, grandExc > 0 ? '#dc2626' : '#64748b', 'right', 8);
 
-  doc.y = rowY + 28;
+  doc.fillColor('#334155').fontSize(7.2).font('Helvetica-Bold');
+  doc.text(`Rs. ${formatINR(grandPolicyLim)}`, rx + 4, rowY + 5, { width: colW.policyLimit - 8, align: 'right', lineBreak: false });
+  rx += colW.policyLimit;
+
+  doc.fillColor('#059669').fontSize(7.2).font('Helvetica-Bold');
+  doc.text(`Rs. ${formatINR(grandAllow)}`, rx + 4, rowY + 5, { width: colW.allowed - 8, align: 'right', lineBreak: false });
+  rx += colW.allowed;
+
+  doc.fillColor(grandExc > 0 ? '#dc2626' : '#64748b').fontSize(7.2).font('Helvetica-Bold');
+  doc.text(`Rs. ${formatINR(grandExc)}`, rx + 4, rowY + 5, { width: colW.excess - 8, align: 'right', lineBreak: false });
+
+  doc.y = rowY + totalRowH + 6;
 
   // ─────────────────────────────────────────────────────────────
-  // 6. APPROVAL & VERIFICATION AUDIT (UNIFIED AUDIT CARD)
+  // 5. FULL PAYMENT DETAILS & APPROVALS (STRUCTURED CLAIM DETAILS CARDS)
   // ─────────────────────────────────────────────────────────────
   const fp = claim.fullPayment || {};
   const mgr = claim.managerApproval || {};
+  const fin = claim.financeApproval || {};
+  const acc = claim.accountsApproval || {};
+  const rej = claim.rejection || {};
   const isMgmt = isClaimantManagement(claim);
+  const statusUpper = String(claim.status || '').toUpperCase();
 
   // 1. Full Payment claim: applied, approved, or rejected
   const isFpRequested = Boolean(
@@ -1219,15 +1482,65 @@ async function generateClaimPdf(claim, res) {
     fp.decidedBy
   );
 
-  // 2. "OTHER" (Normal / Purchase) claim type requiring Reporting Manager approval
+  const normalizeTypeCode = (val) => {
+    const c = String(val || '').trim().toUpperCase();
+    if (!c) return '';
+    if (c === 'PETROL' || c === 'LOCAL_CONVEYANCE' || c === 'LOCAL_TRAVEL') return 'CONVEYANCE';
+    if (c === 'STAY' || c === 'HOTEL' || c === 'ACCOMMODATION') return 'LODGING';
+    if (c === 'MEAL' || c === 'DA' || c === 'DAILY_ALLOWANCE') return 'FOOD';
+    if (c === 'STOCK' || c === 'PURCHASE') return 'STOCK_PURCHASE';
+    if (c === 'MISC' || c === 'MISCELLANEOUS' || c === 'OTHER_EXPENSE') return 'OTHER';
+    return c;
+  };
+  const claimTypeCodes = Array.from(
+    new Set(
+      [
+        normalizeTypeCode(claim.claimType),
+        normalizeTypeCode(claim.expenseType),
+        ...(Array.isArray(claim.entries)
+          ? claim.entries.map((e) =>
+              String(e?.otherSubType || '').trim().toUpperCase() === 'PURCHASE'
+                ? 'STOCK_PURCHASE'
+                : normalizeTypeCode(e?.expenseType)
+            )
+          : []),
+        ...rawEcList.flatMap((ec) =>
+          (ec.items || []).map((it) =>
+            String(it?.otherSubType || '').trim().toUpperCase() === 'PURCHASE'
+              ? 'STOCK_PURCHASE'
+              : normalizeTypeCode(it?.expenseType)
+          )
+        ),
+      ].filter(Boolean)
+    )
+  );
+  const snapCfoCfg = claim.policySnapshot?.cfoApprovalConfig;
+  const cfoCfgEnabled = snapCfoCfg ? snapCfoCfg.enabled !== false : true;
+  const cfoCfgFullPayment = snapCfoCfg ? snapCfoCfg.applyOnFullPayment !== false : true;
+  const cfoCfgTypes = Array.isArray(snapCfoCfg?.applicableClaimTypes)
+    ? snapCfoCfg.applicableClaimTypes.map(normalizeTypeCode).filter(Boolean)
+    : ['STOCK_PURCHASE'];
+  const isCfoApplicableByRule = Boolean(
+    cfoCfgEnabled &&
+      ((isFpRequested && cfoCfgFullPayment) ||
+        claimTypeCodes.some((code) => cfoCfgTypes.includes(code)))
+  );
+
+  // 2. "OTHER" (Normal) or "STOCK_PURCHASE" claim type requiring Reporting Manager approval
   const isOtherCode = (val) => {
     const s = String(val || '').trim().toUpperCase();
-    return s === 'OTHER' || s === 'OTHER_EXPENSE';
+    return s === 'OTHER' || s === 'OTHER_EXPENSE' || s === 'STOCK_PURCHASE';
   };
   const isOtherSub = (val) => {
     const s = String(val || '').trim().toUpperCase();
     return s === 'NORMAL' || s === 'PURCHASE';
   };
+  const isStockPurchase = Boolean(
+    String(claim.claimType || '').trim().toUpperCase() === 'STOCK_PURCHASE' ||
+    String(claim.expenseType || '').trim().toUpperCase() === 'STOCK_PURCHASE' ||
+    (Array.isArray(claim.entries) && claim.entries.some((e) => String(e?.expenseType || '').trim().toUpperCase() === 'STOCK_PURCHASE' || String(e?.otherSubType || '').trim().toUpperCase() === 'PURCHASE')) ||
+    rawEcList.some((ec) => (ec.items || []).some((it) => String(it?.expenseType || '').trim().toUpperCase() === 'STOCK_PURCHASE' || String(it?.otherSubType || '').trim().toUpperCase() === 'PURCHASE'))
+  );
 
   const isOtherClaim = Boolean(
     isOtherCode(claim.claimType) ||
@@ -1239,12 +1552,88 @@ async function generateClaimPdf(claim, res) {
     rawEcList.some((ec) => (ec.items || []).some((it) => isOtherCode(it?.expenseType) || isOtherSub(it?.otherSubType)))
   );
 
-  const shouldShowAuditBox = isFpRequested || isOtherClaim;
+  const hasManagerApproval = Boolean(
+    mgr.approver ||
+    mgr.approverName ||
+    (mgr.status && mgr.status !== 'NOT_REQUIRED') ||
+    mgr.decidedAt ||
+    mgr.remarks
+  );
+  const hasFinanceApproval = Boolean(
+    fin.approver ||
+    fin.approverName ||
+    (fin.status && fin.status !== 'NOT_REQUIRED') ||
+    fin.decidedAt ||
+    fin.remarks
+  );
+  const hasAccountsApproval = Boolean(
+    statusUpper === 'ACCOUNTS_APPROVED' ||
+    acc.approvedBy ||
+    acc.approvedByName ||
+    acc.approvedAt ||
+    acc.remarks ||
+    (acc.status && !['NOT_REQUIRED', 'PENDING'].includes(String(acc.status).toUpperCase()))
+  );
+  const hasRejectionRecord = Boolean(
+    statusUpper === 'REJECTED' ||
+    rej.reason ||
+    rej.rejectedAt ||
+    rej.rejectedByName ||
+    rej.rejectedBy
+  );
+
+  const shouldShowAuditBox = isFpRequested || isCfoApplicableByRule || (isOtherClaim && mgr.status !== 'NOT_REQUIRED') || hasManagerApproval || hasFinanceApproval;
+
+  // Shared approval resolution for both Section 5 and Section 8 (matching ExpenseClaimDetailContent.jsx)
+  const isStep1Rejected = mgr.status === 'REJECTED' || (!mgr.status && (fp.status === 'REJECTED' || statusUpper === 'REJECTED'));
+  const isStep1Approved = !isStep1Rejected && Boolean(
+    mgr.status === 'APPROVED' ||
+    fp.status === 'APPROVED' ||
+    fin.status === 'PENDING' ||
+    fin.status === 'APPROVED' ||
+    ['SUBMITTED', 'APPROVED', 'ACCOUNTS_APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(statusUpper) ||
+    claim.paymentStatus === 'PAID'
+  );
+  const isOverallRejected = isStep1Rejected || fin.status === 'REJECTED' || fp.status === 'REJECTED' || statusUpper === 'REJECTED';
+  const isOverallApproved = !isOverallRejected && Boolean(
+    fp.status === 'APPROVED' ||
+    fin.status === 'APPROVED' ||
+    (isStep1Approved && (!hasFinanceApproval && !isCfoApplicableByRule)) ||
+    ['SUBMITTED', 'APPROVED', 'ACCOUNTS_APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(statusUpper) ||
+    claim.paymentStatus === 'PAID'
+  );
+
+  const subReportsTo = (typeof claim.submittedBy === 'object' && claim.submittedBy?.reportsTo && typeof claim.submittedBy.reportsTo === 'object')
+    ? claim.submittedBy.reportsTo
+    : null;
+  const approverObj = (typeof mgr.approver === 'object' && mgr.approver !== null)
+    ? mgr.approver
+    : subReportsTo;
+  const mgrBaseName = approverObj?.name || mgr.approverName || fp.decidedByName || (typeof mgr.approver === 'string' ? mgr.approver : '') || 'Reporting Manager';
+  const mgrCodeRaw = approverObj?.employeeIdCode || '';
+
+  const showFinSection = !isMgmt && Boolean(isCfoApplicableByRule || hasFinanceApproval);
+  const finObj = (typeof fin.approver === 'object' && fin.approver !== null) ? fin.approver : null;
+  const finBaseName = finObj?.name || fin.approverName || (typeof fin.approver === 'string' ? fin.approver : '') || 'CFO / Finance Head';
+  const finCodeRaw = finObj?.employeeIdCode || '';
+  const isFinRejected = fin.status === 'REJECTED';
+  const isFinApproved =
+    !isFinRejected &&
+    !isStep1Rejected &&
+    Boolean(
+      fin.status === 'APPROVED' ||
+      fp.status === 'APPROVED' ||
+      ['SUBMITTED', 'APPROVED', 'ACCOUNTS_APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(statusUpper) ||
+      isPaid
+    );
+
+  const accObjShared = (typeof acc.approvedBy === 'object' && acc.approvedBy !== null) ? acc.approvedBy : null;
+  const accBaseName = accObjShared?.name || acc.approvedByName || (isPaid ? (claim.disbursement?.recordedByName || claim.disbursedBy?.name || 'Accounts Admin') : 'Accounts Admin');
+  const accCodeRaw = accObjShared?.employeeIdCode || '';
+  const isAccountsStep1Approved = Boolean(acc.status === 'APPROVED' || statusUpper === 'ACCOUNTS_APPROVED' || isPaid);
+  const isAccountsRejected = acc.status === 'REJECTED' || (statusUpper === 'REJECTED' && !isStep1Rejected && !isFinRejected);
 
   if (shouldShowAuditBox) {
-    const isApproved = fp.status === 'APPROVED' || mgr.status === 'APPROVED' || claim.status === 'APPROVED' || claim.paymentStatus === 'PAID';
-    const isRejected = fp.status === 'REJECTED' || mgr.status === 'REJECTED' || claim.status === 'REJECTED';
-
     let approverName = '';
     let appRole = '';
     let appStatus = '';
@@ -1254,6 +1643,8 @@ async function generateClaimPdf(claim, res) {
     let badgeBorder = '#cbd5e1';
     let badgeColor = '#475569';
     let appDecided = mgr.decidedAt || fp.decidedAt;
+    let dateLabel = 'Status Date:';
+    let dateVal = 'Awaiting Review';
     let remarks = mgr.remarks || fp.decisionRemarks || '';
 
     if (isMgmt) {
@@ -1266,34 +1657,57 @@ async function generateClaimPdf(claim, res) {
       badgeBorder = '#86efac';
       badgeColor = '#15803d';
       appDecided = claim.submittedAt || claim.createdAt;
+      dateLabel = 'Submission Date:';
+      dateVal = appDecided ? formatDateTime(appDecided) : 'Submitted';
       remarks = 'This approval is not applicable for management user; forwarded directly to Accounts.';
     } else {
-      const approverObj = (typeof mgr.approver === 'object' && mgr.approver !== null) ? mgr.approver : null;
-      const baseName = approverObj?.name || mgr.approverName || fp.decidedByName || (typeof mgr.approver === 'string' ? mgr.approver : '') || 'Management Authority';
-      const codeStr = approverObj?.employeeIdCode ? ` [${approverObj.employeeIdCode}]` : '';
-      approverName = `${baseName}${codeStr}`;
+      const codeStr = mgrCodeRaw ? ` [${mgrCodeRaw}]` : '';
+      approverName = `${mgrBaseName}${codeStr}`;
 
-      appRole = isFpRequested
+      const baseRole = isFpRequested
         ? 'Management Approver (Full Payment)'
         : (mgr.approverRole === 'MANAGEMENT' ? 'Management Approver' : 'Reporting Manager');
+      const roleDesig = [approverObj?.designation, approverObj?.department].filter(Boolean).join(' • ');
+      appRole = roleDesig ? `${baseRole} (${roleDesig})` : baseRole;
 
-      if (isApproved) {
+      if (isStep1Approved) {
         appStatus = isFpRequested ? 'FULL PAYMENT APPROVED' : 'APPROVED';
         appStatusColor = '#059669';
+        dateLabel = 'Decided On:';
+        dateVal = appDecided
+          ? formatDateTime(appDecided)
+          : (fin.requestedAt ? formatDateTime(fin.requestedAt) : ((claim.submittedAt || claim.createdAt) ? formatDateTime(claim.submittedAt || claim.createdAt) : 'Approved'));
+        if (!remarks && isFpRequested && fpProofs.length > 0) {
+          remarks = 'Full payment requested with supporting proofs. Routed directly to Accounts for review of proofs and disbursement.';
+        }
+      } else if (isStep1Rejected) {
+        appStatus = isFpRequested ? 'FULL PAYMENT REJECTED' : 'REJECTED';
+        appStatusColor = '#dc2626';
+        dateLabel = 'Decided On:';
+        dateVal = (appDecided || rej.rejectedAt) ? formatDateTime(appDecided || rej.rejectedAt) : 'Rejected';
+      } else {
+        appStatus = 'PENDING APPROVAL';
+        appStatusColor = '#d97706';
+        dateLabel = mgr.requestedAt ? 'Requested On:' : 'Status Date:';
+        dateVal = mgr.requestedAt ? formatDateTime(mgr.requestedAt) : 'Awaiting Review';
+      }
+
+      if (isOverallApproved) {
         badgeText = isFpRequested ? 'FULL PAYMENT APPROVED' : 'APPROVED';
         badgeBg = '#dcfce7';
         badgeBorder = '#86efac';
         badgeColor = '#15803d';
-      } else if (isRejected) {
-        appStatus = isFpRequested ? 'FULL PAYMENT REJECTED' : 'REJECTED';
-        appStatusColor = '#dc2626';
+      } else if (isOverallRejected) {
         badgeText = isFpRequested ? 'FULL PAYMENT REJECTED' : 'REJECTED';
         badgeBg = '#fee2e2';
         badgeBorder = '#fca5a5';
         badgeColor = '#b91c1c';
+      } else if (fin.status === 'PENDING') {
+        badgeText = 'AWAITING 2ND APPROVAL (CFO)';
+        badgeBg = '#fef3c7';
+        badgeBorder = '#fde68a';
+        badgeColor = '#b45309';
       } else {
-        appStatus = 'PENDING APPROVAL';
-        appStatusColor = '#d97706';
         badgeText = isFpRequested ? 'PENDING MANAGEMENT APPROVAL' : 'AWAITING APPROVAL';
         badgeBg = '#fef3c7';
         badgeBorder = '#fde68a';
@@ -1305,212 +1719,716 @@ async function generateClaimPdf(claim, res) {
       }
     }
 
-    // Dynamic measurement
-    const headerHeight = 22;
-    const colWidth = (contentWidth - 28) / 2;
-
-    // Full Payment fields measurement (if requested)
-    let fpReasonH = 0;
-    let fpExplH = 0;
-    let statusExplanation = '';
-    let reasonText = '';
-
+    // 5. Full Payment Details Card (when Full Payment is requested)
     if (isFpRequested) {
+      let statusExplanation = '';
       if (isMgmt) {
-        statusExplanation = 'Full Payment Claim: This approval is not applicable for management user. Claim is forwarded directly to Accounts for verification & disbursement.';
-      } else if (isApproved) {
-        const decDate = fp.decidedAt || mgr.decidedAt;
+        statusExplanation = 'Full Payment Claim: Management user exemption applied — forwarded directly to Accounts.';
+      } else if (isOverallApproved) {
+        const decDate = fin.decidedAt || fp.decidedAt || mgr.decidedAt;
         statusExplanation = `Full payment APPROVED by ${approverName}${decDate ? ` on ${formatDateTime(decDate)}` : ''}. Full requested amount of Rs. ${formatINR(fp.approvedAmount || grandReq)} authorized for Accounts payment.`;
-      } else if (isRejected) {
-        const decDate = fp.decidedAt || mgr.decidedAt;
+      } else if (isOverallRejected) {
+        const decDate = fin.decidedAt || fp.decidedAt || mgr.decidedAt;
         statusExplanation = `Full payment REJECTED by ${approverName}${decDate ? ` on ${formatDateTime(decDate)}` : ''}. Reimbursement is strictly limited to policy allowed limit of Rs. ${formatINR(grandAllow)}.`;
       } else {
         statusExplanation = `Full payment requested. Awaiting special approval from designated Management authority (${approverName}). Full requested amount becomes payable upon approval; otherwise restricted to standard policy allowed limit of Rs. ${formatINR(grandAllow)}.`;
       }
       statusExplanation = statusExplanation.replace(/[₹¹]\s*/g, 'Rs. ');
+      const reasonText = fp.reason || claim.fullPaymentReason || 'Special reimbursement justification provided';
+      const explColor = isMgmt ? '#166534' : (isOverallApproved ? '#166534' : (isOverallRejected ? '#991b1b' : '#854d0e'));
 
-      reasonText = fp.reason || claim.fullPaymentReason || 'Special reimbursement justification provided';
-
-      doc.fontSize(7.5).font('Helvetica');
-      fpReasonH = doc.heightOfString(`Reason / Justification: "${reasonText}"`, { width: contentWidth - 24 });
-      fpExplH = doc.heightOfString(statusExplanation, { width: contentWidth - 24 });
+      drawStructuredCard({
+        title: '5. FULL PAYMENT DETAILS',
+        badgeText,
+        badgeBg,
+        badgeBorder,
+        badgeColor,
+        headerBg: '#f5f3ff',
+        headerColor: '#5b21b6',
+        borderColor: '#ddd6fe',
+        cardBg: '#ffffff',
+        rows: [
+          {
+            label: 'Full Payment Requested:',
+            value: `YES (Claim Full Rs. ${formatINR(grandReq)})  •  Standard Policy Allowed: Rs. ${formatINR(grandAllow)}  •  Excess Covered: Rs. ${formatINR(grandExc)}`,
+            valueColor: '#0f172a',
+          },
+          {
+            label: 'Reason / Justification:',
+            value: `"${reasonText}"`,
+            valueColor: '#334155',
+            valueFont: 'Helvetica',
+          },
+          {
+            label: 'Approval Status:',
+            value: statusExplanation,
+            valueColor: explColor,
+          },
+          ...(fpProofs.length > 0
+            ? [
+                {
+                  label: `Full Payment Proofs (${fpProofs.length}):`,
+                  value: fpProofs.map((p) => p.name || 'Supporting Proof').join(', '),
+                  valueColor: '#4338ca',
+                  valueFont: 'Helvetica',
+                },
+              ]
+            : []),
+        ],
+      });
     }
 
-    doc.fontSize(7.5).font('Helvetica');
-    const noteText = isMgmt
-      ? 'Audit Trail: Management user claim - approval is not applicable. Claim is forwarded directly to Accounts for verification & disbursement.'
-      : (remarks ? `Remarks: "${remarks}"` : '');
+    // 1st Approval Card: Reporting Manager Approval
+    const stage1Title = isMgmt
+      ? '1ST & 2ND APPROVAL: MANAGEMENT EXEMPTION'
+      : `1ST APPROVAL: REPORTING MANAGER APPROVAL${isFpRequested ? ' (FULL PAYMENT)' : ''}`;
+    const stage1Badge = isMgmt
+      ? { text: 'NOT APPLICABLE', bg: '#dcfce7', border: '#86efac', color: '#15803d' }
+      : isStep1Approved
+      ? { text: 'APPROVED', bg: '#dcfce7', border: '#86efac', color: '#15803d' }
+      : isStep1Rejected
+      ? { text: 'REJECTED', bg: '#fee2e2', border: '#fca5a5', color: '#b91c1c' }
+      : { text: 'AWAITING APPROVAL', bg: '#fef3c7', border: '#fde68a', color: '#b45309' };
 
-    let noteH = 0;
-    if (noteText) {
-      noteH = Math.max(16, doc.heightOfString(noteText, { width: contentWidth - 36 }) + 8);
+    drawStructuredCard({
+      title: stage1Title,
+      badgeText: stage1Badge.text,
+      badgeBg: stage1Badge.bg,
+      badgeBorder: stage1Badge.border,
+      badgeColor: stage1Badge.color,
+      headerBg: '#f8fafc',
+      headerColor: '#1e293b',
+      borderColor: '#cbd5e1',
+      cardBg: '#ffffff',
+      rows: [
+        {
+          label: isMgmt ? 'Approval Requirement:' : 'Reporting Manager:',
+          value: approverName,
+          valueColor: '#0f172a',
+        },
+        {
+          label: 'Approval Authority:',
+          value: appRole,
+          valueColor: '#334155',
+        },
+        {
+          label: isMgmt ? 'Approval Decision:' : 'Approval Status:',
+          value: appStatus,
+          valueColor: appStatusColor,
+        },
+        {
+          label: dateLabel,
+          value: dateVal,
+          valueColor: '#0f172a',
+          valueFont: 'Helvetica',
+        },
+        ...(isMgmt || remarks
+          ? [
+              {
+                label: 'Decision Remarks:',
+                value: isMgmt
+                  ? 'Management user claim — approval is not applicable. Claim is forwarded directly to Accounts for verification & disbursement.'
+                  : `"${remarks}"`,
+                valueColor: isMgmt ? '#166534' : '#334155',
+                valueFont: isMgmt ? 'Helvetica' : 'Helvetica-Oblique',
+              },
+            ]
+          : []),
+      ],
+    });
+
+    // 2nd Approval Card: CFO / Finance Head
+    if (showFinSection) {
+      const finCode = finCodeRaw ? ` [${finCodeRaw}]` : '';
+      const finApproverName = `${finBaseName}${finCode}`;
+      const finDesigDept = [finObj?.designation, finObj?.department].filter(Boolean).join(' • ');
+      const finRole = finDesigDept ? `CFO / Finance Head (${finDesigDept})` : 'CFO / Finance Head (2nd Approval)';
+
+      let finStatusText = '';
+      let finStatusColor = '#64748b';
+      let finDateLabel = 'Status Date:';
+      let finDateVal = 'After 1st Approval';
+      let finBadge = { text: 'PENDING', bg: '#fef3c7', border: '#fde68a', color: '#b45309' };
+
+      if (isFinApproved) {
+        finStatusText = 'APPROVED';
+        finStatusColor = '#059669';
+        finDateLabel = 'Decided On:';
+        finDateVal = fin.decidedAt ? formatDateTime(fin.decidedAt) : (fp.decidedAt ? formatDateTime(fp.decidedAt) : 'Approved');
+        finBadge = { text: 'APPROVED', bg: '#dcfce7', border: '#86efac', color: '#15803d' };
+      } else if (isFinRejected) {
+        finStatusText = 'REJECTED';
+        finStatusColor = '#dc2626';
+        finDateLabel = 'Decided On:';
+        finDateVal = fin.decidedAt ? formatDateTime(fin.decidedAt) : 'Rejected';
+        finBadge = { text: 'REJECTED', bg: '#fee2e2', border: '#fca5a5', color: '#b91c1c' };
+      } else if (isStep1Rejected) {
+        finStatusText = 'CANCELLED (1ST APPROVAL REJECTED)';
+        finStatusColor = '#dc2626';
+        finDateVal = 'Cancelled';
+        finBadge = { text: 'CANCELLED', bg: '#fee2e2', border: '#fca5a5', color: '#b91c1c' };
+      } else if (fin.status === 'PENDING' || isStep1Approved) {
+        finStatusText = 'AWAITING 2ND APPROVAL';
+        finStatusColor = '#d97706';
+        finDateLabel = fin.requestedAt ? 'Requested On:' : 'Status Date:';
+        finDateVal = fin.requestedAt ? formatDateTime(fin.requestedAt) : 'Awaiting CFO Review';
+        finBadge = { text: 'AWAITING 2ND APPROVAL', bg: '#fef3c7', border: '#fde68a', color: '#b45309' };
+      } else {
+        finStatusText = 'PENDING (AFTER 1ST APPROVAL)';
+        finStatusColor = '#64748b';
+        finDateVal = 'Pending 1st Approval';
+      }
+
+      drawStructuredCard({
+        title: '2ND APPROVAL: CFO / FINANCE HEAD',
+        badgeText: finBadge.text,
+        badgeBg: finBadge.bg,
+        badgeBorder: finBadge.border,
+        badgeColor: finBadge.color,
+        headerBg: '#f8fafc',
+        headerColor: '#1e293b',
+        borderColor: '#cbd5e1',
+        cardBg: '#ffffff',
+        rows: [
+          {
+            label: 'CFO / Finance Head:',
+            value: finApproverName,
+            valueColor: '#0f172a',
+          },
+          {
+            label: 'Approval Authority:',
+            value: finRole,
+            valueColor: '#334155',
+          },
+          {
+            label: 'Approval Status:',
+            value: finStatusText,
+            valueColor: finStatusColor,
+          },
+          {
+            label: finDateLabel,
+            value: finDateVal,
+            valueColor: '#0f172a',
+            valueFont: 'Helvetica',
+          },
+          ...(fin.remarks
+            ? [
+                {
+                  label: 'Decision Remarks:',
+                  value: `"${fin.remarks}"`,
+                  valueColor: '#334155',
+                  valueFont: 'Helvetica-Oblique',
+                },
+              ]
+            : []),
+        ],
+      });
+    }
+  }
+
+  // Accounts Admin Approval & Payment Card (Step 1 Verification + Step 2 Payment / Rejection)
+  const pDate = formatDateTime(claim.paymentDate || claim.disbursedAt || claim.disbursement?.paymentDate);
+  const pRef = claim.paymentReference || claim.utr || claim.disbursement?.paymentReference || 'N/A';
+  const pMethod = claim.paymentMethod || claim.disbursement?.paymentMethod || 'Bank Transfer (NEFT/RTGS)';
+  const recObj = (typeof claim.disbursement?.recordedBy === 'object' && claim.disbursement?.recordedBy !== null) ? claim.disbursement.recordedBy : null;
+  const pRecordedBy = claim.paidByName || claim.disbursement?.recordedByName || recObj?.name || claim.disbursedBy?.name || '';
+  const step1Rem = acc.remarks || '';
+  const step2Rem = claim.disbursement?.remarks || (claim.accountsRemarks && claim.accountsRemarks !== step1Rem ? claim.accountsRemarks : '') || '';
+
+  const showAccountsCard =
+    statusUpper !== 'DRAFT' &&
+    Boolean(
+      shouldShowAuditBox ||
+      hasAccountsApproval ||
+      isPaid ||
+      hasRejectionRecord ||
+      statusUpper === 'SUBMITTED' ||
+      statusUpper === 'APPROVAL_PENDING'
+    );
+
+  if (showAccountsCard) {
+    const accCode = accCodeRaw ? ` [${accCodeRaw}]` : '';
+    const accApproverName = `${accBaseName}${accCode}`;
+    let accStatusText = '';
+    let accStatusColor = '#64748b';
+    let accDateLabel = 'Status Date:';
+    let accDateVal = 'Awaiting Review';
+    let accBadge = { text: 'PENDING', bg: '#fef3c7', border: '#fde68a', color: '#b45309' };
+
+    if (isPaid) {
+      accStatusText = 'APPROVED & PAID';
+      accStatusColor = '#059669';
+      accDateLabel = 'Approved On:';
+      accDateVal = acc.approvedAt ? formatDateTime(acc.approvedAt) : pDate;
+      accBadge = { text: 'PAID & SETTLED', bg: '#dcfce7', border: '#86efac', color: '#15803d' };
+    } else if (isAccountsStep1Approved) {
+      accStatusText = 'APPROVED BY ACCOUNTS (AWAITING PAYMENT)';
+      accStatusColor = '#059669';
+      accDateLabel = 'Approved On:';
+      accDateVal = acc.approvedAt ? formatDateTime(acc.approvedAt) : 'Approved';
+      accBadge = { text: 'APPROVED (PAYMENT PENDING)', bg: '#dbeafe', border: '#93c5fd', color: '#1d4ed8' };
+    } else if (isAccountsRejected || hasRejectionRecord) {
+      accStatusText = isAccountsRejected ? 'REJECTED BY ACCOUNTS' : 'CLAIM REJECTED';
+      accStatusColor = '#dc2626';
+      accDateLabel = 'Rejected On:';
+      accDateVal = (rej.rejectedAt || claim.rejectedAt) ? formatDateTime(rej.rejectedAt || claim.rejectedAt) : 'Rejected';
+      accBadge = { text: 'REJECTED', bg: '#fee2e2', border: '#fca5a5', color: '#b91c1c' };
+    } else if (statusUpper === 'SUBMITTED') {
+      accStatusText = 'AWAITING ACCOUNTS STEP 1 APPROVAL';
+      accStatusColor = '#d97706';
+      accDateVal = 'Pending Accounts Verification';
+      accBadge = { text: 'AWAITING ACCOUNTS', bg: '#fef3c7', border: '#fde68a', color: '#b45309' };
+    } else {
+      accStatusText = 'PENDING (AFTER PRIOR APPROVALS)';
+      accStatusColor = '#64748b';
+      accDateVal = 'After Prior Approvals';
     }
 
-    const rowsH = 34; // Two standard field rows
-    const fpTotalH = isFpRequested ? (6 + 14 + fpReasonH + 3 + fpExplH + 6) : 0;
-    const cardPadding = 16;
-    const appBoxHeight = headerHeight + rowsH + fpTotalH + (noteH > 0 ? noteH + 8 : 0) + cardPadding;
+    const rejObj = (typeof rej.rejectedBy === 'object' && rej.rejectedBy !== null) ? rej.rejectedBy : null;
+    const rejBy = rej.rejectedByName || rejObj?.name || claim.rejectedByName || 'Approver / Admin';
+    const rejReason = rej.reason || claim.rejectionReason || fin.remarks || mgr.remarks || claim.accountsRemarks || '';
+    const rejStage = fin.status === 'REJECTED'
+      ? '2nd Approval (CFO / Finance Head)'
+      : (mgr.status === 'REJECTED' ? '1st Approval (Reporting Manager)' : 'Accounts Admin Review');
 
-    ensureSpace(appBoxHeight + 10);
-    const appBoxY = doc.y;
-
-    // Card background & border
-    doc.roundedRect(startX, appBoxY, contentWidth, appBoxHeight, 6).fillAndStroke('#fcfaff', '#ddd6fe');
-
-    // Header bar
-    doc.rect(startX, appBoxY, contentWidth, headerHeight).fill('#f5f3ff');
-    doc.fillColor('#5b21b6').fontSize(8).font('Helvetica-Bold').text('APPROVAL & VERIFICATION AUDIT', startX + 10, appBoxY + 7);
-
-    // Status Pill on top right of header
-    doc.fontSize(7).font('Helvetica-Bold');
-    const pillW = doc.widthOfString(badgeText) + 14;
-    const pillH = 14;
-    const pillX = startX + contentWidth - pillW - 10;
-    const pillY = appBoxY + 4;
-    doc.roundedRect(pillX, pillY, pillW, pillH, 3).fillAndStroke(badgeBg, badgeBorder);
-    doc.fillColor(badgeColor).text(badgeText, pillX, pillY + 3.5, { width: pillW, align: 'center' });
-
-    // Row 1
-    const r1Y = appBoxY + headerHeight + 8;
-    // Col 1: Approver / Requirement
-    doc.fillColor('#64748b').fontSize(7.5).font('Helvetica').text(
-      isMgmt ? 'Approval Requirement: ' : 'Designated Approver: ',
-      startX + 12,
-      r1Y,
-      { lineBreak: false }
-    );
-    const appLblW = doc.widthOfString(isMgmt ? 'Approval Requirement: ' : 'Designated Approver: ');
-    doc.fillColor('#0f172a').font('Helvetica-Bold').text(
-      approverName,
-      startX + 12 + appLblW,
-      r1Y,
-      { width: colWidth - appLblW, ellipsis: true }
-    );
-
-    // Col 2: Authority / Role
-    const col2X = startX + 16 + colWidth;
-    doc.fillColor('#64748b').font('Helvetica').text('Approval Authority: ', col2X, r1Y, { lineBreak: false });
-    const authLblW = doc.widthOfString('Approval Authority: ');
-    doc.fillColor('#0f172a').font('Helvetica-Bold').text(
-      appRole,
-      col2X + authLblW,
-      r1Y,
-      { width: colWidth - authLblW, ellipsis: true }
-    );
-
-    // Row 2
-    const r2Y = r1Y + 16;
-    // Col 1: Decision
-    doc.fillColor('#64748b').font('Helvetica').text('Approval Decision: ', startX + 12, r2Y, { lineBreak: false });
-    const decLblW = doc.widthOfString('Approval Decision: ');
-    doc.fillColor(appStatusColor).font('Helvetica-Bold').text(
-      appStatus,
-      startX + 12 + decLblW,
-      r2Y,
-      { width: colWidth - decLblW, ellipsis: true }
-    );
-
-    // Col 2: Timestamp
-    const dateLabel = isMgmt ? 'Submission Date: ' : (appDecided ? 'Decided On: ' : 'Status Date: ');
-    doc.fillColor('#64748b').font('Helvetica').text(dateLabel, col2X, r2Y, { lineBreak: false });
-    const dateLblW = doc.widthOfString(dateLabel);
-    const dateVal = appDecided ? formatDateTime(appDecided) : 'Awaiting Review';
-    doc.fillColor('#0f172a').font('Helvetica').text(
-      dateVal,
-      col2X + dateLblW,
-      r2Y,
-      { width: colWidth - dateLblW, ellipsis: true }
-    );
-
-    let curInnerY = r2Y + 18;
-
-    // Full Payment Section inside the same unified audit box
-    if (isFpRequested) {
-      doc.rect(startX + 12, curInnerY, contentWidth - 24, 0.5).fill('#ddd6fe');
-      curInnerY += 6;
-
-      doc.fillColor('#0f172a').fontSize(7.5).font('Helvetica-Bold');
-      doc.text(
-        `Claimed Full Amount: Rs. ${formatINR(grandReq)}   •   Standard Policy Allowed: Rs. ${formatINR(grandAllow)}   •   Excess Covered: Rs. ${formatINR(grandExc)}`,
-        startX + 12,
-        curInnerY,
-        { width: contentWidth - 24 }
-      );
-      curInnerY += 13;
-
-      doc.fillColor('#334155').fontSize(7.5).font('Helvetica');
-      doc.text(`Reason / Justification: "${reasonText}"`, startX + 12, curInnerY, { width: contentWidth - 24 });
-      curInnerY += fpReasonH + 3;
-
-      const explColor = isMgmt ? '#166534' : (isApproved ? '#166534' : (isRejected ? '#991b1b' : '#854d0e'));
-      doc.fillColor(explColor).fontSize(7.5).font('Helvetica-Bold');
-      doc.text(statusExplanation, startX + 12, curInnerY, { width: contentWidth - 24 });
-      curInnerY += fpExplH + 6;
-    }
-
-    // Notice / Remarks / Audit Trail Box
-    if (noteText && noteH > 0) {
-      const noteBoxY = curInnerY;
-      const noteBoxW = contentWidth - 24;
-      const noteBoxBg = isMgmt ? '#f0fdf4' : '#ffffff';
-      const noteBoxBorder = isMgmt ? '#bbf7d0' : '#e2e8f0';
-      const noteTextColor = isMgmt ? '#166534' : '#334155';
-
-      doc.roundedRect(startX + 12, noteBoxY, noteBoxW, noteH, 4).fillAndStroke(noteBoxBg, noteBoxBorder);
-      doc
-        .fillColor(noteTextColor)
-        .fontSize(7.5)
-        .font(isMgmt ? 'Helvetica' : 'Helvetica-Oblique')
-        .text(noteText, startX + 18, noteBoxY + 4, { width: noteBoxW - 12, lineGap: 1.5 });
-    }
-
-    doc.y = appBoxY + appBoxHeight + 10;
+    drawStructuredCard({
+      title: 'ACCOUNTS ADMIN APPROVAL (STEP 1 VERIFICATION) & PAYMENT',
+      badgeText: accBadge.text,
+      badgeBg: accBadge.bg,
+      badgeBorder: accBadge.border,
+      badgeColor: accBadge.color,
+      headerBg: isPaid ? '#f0fdf4' : hasRejectionRecord ? '#fef2f2' : '#f8fafc',
+      headerColor: isPaid ? '#166534' : hasRejectionRecord ? '#991b1b' : '#1e293b',
+      borderColor: isPaid ? '#bbf7d0' : hasRejectionRecord ? '#fecaca' : '#cbd5e1',
+      cardBg: '#ffffff',
+      rows: [
+        {
+          label: 'Accounts Status:',
+          value: accStatusText,
+          valueColor: accStatusColor,
+        },
+        {
+          label: 'Approved By (Step 1):',
+          value: `${accApproverName} — Accounts Admin (Step 1 Approval)`,
+          valueColor: '#0f172a',
+        },
+        {
+          label: accDateLabel,
+          value: accDateVal,
+          valueColor: '#0f172a',
+          valueFont: 'Helvetica',
+        },
+        ...(step1Rem
+          ? [
+              {
+                label: 'Approval Remark (Step 1):',
+                value: `"${step1Rem}"`,
+                valueColor: '#334155',
+                valueFont: 'Helvetica-Oblique',
+              },
+            ]
+          : []),
+        ...(isPaid
+          ? [
+              {
+                label: 'Amount Disbursed:',
+                value: `Rs. ${formatINR(paidAmt)}   •   Payment Method: ${pMethod}`,
+                valueColor: '#15803d',
+              },
+              {
+                label: 'Settlement Date & UTR:',
+                value: `${pDate}   •   Transaction Ref / UTR: ${pRef}`,
+                valueColor: '#0f172a',
+                valueFont: 'Helvetica',
+              },
+              ...(pRecordedBy
+                ? [
+                    {
+                      label: 'Paid / Recorded By (Step 2):',
+                      value: pRecordedBy,
+                      valueColor: '#0f172a',
+                    },
+                  ]
+                : []),
+              ...(step2Rem
+                ? [
+                    {
+                      label: 'Payment Remark (Step 2):',
+                      value: `"${step2Rem}"`,
+                      valueColor: '#166534',
+                      valueFont: 'Helvetica-Oblique',
+                    },
+                  ]
+                : []),
+            ]
+          : []),
+        ...(hasRejectionRecord
+          ? [
+              {
+                label: 'Rejected By:',
+                value: `${rejBy} (${rejStage})`,
+                valueColor: '#b91c1c',
+              },
+              ...(rejReason
+                ? [
+                    {
+                      label: 'Rejection Reason:',
+                      value: `"${rejReason}"`,
+                      valueColor: '#7f1d1d',
+                      valueFont: 'Helvetica-Oblique',
+                    },
+                  ]
+                : []),
+            ]
+          : []),
+      ],
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
-  // 7. PAYMENT & DISBURSEMENT RECORD (IF PAID)
+  // 6. CALCULATION BREAKDOWN & POLICY EXPLANATION
   // ─────────────────────────────────────────────────────────────
-  if (isPaid) {
-    ensureSpace(52);
-    const payBoxY = doc.y;
-    const payBoxHeight = 48;
-    doc.roundedRect(startX, payBoxY, contentWidth, payBoxHeight, 6).fillAndStroke('#f0fdf4', '#bbf7d0');
-    doc.fillColor('#166534').fontSize(8).font('Helvetica-Bold').text('ACCOUNTS DISBURSEMENT & SETTLEMENT RECORD', startX + 10, payBoxY + 6);
+  doc.fontSize(7.5).font('Helvetica');
+  const expTextHeight = Math.min(54, doc.heightOfString(explanation, { width: contentWidth - 20, lineGap: 1.5 }));
+  const expBoxHeight = 18 + expTextHeight + 8;
 
-    const pDate = formatDateTime(claim.paymentDate || claim.disbursedAt || claim.disbursement?.paymentDate);
-    const pRef = claim.paymentReference || claim.utr || claim.disbursement?.paymentReference || 'N/A';
-    const pMethod = claim.paymentMethod || claim.disbursement?.paymentMethod || 'Bank Transfer (NEFT/RTGS)';
+  ensureSpace(expBoxHeight + 6);
+  const expBoxY = doc.y;
+  const expBg = grandExc > 0 ? '#fff1f2' : '#f8fafc';
+  const expBorder = grandExc > 0 ? '#fecdd3' : '#cbd5e1';
+  const expTitleColor = grandExc > 0 ? '#be123c' : '#4338ca';
+  doc.roundedRect(startX, expBoxY, contentWidth, expBoxHeight, 5).fillAndStroke(expBg, expBorder);
+  doc
+    .fillColor(expTitleColor)
+    .fontSize(7.8)
+    .font('Helvetica-Bold')
+    .text('6. CALCULATION BREAKDOWN & POLICY EXPLANATION', startX + 10, expBoxY + 5);
+  doc
+    .fillColor('#334155')
+    .fontSize(7.5)
+    .font('Helvetica')
+    .text(explanation, startX + 10, expBoxY + 18, { width: contentWidth - 20, lineGap: 1.5 });
 
-    const halfWidth = (contentWidth - 28) / 2;
-    const rightColX = startX + 14 + halfWidth;
+  doc.y = expBoxY + expBoxHeight + 6;
 
-    doc.fillColor('#15803d').fontSize(7.5).font('Helvetica');
-    const payPrefix = 'Amount Disbursed: ';
-    const pw = doc.widthOfString(payPrefix);
-    doc.text(payPrefix, startX + 10, payBoxY + 20, { lineBreak: false });
-    drawAmountWithRupee(doc, startX + 10 + pw, payBoxY + 20, halfWidth - pw, paidAmt, '#15803d', 'left', 7.5);
-    doc.text(`Payment Method: ${pMethod}`, startX + 10, payBoxY + 32, { width: halfWidth, ellipsis: true });
-
-    doc.text(`Settlement Date: ${pDate}`, rightColX, payBoxY + 20, { width: halfWidth, ellipsis: true });
-    doc.text(`Transaction Ref / UTR: ${pRef}`, rightColX, payBoxY + 32, { width: halfWidth, ellipsis: true });
-
-    doc.y = payBoxY + payBoxHeight + 10;
+  // ─────────────────────────────────────────────────────────────
+  // 7. SERVICE REPORTS (IF PRESENT)
+  // ─────────────────────────────────────────────────────────────
+  if (Array.isArray(claim.serviceReports) && claim.serviceReports.length > 0) {
+    const srNames = claim.serviceReports
+      .map((s) => `${s.name || 'Service Report'}${s.size ? ` (${Math.round(s.size / 1024)} KB)` : ''}`)
+      .join(', ');
+    drawStructuredCard({
+      title: `7. SERVICE REPORTS (${claim.serviceReports.length})`,
+      badgeText: `${claim.serviceReports.length} Attached`,
+      badgeBg: '#f5f3ff',
+      badgeBorder: '#ddd6fe',
+      badgeColor: '#5b21b6',
+      headerBg: '#f8fafc',
+      headerColor: '#1e293b',
+      borderColor: '#cbd5e1',
+      cardBg: '#ffffff',
+      rows: [
+        {
+          label: 'Service Report Documents:',
+          value: srNames,
+          valueColor: '#0f172a',
+          valueFont: 'Helvetica',
+        },
+      ],
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
-  // 8. ATTACHED PROOFS SUMMARY NOTE (PAGE 1)
+  // 8. CLAIM STATUS & APPROVAL JOURNEY (STATUS BOX + NUMBERED STEPPER)
   // ─────────────────────────────────────────────────────────────
-  ensureSpace(24);
-  doc.fillColor('#64748b').fontSize(7.5).font('Helvetica');
+  if (statusUpper !== 'DRAFT') {
+    const claimNoStr = String(claim.claimNumber || claim.claimId || claim._id || 'N/A');
+    const showMgrInJourney = !isMgmt && shouldShowAuditBox;
+    const showFinInJourney = showFinSection;
+
+    const overallStatusStr = isPaid
+      ? 'PAID'
+      : isAccountsStep1Approved
+      ? 'APPROVED BY ACCOUNTS (PAYMENT PENDING)'
+      : hasRejectionRecord
+      ? 'REJECTED'
+      : (statusUpper || 'SUBMITTED');
+
+    const mgrSummaryStr = isStep1Approved
+      ? `APPROVED by ${mgrBaseName}`
+      : isStep1Rejected
+      ? `REJECTED by ${mgrBaseName}`
+      : `PENDING (${mgrBaseName})`;
+
+    const finSummaryStr = isFinApproved
+      ? `APPROVED by ${finBaseName}`
+      : isFinRejected
+      ? `REJECTED by ${finBaseName}`
+      : isStep1Rejected
+      ? 'CANCELLED'
+      : (fin.status === 'PENDING' || isStep1Approved)
+      ? `PENDING (${finBaseName})`
+      : 'AFTER 1ST APPROVAL';
+
+    const accSummaryStr = isPaid
+      ? 'APPROVED & PAID'
+      : isAccountsStep1Approved
+      ? `APPROVED by ${accBaseName} (Awaiting Payment)`
+      : isAccountsRejected
+      ? 'REJECTED BY ACCOUNTS'
+      : hasRejectionRecord
+      ? 'CANCELLED'
+      : statusUpper === 'SUBMITTED'
+      ? 'PENDING ACCOUNTS APPROVAL'
+      : 'AFTER PRIOR APPROVALS';
+
+    // Build numbered Claim Journey steps matching ExpenseClaimDetailContent.jsx
+    const journeySteps = [];
+    let stepNum = 1;
+
+    journeySteps.push({
+      num: stepNum++,
+      title: 'Claim Submitted',
+      badge: 'Submitted',
+      tone: 'emerald',
+      desc: `Submitted by ${applicantName}${applicantCode && applicantCode !== 'N/A' ? ` (${applicantCode})` : ''} on ${appliedDateStr} for Rs. ${formatINR(grandReq)}.`,
+    });
+
+    if (showMgrInJourney) {
+      const mWho = `${mgrBaseName}${mgrCodeRaw ? ` (${mgrCodeRaw})` : ''}`;
+      const mKind = isFpRequested ? 'Full Payment' : isStockPurchase ? 'Stock Purchase' : 'Other Expense';
+      const mgrDecidedAtVal = mgr.decidedAt || fp.decidedAt || (isStep1Approved ? (claim.submittedAt || claim.createdAt) : null);
+      const mgrDecidedStr = mgrDecidedAtVal ? formatDateTime(mgrDecidedAtVal) : '';
+      let mgrRemStr = mgr.remarks || fp.decisionRemarks || '';
+      if (!mgrRemStr && isFpRequested && isStep1Approved && fpProofs.length > 0) {
+        mgrRemStr = 'Full payment requested with supporting proofs. Routed directly to Accounts for review of proofs and disbursement.';
+      }
+      journeySteps.push({
+        num: stepNum++,
+        title: `${showFinInJourney ? '1st Approval: ' : ''}Reporting Manager (${mKind})`,
+        badge: isStep1Approved ? 'Approved' : isStep1Rejected ? 'Rejected' : 'Pending',
+        tone: isStep1Approved ? 'emerald' : isStep1Rejected ? 'rose' : 'amber',
+        desc: isStep1Approved
+          ? `Approved by ${mWho}${mgrDecidedStr ? ` on ${mgrDecidedStr}` : ''}.${mgrRemStr ? ` Remark: "${mgrRemStr}"` : ''}`
+          : isStep1Rejected
+          ? `Rejected by ${mWho}${mgrDecidedStr ? ` on ${mgrDecidedStr}` : ''}.${mgrRemStr ? ` Reason: "${mgrRemStr}"` : ''}`
+          : `Awaiting 1st approval from ${mWho}.`,
+      });
+    }
+
+    if (showFinInJourney) {
+      const fWho = `${finBaseName}${finCodeRaw ? ` (${finCodeRaw})` : ''}`;
+      const finDecidedStr = fin.decidedAt ? formatDateTime(fin.decidedAt) : '';
+      journeySteps.push({
+        num: stepNum++,
+        title: '2nd Approval: CFO / Finance Head',
+        badge: isFinApproved ? 'Approved' : isFinRejected ? 'Rejected' : isStep1Rejected ? 'Cancelled' : isStep1Approved ? 'In Review' : 'Waiting',
+        tone: isFinApproved ? 'emerald' : (isFinRejected || isStep1Rejected) ? 'rose' : 'amber',
+        desc: isFinApproved
+          ? `Approved by ${fWho}${finDecidedStr ? ` on ${finDecidedStr}` : ''}.${fin.remarks ? ` Remark: "${fin.remarks}"` : ''}`
+          : isFinRejected
+          ? `Rejected by ${fWho}${finDecidedStr ? ` on ${finDecidedStr}` : ''}.${fin.remarks ? ` Reason: "${fin.remarks}"` : ''}`
+          : isStep1Rejected
+          ? 'Cancelled because 1st Approval (Reporting Manager) was rejected.'
+          : isStep1Approved
+          ? `Forwarded to ${fWho} for 2nd approval.`
+          : 'Will be routed to CFO / Finance Head after 1st Approval.',
+      });
+    }
+
+    const aWho = `${accBaseName}${accCodeRaw ? ` (${accCodeRaw})` : ''}`;
+    const accApprovedAtVal = acc.approvedAt || (isPaid ? (claim.disbursedAt || claim.disbursement?.paymentDate) : null);
+    const accApprovedStr = accApprovedAtVal ? formatDateTime(accApprovedAtVal) : '';
+    journeySteps.push({
+      num: stepNum++,
+      title: 'Accounts Admin Approval (Step 1)',
+      badge: isAccountsStep1Approved ? 'Approved' : isAccountsRejected ? 'Rejected' : (isStep1Rejected || isFinRejected) ? 'Cancelled' : 'Pending',
+      tone: isAccountsStep1Approved ? 'emerald' : (isAccountsRejected || isStep1Rejected || isFinRejected) ? 'rose' : 'amber',
+      desc: isAccountsStep1Approved
+        ? `Verified & approved by ${aWho}${accApprovedStr ? ` on ${accApprovedStr}` : ''}.${acc.remarks ? ` Remark: "${acc.remarks}"` : ''}`
+        : isAccountsRejected
+        ? `Rejected by ${rej.rejectedByName || aWho}${rej.rejectedAt ? ` on ${formatDateTime(rej.rejectedAt)}` : ''}.${rej.reason ? ` Reason: "${rej.reason}"` : ''}`
+        : (isStep1Rejected || isFinRejected)
+        ? 'Cancelled due to prior approval rejection.'
+        : statusUpper === 'SUBMITTED'
+        ? 'Awaiting Accounts Admin Step 1 verification & approval.'
+        : 'Will be routed to Accounts Admin after prior approvals complete.',
+    });
+
+    journeySteps.push({
+      num: stepNum++,
+      title: 'Payment & Settlement (Step 2)',
+      badge: isPaid ? 'Paid' : hasRejectionRecord ? 'Cancelled' : isAccountsStep1Approved ? 'Awaiting Payment' : 'Pending',
+      tone: isPaid ? 'emerald' : hasRejectionRecord ? 'rose' : 'amber',
+      desc: isPaid
+        ? `Disbursed Rs. ${formatINR(paidAmt)} via ${pMethod}${pRef && pRef !== 'N/A' ? ` (UTR/Ref: ${pRef})` : ''}${pDate && pDate !== 'N/A' ? ` on ${pDate}` : ''}${pRecordedBy ? ` by ${pRecordedBy}` : ''}.${step2Rem ? ` Remark: "${step2Rem}"` : ''}`
+        : hasRejectionRecord
+        ? 'Payment cancelled because the claim was rejected.'
+        : isAccountsStep1Approved
+        ? `Approved for Rs. ${formatINR(payAmt)} — awaiting disbursement & UTR recording by Accounts Admin.`
+        : 'Payment will be processed after Accounts Admin Step 1 approval.',
+    });
+
+    // Build Status Summary rows matching ExpenseClaimDetailContent.jsx (full-width key-value rows)
+    const statusSummaryRows = [
+      { label: 'Claim Number:', value: claimNoStr, valueColor: '#0f172a', valueFont: 'Helvetica-Bold' },
+      {
+        label: 'Overall Status:',
+        value: overallStatusStr,
+        valueColor: isPaid || isAccountsStep1Approved ? '#059669' : hasRejectionRecord ? '#dc2626' : '#d97706',
+        valueFont: 'Helvetica-Bold',
+      },
+    ];
+    if (showMgrInJourney) {
+      statusSummaryRows.push({
+        label: showFinInJourney ? '1st Approval (Reporting Manager):' : 'Reporting Manager Approval:',
+        value: mgrSummaryStr,
+        valueColor: isStep1Approved ? '#059669' : isStep1Rejected ? '#dc2626' : '#d97706',
+        valueFont: 'Helvetica-Bold',
+      });
+      if (showFinInJourney) {
+        statusSummaryRows.push({
+          label: '2nd Approval (CFO / Finance Head):',
+          value: finSummaryStr,
+          valueColor: isFinApproved ? '#059669' : (isFinRejected || isStep1Rejected) ? '#dc2626' : '#d97706',
+          valueFont: 'Helvetica-Bold',
+        });
+      }
+    }
+    statusSummaryRows.push({
+      label: 'Accounts Admin Approval:',
+      value: accSummaryStr,
+      valueColor: isPaid || isAccountsStep1Approved ? '#059669' : hasRejectionRecord ? '#dc2626' : '#d97706',
+      valueFont: 'Helvetica-Bold',
+    });
+    statusSummaryRows.push({
+      label: 'Payment:',
+      value: isPaid ? `PAID (Rs. ${formatINR(paidAmt)})` : 'UNPAID',
+      valueColor: isPaid ? '#059669' : '#d97706',
+      valueFont: 'Helvetica-Bold',
+    });
+    statusSummaryRows.push({
+      label: 'Applied Date & Time:',
+      value: appliedDateStr,
+      valueColor: '#0f172a',
+      valueFont: 'Helvetica',
+    });
+
+    const sumLabelW = 148;
+    const sumValW = contentWidth - sumLabelW - 20;
+    let summaryH = 4;
+    const measuredSummaryRows = statusSummaryRows.map((r) => {
+      doc.fontSize(7.2).font('Helvetica-Bold');
+      const lH = doc.heightOfString(r.label, { width: sumLabelW - 6 });
+      doc.fontSize(7.4).font(r.valueFont || 'Helvetica-Bold');
+      const vH = doc.heightOfString(r.value, { width: sumValW, lineGap: 1 });
+      const rowH = Math.max(13, Math.max(lH, vH) + 4);
+      summaryH += rowH;
+      return { ...r, rowH };
+    });
+
+    // Measure step heights with generous spacing
+    const stepTextW = contentWidth - 40;
+    let stepsTotalH = 0;
+    const measuredSteps = journeySteps.map((st) => {
+      doc.fontSize(7.2).font('Helvetica');
+      const dH = Math.max(9.5, doc.heightOfString(st.desc, { width: stepTextW, lineGap: 1.2 }));
+      const sH = 11 + dH + 4;
+      stepsTotalH += sH;
+      return { ...st, dH, sH };
+    });
+
+    const journeyHeadH = 16;
+    const journeySubHeadH = 14;
+    const journeyCardH = journeyHeadH + summaryH + journeySubHeadH + stepsTotalH + 5;
+
+    ensureSpace(journeyCardH + 4.5);
+    const jBoxY = doc.y;
+
+    doc.roundedRect(startX, jBoxY, contentWidth, journeyCardH, 5).fillAndStroke('#ffffff', '#cbd5e1');
+    doc.roundedRect(startX, jBoxY, contentWidth, journeyHeadH, 5).fill('#f1f5f9');
+    doc.rect(startX, jBoxY + journeyHeadH - 5, contentWidth, 5).fill('#f1f5f9');
+    doc.rect(startX, jBoxY + journeyHeadH, contentWidth, 0.5).fill('#cbd5e1');
+    doc.fillColor('#0f172a').fontSize(7.8).font('Helvetica-Bold').text('8. CLAIM STATUS & APPROVAL JOURNEY', startX + 8, jBoxY + 4.2);
+
+    // Status Summary Full-Width Key-Value Rows
+    let sumY = jBoxY + journeyHeadH + 2;
+    const sumValX = startX + 8 + sumLabelW;
+    measuredSummaryRows.forEach((r, rIdx) => {
+      if (rIdx > 0) {
+        doc.rect(startX + 8, sumY, contentWidth - 16, 0.4).fill('#f1f5f9');
+      }
+      doc.fillColor('#64748b').fontSize(7.2).font('Helvetica-Bold').text(r.label, startX + 8, sumY + 2.5, {
+        width: sumLabelW - 6,
+      });
+      doc.fillColor(r.valueColor).fontSize(7.4).font(r.valueFont || 'Helvetica-Bold').text(r.value, sumValX, sumY + 2.3, {
+        width: sumValW,
+        lineGap: 1,
+      });
+      sumY += r.rowH;
+    });
+    sumY += 2;
+
+    // Divider & Claim Journey Stepper Header
+    doc.rect(startX + 8, sumY, contentWidth - 16, 0.6).fill('#cbd5e1');
+    doc.fillColor('#334155').fontSize(7.5).font('Helvetica-Bold').text('CLAIM JOURNEY', startX + 8, sumY + 3.5);
+    let stepCurY = sumY + journeySubHeadH;
+
+    measuredSteps.forEach((st, idx) => {
+      const isLast = idx === measuredSteps.length - 1;
+      const dotColor = st.tone === 'emerald' ? '#059669' : st.tone === 'rose' ? '#dc2626' : '#d97706';
+      const pillBg = st.tone === 'emerald' ? '#dcfce7' : st.tone === 'rose' ? '#fee2e2' : '#fef3c7';
+      const pillTextCol = st.tone === 'emerald' ? '#15803d' : st.tone === 'rose' ? '#b91c1c' : '#b45309';
+
+      const cx = startX + 15;
+      const cy = stepCurY + 5;
+      if (!isLast) {
+        doc.save();
+        doc.lineWidth(1).strokeColor('#cbd5e1').moveTo(cx, cy + 5).lineTo(cx, stepCurY + st.sH + 4).stroke();
+        doc.restore();
+      }
+      doc.circle(cx, cy, 5.2).fill(dotColor);
+      doc.fillColor('#ffffff').fontSize(6.4).font('Helvetica-Bold').text(String(st.num), cx - 5.2, cy - 2.3, { width: 10.4, align: 'center', lineBreak: false });
+
+      // Step Title
+      const tx = startX + 26;
+      doc.fillColor('#0f172a').fontSize(7.5).font('Helvetica-Bold').text(st.title, tx, stepCurY + 0.5, { lineBreak: false });
+      const titleW = doc.widthOfString(st.title);
+
+      // Step Badge Pill right next to title
+      doc.fontSize(6.5).font('Helvetica-Bold');
+      const bW = doc.widthOfString(st.badge) + 10;
+      const bX = tx + titleW + 8;
+      doc.roundedRect(bX, stepCurY - 0.5, bW, 9.5, 2.5).fill(pillBg);
+      doc.fillColor(pillTextCol).text(st.badge, bX, stepCurY + 1.3, { width: bW, align: 'center', lineBreak: false });
+
+      // Step Description
+      doc.fillColor('#475569').fontSize(7.1).font('Helvetica').text(st.desc, tx, stepCurY + 11, { width: stepTextW, lineGap: 1.2 });
+
+      stepCurY += st.sH;
+    });
+
+    doc.y = jBoxY + journeyCardH + 4.5;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 8A. ATTACHED PROOFS SUMMARY NOTE
+  // ─────────────────────────────────────────────────────────────
+  doc.fillColor('#64748b').fontSize(7.2).font('Helvetica');
   if (fetchedProofs.length > 0) {
-    doc.text(
-      `Attached Proofs: ${fetchedProofs.length} proof item(s) verified and appended in this PDF document (see following pages).`,
-      startX,
-      doc.y,
-      { width: contentWidth }
-    );
+    if (doc.y + 12 <= pageHeight - 28) {
+      doc.text(
+        `Attached Proofs: ${fetchedProofs.length} proof item(s) verified and appended in this PDF document.`,
+        startX,
+        doc.y,
+        { width: contentWidth, lineBreak: false }
+      );
+      doc.y += 12;
+    }
   } else {
-    doc.text('Attached Proofs: No external documents attached to this claim.', startX, doc.y, { width: contentWidth });
+    const noteY = Math.min(doc.y, pageHeight - 32);
+    doc.text('Attached Proofs: No external documents attached to this claim.', startX, noteY, { width: contentWidth, lineBreak: false });
   }
 
   // NOTE: Signatures & Verification boxes have been completely omitted per requirement.
@@ -1519,41 +2437,57 @@ async function generateClaimPdf(claim, res) {
   // 8B. ATTACHED PROOFS & PHOTO DOCUMENTATION GALLERY (PAGES 2+)
   // ─────────────────────────────────────────────────────────────
   if (fetchedProofs.length > 0) {
-    doc.addPage();
+    const maxPageY = pageHeight - margin - 20;
+    const contentPagesSoFar = doc.bufferedPageRange().count;
+    const totalProofRows = Math.ceil(fetchedProofs.length / 2);
 
-    const cardW = (contentWidth - 14) / 2; // ~254.6pt
-    const cardH = 210; // pt
-
-    const drawProofHeader = (isContinuation = false) => {
-      const bannerH = isContinuation ? 26 : 34;
-      doc.rect(startX, margin, contentWidth, bannerH).fill('#0f172a');
-      doc.fillColor('#ffffff').fontSize(isContinuation ? 9.5 : 11).font('Helvetica-Bold');
+    const drawProofHeader = (isContinuation = false, topY = margin) => {
+      const bannerH = isContinuation ? 26 : 32;
+      doc.rect(startX, topY, contentWidth, bannerH).fill('#0f172a');
+      doc.fillColor('#ffffff').fontSize(isContinuation ? 9.5 : 10.5).font('Helvetica-Bold');
       doc.text(
         isContinuation
           ? 'ATTACHED PROOFS & PHOTO DOCUMENTATION (CONTINUED)'
           : 'ATTACHED PROOFS & PHOTO DOCUMENTATION',
         startX + 12,
-        margin + 7
+        topY + 6
       );
       if (!isContinuation) {
         doc.fillColor('#94a3b8').fontSize(7.5).font('Helvetica');
         doc.text(
           `Official Supporting Evidence for Claim #${claim.claimNumber || claim.claimId || claim._id} (${fetchedProofs.length} Item${fetchedProofs.length > 1 ? 's' : ''})`,
           startX + 12,
-          margin + 20
+          topY + 19
         );
       }
-      return margin + bannerH + 12;
+      return topY + bannerH + 10;
     };
 
-    let curY = drawProofHeader(false);
+    const cardW = (contentWidth - 14) / 2; // ~254.6pt
+    let curY;
+    let cardH = 210;
+
+    // If claim details already flowed onto Page 2+ and there is space below Section 8,
+    // render the proof gallery directly below Section 8 on the same page instead of forcing an extra page break.
+    const sharedTopY = doc.y + 4;
+    const availSharedH = maxPageY - (sharedTopY + 42);
+    const rowsToFitOnShared = Math.min(totalProofRows, 2);
+    if (contentPagesSoFar > 1 && availSharedH >= rowsToFitOnShared * 108 + (rowsToFitOnShared - 1) * 10) {
+      curY = drawProofHeader(false, sharedTopY);
+      cardH = Math.min(210, Math.max(108, Math.floor((maxPageY - curY - (rowsToFitOnShared - 1) * 10) / rowsToFitOnShared)));
+    } else {
+      doc.addPage();
+      curY = drawProofHeader(false, margin);
+      cardH = 210;
+    }
 
     fetchedProofs.forEach((proof, pIdx) => {
       const colIdx = pIdx % 2;
       // Start a new page if needed (before starting a new row)
-      if (colIdx === 0 && pIdx > 0 && curY + cardH > pageHeight - margin - 20) {
+      if (colIdx === 0 && pIdx > 0 && curY + cardH > maxPageY) {
         doc.addPage();
-        curY = drawProofHeader(true);
+        curY = drawProofHeader(true, margin);
+        cardH = 210;
       }
 
       const cardX = startX + colIdx * (cardW + 14);
@@ -1571,11 +2505,13 @@ async function generateClaimPdf(claim, res) {
       doc.fillColor(proof.tagColor || '#4f46e5').fontSize(7.5).font('Helvetica-Bold');
       doc.text(proof.tag || 'DOCUMENT PROOF', cardX + 8, cardY + 5, { width: cardW - 16, ellipsis: true });
 
-      // Inner image / preview area (height 152pt)
+      // Inner image / preview area
       const innerX = cardX + 6;
       const innerY = cardY + 24;
       const innerW = cardW - 12;
-      const innerH = 152;
+      const innerH = Math.max(78, cardH - 58);
+      const boxH = Math.min(92, innerH - 12);
+      const boxY = innerY + Math.max(6, Math.floor((innerH - boxH) / 2));
 
       if (proof.status === 'IMAGE' && proof.buffer) {
         try {
@@ -1587,18 +2523,18 @@ async function generateClaimPdf(claim, res) {
         } catch (_) {
           doc.rect(innerX, innerY, innerW, innerH).fill('#f8fafc');
           doc.fillColor('#64748b').fontSize(8).font('Helvetica');
-          doc.text('Photo Proof Attached (Verified on Portal)', innerX + 4, innerY + 68, { width: innerW - 8, align: 'center' });
+          doc.text('Photo Proof Attached (Verified on Portal)', innerX + 4, innerY + Math.floor(innerH / 2) - 6, { width: innerW - 8, align: 'center' });
         }
       } else if (proof.status === 'PDF') {
-        doc.roundedRect(innerX + 16, innerY + 24, innerW - 32, 96, 4).fillAndStroke('#fef2f2', '#fecaca');
-        doc.fillColor('#dc2626').fontSize(18).font('Helvetica-Bold').text('PDF', innerX + 16, innerY + 40, { width: innerW - 32, align: 'center' });
-        doc.fillColor('#1e293b').fontSize(8).font('Helvetica-Bold').text('PDF Document Proof', innerX + 16, innerY + 66, { width: innerW - 32, align: 'center' });
-        doc.fillColor('#64748b').fontSize(7).font('Helvetica').text('Official attached file', innerX + 16, innerY + 80, { width: innerW - 32, align: 'center' });
+        doc.roundedRect(innerX + 16, boxY, innerW - 32, boxH, 4).fillAndStroke('#fef2f2', '#fecaca');
+        doc.fillColor('#dc2626').fontSize(16).font('Helvetica-Bold').text('PDF', innerX + 16, boxY + 12, { width: innerW - 32, align: 'center' });
+        doc.fillColor('#1e293b').fontSize(8).font('Helvetica-Bold').text('PDF Document Proof', innerX + 16, boxY + 34, { width: innerW - 32, align: 'center' });
+        doc.fillColor('#64748b').fontSize(7).font('Helvetica').text('Official attached file', innerX + 16, boxY + 48, { width: innerW - 32, align: 'center' });
       } else {
-        doc.roundedRect(innerX + 16, innerY + 24, innerW - 32, 96, 4).fillAndStroke('#f8fafc', '#e2e8f0');
-        doc.fillColor('#4338ca').fontSize(16).font('Helvetica-Bold').text('DOC', innerX + 16, innerY + 40, { width: innerW - 32, align: 'center' });
-        doc.fillColor('#1e293b').fontSize(8).font('Helvetica-Bold').text('Attachment Proof', innerX + 16, innerY + 66, { width: innerW - 32, align: 'center' });
-        doc.fillColor('#64748b').fontSize(7).font('Helvetica').text('Verified in claim records', innerX + 16, innerY + 80, { width: innerW - 32, align: 'center' });
+        doc.roundedRect(innerX + 16, boxY, innerW - 32, boxH, 4).fillAndStroke('#f8fafc', '#e2e8f0');
+        doc.fillColor('#4338ca').fontSize(15).font('Helvetica-Bold').text('DOC', innerX + 16, boxY + 12, { width: innerW - 32, align: 'center' });
+        doc.fillColor('#1e293b').fontSize(8).font('Helvetica-Bold').text('Attachment Proof', innerX + 16, boxY + 34, { width: innerW - 32, align: 'center' });
+        doc.fillColor('#64748b').fontSize(7).font('Helvetica').text('Verified in claim records', innerX + 16, boxY + 48, { width: innerW - 32, align: 'center' });
       }
 
       // Card footer caption bar (height 34pt)
@@ -1611,7 +2547,7 @@ async function generateClaimPdf(claim, res) {
 
       // Advance row after rendering 2 columns or on the last item
       if (colIdx === 1 || pIdx === fetchedProofs.length - 1) {
-        curY += cardH + 12;
+        curY += cardH + 10;
       }
     });
   }

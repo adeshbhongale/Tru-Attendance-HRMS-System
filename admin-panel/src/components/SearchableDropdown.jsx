@@ -21,7 +21,7 @@ const SearchableDropdown = ({
   const menuRef = useRef(null);
   const searchInputRef = useRef(null);
 
-  // Normalize options to [{ value, label, sublabel }]
+  // Normalize options to [{ value, label, sublabel, icon, iconColor }]
   const normalizedOptions = useMemo(() => {
     return options.map((opt) => {
       if (typeof opt === 'string') {
@@ -31,6 +31,8 @@ const SearchableDropdown = ({
         value: opt.value !== undefined ? opt.value : (opt.name ?? opt.fullName ?? opt.city ?? opt.id ?? opt._id),
         label: opt.label ?? opt.name ?? opt.fullName ?? opt.city ?? String(opt.value || ''),
         sublabel: opt.sublabel ?? (opt.employeeIdCode ? `(${opt.employeeIdCode})` : opt.code ? `(${opt.code})` : opt.cityClass ? `(Class ${opt.cityClass})` : ''),
+        icon: opt.icon || null,
+        iconColor: opt.iconColor || '',
       };
     });
   }, [options]);
@@ -141,7 +143,11 @@ const SearchableDropdown = ({
         } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
       >
         <div className="flex items-center gap-2 truncate min-w-0">
-          {Icon && <Icon size={14} className="text-slate-400 shrink-0" />}
+          {selectedOption?.icon ? (
+            <selectedOption.icon size={14} className={`${selectedOption.iconColor || 'text-indigo-600'} shrink-0`} />
+          ) : (
+            Icon && <Icon size={14} className="text-slate-400 shrink-0" />
+          )}
           <span className={`truncate ${selectedOption ? 'text-slate-900 font-extrabold' : 'text-slate-600 font-semibold'}`}>
             {selectedOption ? (
               <span>
@@ -240,6 +246,7 @@ const SearchableDropdown = ({
               ) : (
                 filteredOptions.map((opt) => {
                   const isSelected = String(value) === String(opt.value);
+                  const OptIcon = opt.icon;
                   return (
                     <button
                       key={String(opt.value)}
@@ -251,11 +258,16 @@ const SearchableDropdown = ({
                           : 'text-slate-700 hover:bg-slate-50'
                       }`}
                     >
-                      <div className="truncate pr-2">
-                        <span className="block truncate">{opt.label}</span>
-                        {opt.sublabel && (
-                          <span className="text-[10px] text-slate-400 font-semibold block">{opt.sublabel}</span>
+                      <div className="flex items-center gap-2 truncate pr-2 min-w-0">
+                        {OptIcon && (
+                          <OptIcon size={14} className={`${opt.iconColor || (isSelected ? 'text-indigo-600' : 'text-slate-500')} shrink-0`} />
                         )}
+                        <div className="truncate min-w-0">
+                          <span className="block truncate">{opt.label}</span>
+                          {opt.sublabel && (
+                            <span className="text-[10px] text-slate-400 font-semibold block">{opt.sublabel}</span>
+                          )}
+                        </div>
                       </div>
                       {isSelected && <Check size={14} className="text-indigo-600 shrink-0" />}
                     </button>

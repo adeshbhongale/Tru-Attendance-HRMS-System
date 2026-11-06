@@ -1,8 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   AlertCircle,
+  Briefcase,
+  Building2,
   Calendar,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Download,
   Eye,
@@ -14,6 +18,7 @@ import {
   Send,
   ShieldCheck,
   Trash2,
+  Wrench,
   X,
   XCircle,
   Zap,
@@ -41,6 +46,26 @@ import { resolveProofImageUrl } from "../../../../utils/imageUrl";
 import expenseApi from "../api/expenseApi";
 import ExpenseHeader from "../components/ExpenseHeader";
 
+const formatINR = (n) => {
+  const v = Number(n || 0);
+  if (!Number.isFinite(v)) return "₹0";
+  return `₹${v.toLocaleString("en-IN", { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
+};
+
+const getTravelModeIcon = (modeName = "", subtypeName = "") => {
+  const s = `${modeName || ""} ${subtypeName || ""}`.toLowerCase();
+  if (/(metro)/.test(s)) return "🚇";
+  if (/(train|rail|irctc|vande|shatabdi|rajdhani|express|ac\s*i|ac\s*ii|ac\s*iii|sleeper|chair\s*car|iind\s*class|1st\s*class|2nd\s*class|3rd\s*class)/.test(s)) return "🚆";
+  if (/(flight|air|plane|economy|business\s*class|aviation)/.test(s)) return "✈️";
+  if (/(bus|volvo|sleeper\s*coach|seater)/.test(s)) return "🚌";
+  if (/(auto|rickshaw|tuk)/.test(s)) return "🛺";
+  if (/(taxi|cab|uber|ola|rapido)/.test(s)) return "🚕";
+  if (/(bike|two\s*wheeler|2-wheeler|2\s*wheeler|motorcycle|scooter|scooty|ebike|e-bike)/.test(s)) return "🏍️";
+  if (/(car|four\s*wheeler|4-wheeler|4\s*wheeler|4w|suv|sedan|own\s*vehicle|vehicle|ecar|e-car)/.test(s)) return "🚗";
+  if (/(ferry|ship|boat|water)/.test(s)) return "⛴️";
+  return "🚆";
+};
+
 const getDisplayStatus = (status, claim) => {
   const s = String(status || "").toUpperCase();
   const payStatus = String(claim?.paymentStatus || "").toUpperCase();
@@ -55,7 +80,17 @@ const getDisplayStatus = (status, claim) => {
     return { label: "Draft", color: "#64748b" };
   }
   if (s === "APPROVAL_PENDING") {
+    // Full Payment / Stock Purchase: Reporting Manager approved, waiting for the CFO / Finance Head
+    if (String(claim?.financeApproval?.status || "").toUpperCase() === "PENDING") {
+      return { label: "Awaiting 2nd Approval", color: "#b45309" };
+    }
     return { label: "Awaiting Approval", color: "#7c3aed" };
+  }
+  if (s === "ACCOUNTS_APPROVED" || payStatus === "AWAITING_DISBURSEMENT") {
+    return { label: "Approved • Payment Pending", color: "#2563eb" };
+  }
+  if (s === "SUBMITTED") {
+    return { label: "Pending", color: "#d97706" };
   }
   return { label: "Pending", color: "#d97706" };
 };
@@ -84,34 +119,71 @@ const formatDateTime = (dateStr) => {
 };
 
 const getClaimTypeInfo = (claim) => {
-  if (!claim) return { code: "EXPENSE", name: "Expense Claim" };
-  const firstEntry = claim.entries?.[0] || claim.employeeClaims?.[0]?.items?.[0] || {};
-  const code = (
-    claim.claimType ||
-    claim.expenseType ||
-    firstEntry.expenseType ||
-    (claim.trip?.travelMode ? "TRAVEL" : "OTHER")
-  )?.toUpperCase();
+  if (!claim) return { code: "EXPENSE", name: "Expense Claim", label: "Expense" };
+  const rawEntries = Array.isArray(claim.entries) ? claim.entries : [];
+  const firstEcItems = Array.isArray(claim.employeeClaims?.[0]?.items) ? claim.employeeClaims[0].items : [];
+  const cMode = String(claim.claimMode || "").toUpperCase().trim();
+  const hasLodgingWithFood =
+    cMode === "LODGING" &&
+    Boolean(claim.includeFood || (Array.isArray(claim.foodEntries) && claim.foodEntries.length > 0));
+  const rawClaimType = String(claim.claimType || claim.expenseType || "").toUpperCase().trim();
 
-  const isPurchase = code === "OTHER" && (firstEntry.otherSubType || claim.otherSubType || "").toUpperCase() === "PURCHASE";
+  if (
+    rawEntries.length > 1 ||
+    firstEcItems.length > 1 ||
+    hasLodgingWithFood ||
+    rawClaimType === "COMBINE" ||
+    rawClaimType === "COMBINED"
+  ) {
+    return { code: "COMBINE", name: "Combine Claim", label: "Combine" };
+  }
+
+  const firstEntry = rawEntries[0] || firstEcItems[0] || {};
+  const code = String(
+    firstEntry.expenseType ||
+    firstEntry.claimType ||
+    rawClaimType ||
+    (cMode === "LODGING" ? "LODGING" : (claim.trip?.travelMode ? "TRAVEL" : "OTHER"))
+  ).toUpperCase().trim();
+
+  const subType = String(firstEntry.otherSubType || firstEntry.subType || claim.otherSubType || "").toUpperCase().trim();
+  const isPurchase =
+    code === "STOCK_PURCHASE" ||
+    ((code === "OTHER" || code === "OTHER_EXPENSE") && (subType === "PURCHASE" || subType === "STOCK_PURCHASE"));
+
+  if (isPurchase) {
+    return { code: "STOCK_PURCHASE", name: "Stock Purchase Claim", label: "Stock Purchase" };
+  }
 
   switch (code) {
     case "LODGING":
+    case "LODGING_EXPENSE":
       return {
         code: "LODGING",
         name: "Lodging Claim",
+        label: "Lodging",
       };
     case "CONVEYANCE":
-      return { code: "CONVEYANCE", name: "Local Conveyance Claim" };
+    case "LOCAL_CONVEYANCE":
+    case "LOCAL_TRAVEL":
+    case "LOCAL":
+      return { code: "CONVEYANCE", name: "Local Conveyance Claim", label: "Local Conveyance" };
     case "FOOD":
-      return { code: "FOOD", name: "Food Claim" };
+    case "FOOD_DA":
+    case "FOOD_EXPENSE":
+      return { code: "FOOD", name: "Food Claim", label: "Food" };
     case "TRAVEL":
-      return { code: "TRAVEL", name: "Travel Claim" };
+    case "TRAVEL_EXPENSE":
+      return { code: "TRAVEL", name: "Travel Claim", label: "Travel" };
+    case "STOCK_PURCHASE":
+      return { code: "STOCK_PURCHASE", name: "Stock Purchase Claim", label: "Stock Purchase" };
     case "OTHER":
+    case "OTHER_EXPENSE":
     default:
       return {
         code: code || "OTHER",
-        name: isPurchase ? "Purchase Claim" : (code === "OTHER" ? "Other Expense Claim" : `${code || "Expense"} Claim`),
+        name: code === "OTHER" || code === "OTHER_EXPENSE" ? "Other Expense Claim" : `${code || "Expense"} Claim`,
+        label: code === "OTHER" || code === "OTHER_EXPENSE" ? "Other Expense" : (code || "Expense"),
       };
   }
 };
@@ -165,6 +237,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const [decisionMode, setDecisionMode] = useState(null);
   const [decisionRemark, setDecisionRemark] = useState("");
   const [deciding, setDeciding] = useState(false);
+  const [collapsedCategories, setCollapsedCategories] = useState({});
   const [activeDownloadBtn, setActiveDownloadBtn] = useState(null); // 'header' | 'bottom' | null
   const downloadingPdf = Boolean(activeDownloadBtn);
 
@@ -271,6 +344,15 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
 
   const handleDecision = async () => {
     const text = decisionRemark.trim();
+    if (!text) {
+      Alert.alert(
+        "Remark required",
+        decisionMode === "reject"
+          ? "Please enter the reason for rejecting this claim."
+          : "Please enter a remark for approving this claim."
+      );
+      return;
+    }
     if (decisionMode === "reject" && text.length < 3) {
       Alert.alert("Reason required", "Please enter the reason for rejecting this claim.");
       return;
@@ -291,9 +373,14 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     const approved = decisionMode === "approve";
     closeDecision();
     if (res.data) setClaim(res.data);
+    const sentToFinanceHead = approved && res.data?.status === "APPROVAL_PENDING" && res.data?.financeApproval?.status === "PENDING";
     Alert.alert(
       approved ? "Approved" : "Rejected",
-      approved ? "Claim approved and sent to Accounts." : "Claim rejected."
+      approved
+        ? (sentToFinanceHead
+          ? `Claim approved and sent to ${res.data.financeApproval.approverName || "the CFO / Finance Head"} for 2nd approval.`
+          : "Claim approved and sent to Accounts.")
+        : "Claim rejected."
     );
     load(false);
   };
@@ -370,10 +457,32 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const isDisbursedOrPaid = ["PAID", "DISBURSED"].includes(paymentUpper) ||
     ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper);
 
-  const isApprovedOrPaid = isDisbursedOrPaid;
+  const isAccountsApproved = statusUpper === "ACCOUNTS_APPROVED" || paymentUpper === "AWAITING_DISBURSEMENT" || String(claim.accountsApproval?.status || "").toUpperCase() === "APPROVED";
 
-  // User can edit the submitted claim until claim is paid
-  const isEditable = isOwner && !isApprovedOrPaid;
+  const isApprovedOrPaid = isDisbursedOrPaid || isAccountsApproved;
+
+  const isDraftOrRejected = [
+    "DRAFT",
+    "REJECTED",
+    "ACCOUNTS_REJECTED",
+    "HR_REJECTED",
+    "RETURNED",
+    "CANCELLED",
+  ].includes(statusUpper);
+
+  const maStatusUpper = String(claim.managerApproval?.status || "").toUpperCase();
+  const maKindUpper = String(claim.managerApproval?.kind || "NONE").toUpperCase();
+  const faStatusUpper = String(claim.financeApproval?.status || "").toUpperCase();
+  const isFirstApprovalDone = !isDraftOrRejected && Boolean(
+    isAccountsApproved ||
+    faStatusUpper === "PENDING" ||
+    faStatusUpper === "APPROVED" ||
+    (maStatusUpper === "APPROVED" && (maKindUpper !== "NONE" || Boolean(claim.managerApproval?.decidedAt || claim.managerApproval?.approver))) ||
+    claim.permissions?.isFirstApprovalApproved
+  );
+
+  // User can edit the claim only before the 1st applicable approval (Reporting Manager or Accounts) is approved, or when Draft/Rejected
+  const isEditable = isOwner && !isApprovedOrPaid && !isFirstApprovalDone && (claim.permissions?.canEdit !== false);
 
   // But CANNOT delete submitted claims - delete is strictly for DRAFT or rejected/cancelled
   const isDeletable = isOwner && [
@@ -561,15 +670,17 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
       const firstItem = ecList[0]?.items?.[idx] || {};
       const expenseType = (entry.expenseType || firstItem.expenseType || claim.claimType || "OTHER").toUpperCase();
       const isOther = expenseType === "OTHER";
+      const isStockPurchase = expenseType === "STOCK_PURCHASE";
       const isConveyance = expenseType === "CONVEYANCE";
-      const isPurchase = isOther && (entry.otherSubType || firstItem.otherSubType || "").toUpperCase() === "PURCHASE";
+      const isPurchase = isStockPurchase || (isOther && (entry.otherSubType || firstItem.otherSubType || "").toUpperCase() === "PURCHASE");
 
       const expenseTypeName = firstItem.expenseTypeName || (
         isConveyance ? "Local Conveyance" :
           expenseType === "FOOD" ? "Food" :
             expenseType === "TRAVEL" ? "Travel" :
               (expenseType === "LODGING" || expenseType === "LODGING") ? "Lodging" :
-                isOther ? (isPurchase ? "Purchase" : "Other Expense") : expenseType
+                isStockPurchase ? "Stock Purchase" :
+                  isOther ? (isPurchase ? "Stock Purchase" : "Other Expense") : expenseType
       );
       const expenseDate = entry.expenseDate || firstItem.expenseDate || claim.claimDate || claim.date;
       const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
@@ -616,15 +727,16 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
       const itemHasExcess = excessAmount > 0;
       const isItemFood = expenseType === "FOOD" || expenseType === "FOOD_EXPENSE";
       const isItemLodging = expenseType === "LODGING" || expenseType === "LODGING_EXPENSE";
+      const rawEntryLimit = Number(entry.policyLimit) || itemPolLimitSum || Number(firstItem.policyLimit) || (isItemLodging ? Number(claim.lodgingSummary?.policyLimit) : (isItemFood ? Number(claim.foodSummary?.remainingEntitlement ?? claim.foodSummary?.totalEntitlement) : 0)) || (entriesList.length === 1 ? Number(claim.grandPolicyLimit || claim.policyLimit || 0) : 0);
       const policyLimit = (isItemFood || isItemLodging)
-        ? allowedAmount
-        : (Number(entry.policyLimit) || Number(firstItem.policyLimit) || (entriesList.length === 1 ? (claim.grandPolicyLimit || claim.policyLimit || 0) : 0));
+        ? (rawEntryLimit > 0 ? rawEntryLimit : allowedAmount)
+        : rawEntryLimit;
 
       const limitDisplay = (isItemFood || isItemLodging)
-        ? `₹${allowedAmount ?? 0}`
+        ? `₹${policyLimit || allowedAmount || 0}`
         : (isConveyance || expenseType === "TRAVEL" || expenseType === "OTHER")
-          ? (firstItem.limitText || "Actuals (Fully Allowed)")
-          : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : "Actuals (Fully Allowed)"));
+          ? (entry.limitText || firstItem.limitText || "Actuals (Fully Allowed)")
+          : (entry.limitText || firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : "Actuals (Fully Allowed)"));
       const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
 
       const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
@@ -641,6 +753,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                   : "Actuals (Fully Allowed)"
       );
 
+      const isTravelKm = expenseType === "TRAVEL" && (entry.travelWorkflow || firstItem.travelWorkflow) === "KM_RATE";
+
       return {
         expenseType,
         expenseTypeName,
@@ -653,12 +767,23 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         limitDisplay,
         formula: itemFormula,
         description: entry.remark || entry.description || firstItem.description,
-        distanceKm: isConveyance ? (entry.distanceKm || firstItem.distanceKm) : undefined,
+        distanceKm: (isConveyance || expenseType === "TRAVEL") ? (entry.distanceKm ?? firstItem.distanceKm) : undefined,
         vehicle: isConveyance ? (entry.vehicle || firstItem.vehicle) : undefined,
+        travelModeCode: entry.travelModeCode || firstItem.travelModeCode,
+        travelModeName: entry.travelModeName || firstItem.travelModeName,
+        travelSubtypeCode: entry.travelSubtypeCode || firstItem.travelSubtypeCode,
+        travelSubtypeName: entry.travelSubtypeName || firstItem.travelSubtypeName,
+        travelWorkflow: entry.travelWorkflow || firstItem.travelWorkflow,
+        startKm: entry.startKm ?? firstItem.startKm,
+        endKm: entry.endKm ?? firstItem.endKm,
+        ratePerKm: entry.ratePerKm ?? firstItem.ratePerKm,
+        entitlementStatus: entry.entitlementStatus || firstItem.entitlementStatus,
+        excessReason: entry.excessReason || firstItem.excessReason,
         visitType: isConveyance ? ((entry.visitType === "VISIT" || firstItem.visitType === "VISIT" || entry.isVisit || firstItem.isVisit || isClaimVisit) ? "VISIT" : "NO_VISIT") : undefined,
         isVisit: isConveyance ? Boolean(entry.isVisit || firstItem.isVisit || entry.visitType === "VISIT" || firstItem.visitType === "VISIT" || isClaimVisit) : false,
         serviceReports: isConveyance ? (entry.serviceReports || firstItem.serviceReports || (firstItem.conveyanceKm?.serviceReports) || []) : [],
         otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
+        materialName: isPurchase ? (entry.materialName || firstItem.materialName) : undefined,
         barcodeNumber: isPurchase ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
         quantity: isPurchase ? (entry.quantity || firstItem.quantity) : undefined,
         hotelName: entry.hotelName || firstItem.hotelName,
@@ -667,14 +792,16 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         numberPlatePhotos: entry.numberPlatePhotos || firstItem.numberPlatePhotos || [],
         startKmPhotos: entry.startKmPhotos || firstItem.startKmPhotos || [],
         endKmPhotos: entry.endKmPhotos || firstItem.endKmPhotos || [],
-        attachments: isConveyance ? [] : attachments,
+        attachments: (isConveyance || isTravelKm) ? [] : attachments,
       };
     })
     : (() => {
       const singleExpType = (ecList[0]?.items?.[0]?.expenseType || claim.claimType || (isLodging ? "LODGING" : "OTHER")).toUpperCase();
       const singleIsOther = singleExpType === "OTHER";
-      const singleIsPurchase = singleIsOther && (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType || "").toUpperCase() === "PURCHASE";
+      const singleIsStockPurchase = singleExpType === "STOCK_PURCHASE";
+      const singleIsPurchase = singleIsStockPurchase || (singleIsOther && (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType || "").toUpperCase() === "PURCHASE");
       const singleIsConv = singleExpType === "CONVEYANCE" || singleExpType === "LOCAL_CONVEYANCE";
+      const singlePolicyLimit = Number(claim.grandPolicyLimit || claim.policyLimit || ecList[0]?.items?.[0]?.policyLimit || allowAmt);
       return [{
         expenseType: singleExpType,
         expenseTypeName: typeInfo.name,
@@ -682,10 +809,10 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         requestedAmount: reqAmt,
         allowedAmount: allowAmt,
         excessAmount: excAmt,
-        policyLimit: (singleExpType === "FOOD" || singleExpType === "FOOD_EXPENSE" || singleExpType === "LODGING" || singleExpType === "LODGING_EXPENSE") ? allowAmt : (claim.grandPolicyLimit || claim.policyLimit || allowAmt),
+        policyLimit: singlePolicyLimit,
         hasExcess: excAmt > 0,
         limitDisplay: (singleExpType === "FOOD" || singleExpType === "FOOD_EXPENSE" || singleExpType === "LODGING" || singleExpType === "LODGING_EXPENSE")
-          ? `₹${allowAmt}`
+          ? `₹${singlePolicyLimit || allowAmt}`
           : (claim.claimType === "CONVEYANCE" || claim.claimType === "LOCAL_CONVEYANCE" || claim.claimType === "TRAVEL" || claim.claimType === "OTHER")
             ? "Actuals (Fully Allowed)"
             : (claim.grandPolicyLimit ? `₹${claim.grandPolicyLimit}` : "Actuals (Fully Allowed)"),
@@ -697,6 +824,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         isVisit: singleIsConv ? isClaimVisit : false,
         serviceReports: singleIsConv ? (claim.entries?.[0]?.serviceReports || ecList[0]?.items?.[0]?.serviceReports || claim.serviceReports || []) : [],
         otherSubType: singleIsOther ? (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType) : undefined,
+        materialName: singleIsPurchase ? (claim.entries?.[0]?.materialName || ecList[0]?.items?.[0]?.materialName || claim.materialName) : undefined,
         barcodeNumber: singleIsPurchase ? (claim.entries?.[0]?.barcodeNumber || ecList[0]?.items?.[0]?.barcodeNumber) : undefined,
         quantity: singleIsPurchase ? (claim.entries?.[0]?.quantity || ecList[0]?.items?.[0]?.quantity) : undefined,
         hotelName: claim.entries?.[0]?.hotelName || ecList[0]?.items?.[0]?.hotelName,
@@ -708,6 +836,63 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         attachments: singleIsConv ? [] : receiptsList,
       }];
     })();
+
+  // If this is a Lodging claim with included Food (stored in foodEntries / foodSummary / foodRequestedAmount),
+  // ensure the Food entry is included in combinedEntries as Entry 02 when not already present.
+  if (
+    isLodging &&
+    !combinedEntries.some((e) => e.expenseType === "FOOD" || e.expenseType === "FOOD_EXPENSE")
+  ) {
+    const rawFoodEntries = Array.isArray(claim.foodEntries) ? claim.foodEntries : [];
+    const fSum = claim.foodSummary || {};
+    const fReq = Number(
+      claim.foodRequestedAmount ??
+      fSum.requested ??
+      fSum.claimedAmount ??
+      rawFoodEntries.reduce((s, f) => s + (Number(f.requestedAmount) || 0), 0)
+    );
+    const fAllow = Number(
+      claim.foodAllowedAmount ??
+      fSum.allowed ??
+      fSum.allowedAmount ??
+      (rawFoodEntries.length > 0
+        ? rawFoodEntries.reduce((s, f) => s + (Number(f.allowedAmount ?? f.requestedAmount) || 0), 0)
+        : fReq)
+    );
+    const fExc = Number(
+      claim.foodExcessAmount ??
+      fSum.excess ??
+      fSum.excessAmount ??
+      Math.max(0, fReq - fAllow)
+    );
+    const fLim = Number(
+      claim.foodPolicyLimit ??
+      fSum.remainingBefore ??
+      fSum.totalRemainingLimit ??
+      fSum.entitlement ??
+      fSum.totalPeriodLimit ??
+      fAllow
+    );
+    if (claim.includeFood || rawFoodEntries.length > 0 || fReq > 0 || fAllow > 0) {
+      const fReceipts = (Array.isArray(claim.foodReceipts) && claim.foodReceipts.length > 0)
+        ? claim.foodReceipts
+        : rawFoodEntries.flatMap((f) => f.receipts || f.attachments || []);
+      combinedEntries.push({
+        expenseType: "FOOD",
+        expenseTypeName: "Shared Food Allowance",
+        expenseDate: claim.foodFromDate || claim.fromDate,
+        requestedAmount: fReq,
+        allowedAmount: fAllow,
+        excessAmount: fExc,
+        policyLimit: fLim,
+        hasExcess: fExc > 0,
+        limitDisplay: `₹${fLim || fAllow || 0}`,
+        formula: fSum.plainExplanation || claim.foodPlainExplanation || "100% of Combined Daily Food Limits",
+        description: claim.foodRemark || rawFoodEntries[0]?.remark || rawFoodEntries[0]?.description || claim.remark,
+        attachments: fReceipts,
+      });
+    }
+  }
 
   const grandReq = reqAmt;
   const grandAllow = allowAmt;
@@ -938,7 +1123,12 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     .filter(r => Boolean(r.formula));
 
   const isFullPayment = Boolean(claim.fullPayment?.requested || claim.fullPaymentRequested);
-  const hasOtherExpense = combinedEntries.some(e => e.expenseType === "OTHER") || (claim.claimType || "").toUpperCase() === "OTHER";
+  const hasStockPurchase =
+    combinedEntries.some((e) => e.expenseType === "STOCK_PURCHASE" || (e.expenseType === "OTHER" && String(e.otherSubType || "").toUpperCase() === "PURCHASE")) ||
+    (claim.claimType || "").toUpperCase() === "STOCK_PURCHASE";
+  const hasOtherExpense =
+    combinedEntries.some((e) => e.expenseType === "OTHER" || e.expenseType === "STOCK_PURCHASE") ||
+    ["OTHER", "STOCK_PURCHASE"].includes((claim.claimType || "").toUpperCase());
   const managerApproval = claim.managerApproval || {};
 
   const filerUser = (typeof claim.submittedBy === "object" && claim.submittedBy !== null) ? claim.submittedBy : {};
@@ -953,27 +1143,82 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     isManagementFiler(filerUser) ||
     isManagementFiler(filerFromClaim) ||
     (isOwner && isManagementFiler(currentUser)) ||
-    Boolean(claim.fullPayment?.decisionRemarks?.includes("Management")) ||
-    Boolean(claim.managerApproval?.remarks?.includes("Management")) ||
-    Boolean(isFullPayment && claim.managerApproval?.kind === "NONE");
+    Boolean(claim.fullPayment?.decisionRemarks?.includes("not applicable for management")) ||
+    Boolean(claim.managerApproval?.remarks?.includes("not applicable for management"));
 
-  const filerName =
-    claim.submittedByName ||
-    filerUser.name ||
-    (isOwner && currentUser?.name) ||
-    "NA";
+  const normalizeTypeCode = (v) => {
+    const c = String(v || "").trim().toUpperCase();
+    if (!c) return "";
+    if (c === "PETROL" || c === "LOCAL_CONVEYANCE" || c === "LOCAL_TRAVEL") return "CONVEYANCE";
+    if (c === "STAY" || c === "HOTEL" || c === "ACCOMMODATION") return "LODGING";
+    if (c === "MEAL" || c === "DA" || c === "DAILY_ALLOWANCE") return "FOOD";
+    if (c === "STOCK" || c === "PURCHASE") return "STOCK_PURCHASE";
+    if (c === "MISC" || c === "MISCELLANEOUS" || c === "OTHER_EXPENSE") return "OTHER";
+    return c;
+  };
+  const claimTypeCodes = Array.from(
+    new Set(
+      [
+        normalizeTypeCode(claim.claimType),
+        normalizeTypeCode(claim.expenseType),
+        ...combinedEntries.map((e) =>
+          String(e?.otherSubType || "").toUpperCase() === "PURCHASE"
+            ? "STOCK_PURCHASE"
+            : normalizeTypeCode(e?.expenseType)
+        ),
+      ].filter(Boolean)
+    )
+  );
+  const snapCfoCfg = claim.policySnapshot?.cfoApprovalConfig;
+  const cfoCfgEnabled = snapCfoCfg ? snapCfoCfg.enabled !== false : true;
+  const cfoCfgFullPayment = snapCfoCfg ? snapCfoCfg.applyOnFullPayment !== false : true;
+  const cfoCfgTypes = Array.isArray(snapCfoCfg?.applicableClaimTypes)
+    ? snapCfoCfg.applicableClaimTypes.map(normalizeTypeCode).filter(Boolean)
+    : ["STOCK_PURCHASE"];
+  const isCfoApplicableByRule = Boolean(
+    cfoCfgEnabled &&
+      ((isFullPayment && cfoCfgFullPayment) ||
+        claimTypeCodes.some((code) => cfoCfgTypes.includes(code)))
+  );
 
-  const approvalKind = managerApproval.kind && managerApproval.kind !== "NONE"
-    ? managerApproval.kind
-    : (isFullPayment ? "FULL_PAYMENT" : ((hasOtherExpense || managerApproval.approver) ? "OTHER_EXPENSE" : "NONE"));
-  const isManagementApproval = approvalKind === "FULL_PAYMENT" || managerApproval.approverRole === "MANAGEMENT";
-  const isReportingManagerApproval = approvalKind === "OTHER_EXPENSE" || managerApproval.approverRole === "REPORTING_MANAGER";
+  // Priority: 1. Full Payment > 2. Configured Claim Type > 3. Other Claim
+  const rawApprovalStatus = String(managerApproval.status || "").toUpperCase();
+  const financeApproval = claim.financeApproval || {};
+  const financeStatusUpper = String(financeApproval.status || "").toUpperCase();
+
+  // 2nd approval (CFO / Finance Head) for configured claims
+  const requiresSecondApproval = Boolean(
+    (!isClaimantManagement && isCfoApplicableByRule) ||
+    (financeStatusUpper && financeStatusUpper !== "NOT_REQUIRED") ||
+    financeApproval.approver ||
+    financeApproval.approverName
+  );
+
+  const isMgrExplicitlyNotRequired =
+    rawApprovalStatus === "NOT_REQUIRED" &&
+    (!managerApproval.kind || managerApproval.kind === "NONE") &&
+    !managerApproval.decidedAt &&
+    !managerApproval.remarks &&
+    !isFullPayment &&
+    !requiresSecondApproval;
+
+  const approvalKind = isFullPayment
+    ? "FULL_PAYMENT"
+    : (managerApproval.kind && managerApproval.kind !== "NONE"
+      ? managerApproval.kind
+      : ((!isMgrExplicitlyNotRequired && (isCfoApplicableByRule || (hasOtherExpense && rawApprovalStatus !== "NOT_REQUIRED") || managerApproval.approver)) ? "OTHER_EXPENSE" : "NONE"));
+  const isManagementApproval = isFullPayment || approvalKind === "FULL_PAYMENT" || managerApproval.approverRole === "MANAGEMENT";
   const showApprovalCard = Boolean(
-    (approvalKind && approvalKind !== "NONE") ||
-    managerApproval.approver ||
-    managerApproval.approverName ||
-    (isFullPayment && (statusUpper === "APPROVAL_PENDING" || claim.fullPayment?.status)) ||
-    (isClaimantManagement && (isFullPayment || hasOtherExpense || managerApproval.status))
+    !isMgrExplicitlyNotRequired && (
+      (approvalKind && approvalKind !== "NONE") ||
+      (rawApprovalStatus && rawApprovalStatus !== "NOT_REQUIRED") ||
+      managerApproval.approver ||
+      managerApproval.approverName ||
+      managerApproval.decidedAt ||
+      managerApproval.remarks ||
+      (isFullPayment && (statusUpper === "APPROVAL_PENDING" || claim.fullPayment?.status)) ||
+      (isClaimantManagement && (isFullPayment || hasOtherExpense || managerApproval.status))
+    )
   );
 
   const approverObj = (typeof managerApproval.approver === "object" && managerApproval.approver !== null) ? managerApproval.approver : null;
@@ -981,19 +1226,83 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const approverCode = approverObj?.employeeIdCode ? ` (${approverObj.employeeIdCode})` : "";
   const approverSub = [approverObj?.designation, approverObj?.department].filter(Boolean).join(" • ");
 
-  const rawApprovalStatus = String(managerApproval.status || "").toUpperCase();
   const effectiveApprovalStatus = (rawApprovalStatus && rawApprovalStatus !== "NOT_REQUIRED")
     ? rawApprovalStatus
     : (statusUpper === "APPROVAL_PENDING"
-      ? "PENDING"
-      : (statusUpper === "SUBMITTED" || statusUpper === "PAID" ? "APPROVED" : (statusUpper === "REJECTED" ? "REJECTED" : "PENDING")));
+      ? (financeStatusUpper === "PENDING" ? "APPROVED" : "PENDING")
+      : (["SUBMITTED", "ACCOUNTS_APPROVED", "APPROVED", "PAID", "DISBURSED", "SETTLED"].includes(statusUpper)
+        ? "APPROVED"
+        : (statusUpper === "REJECTED" ? "REJECTED" : "PENDING")));
 
   const approvalStatusMeta = {
-    PENDING: { label: "Awaiting approval", color: "#d97706", bg: "#fef3c7", border: "#fde68a" },
-    APPROVED: { label: "Approved", color: "#059669", bg: "#d1fae5", border: "#a7f3d0" },
-    REJECTED: { label: "Rejected", color: "#dc2626", bg: "#fee2e2", border: "#fecaca" },
-  }[effectiveApprovalStatus] || { label: "Pending", color: "#d97706", bg: "#fef3c7", border: "#fde68a" };
+    PENDING: { label: "Pending • Awaiting 1st Approval", shortLabel: "Pending", color: "#d97706", bg: "#fef3c7", border: "#fde68a" },
+    APPROVED: { label: "Approved", shortLabel: "Approved", color: "#059669", bg: "#d1fae5", border: "#a7f3d0" },
+    REJECTED: { label: "Rejected", shortLabel: "Rejected", color: "#dc2626", bg: "#fee2e2", border: "#fecaca" },
+  }[effectiveApprovalStatus] || { label: "Pending", shortLabel: "Pending", color: "#d97706", bg: "#fef3c7", border: "#fde68a" };
   const canApprove = Boolean(claim.permissions?.canApprove);
+
+  const showFinanceCard = Boolean(requiresSecondApproval && statusUpper !== "DRAFT");
+  const isFinanceStage = statusUpper === "APPROVAL_PENDING" && financeStatusUpper === "PENDING";
+  const financeApproverObj = (typeof financeApproval.approver === "object" && financeApproval.approver !== null) ? financeApproval.approver : null;
+  const financeApproverName = financeApproverObj?.name || financeApproval.approverName || "Company CFO / Finance Head";
+  const financeApproverCode = financeApproverObj?.employeeIdCode ? ` (${financeApproverObj.employeeIdCode})` : "";
+  const financeApproverSub = [financeApproverObj?.designation, financeApproverObj?.department].filter(Boolean).join(" • ");
+
+  const effectiveFinanceStatus = (() => {
+    if (financeStatusUpper === "APPROVED") return "APPROVED";
+    if (financeStatusUpper === "REJECTED") return "REJECTED";
+    if (effectiveApprovalStatus === "REJECTED") return "CANCELLED";
+    if (isFinanceStage || financeStatusUpper === "PENDING") return "PENDING";
+    if (["SUBMITTED", "ACCOUNTS_APPROVED", "APPROVED", "PAID", "DISBURSED", "SETTLED"].includes(statusUpper)) {
+      return (financeApproval.decidedAt || financeStatusUpper === "APPROVED") ? "APPROVED" : "PENDING";
+    }
+    return "WAITING_FIRST";
+  })();
+
+  const financeStatusMeta = {
+    WAITING_FIRST: { label: "Pending (After 1st Approval)", shortLabel: "Pending", color: "#b45309", bg: "#fef3c7", border: "#fde68a" },
+    PENDING: { label: "Pending • Awaiting 2nd Approval", shortLabel: "Pending", color: "#b45309", bg: "#fef3c7", border: "#fde68a" },
+    APPROVED: { label: "Approved", shortLabel: "Approved", color: "#059669", bg: "#d1fae5", border: "#a7f3d0" },
+    REJECTED: { label: "Rejected", shortLabel: "Rejected", color: "#dc2626", bg: "#fee2e2", border: "#fecaca" },
+    CANCELLED: { label: "Cancelled (1st Approval Rejected)", shortLabel: "Cancelled", color: "#64748b", bg: "#f1f5f9", border: "#cbd5e1" },
+    NOT_REQUIRED: { label: "Not Required", shortLabel: "Not Required", color: "#64748b", bg: "#f1f5f9", border: "#cbd5e1" },
+  }[effectiveFinanceStatus] || { label: "Pending", shortLabel: "Pending", color: "#d97706", bg: "#fef3c7", border: "#fde68a" };
+
+  // Accounts Admin Approval & Payment — shown for all submitted claims so full approval pipeline is visible
+  const rawAccountsApprovalStatus = String(claim.accountsApproval?.status || "").toUpperCase();
+  const isRejectedClaim = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED", "CANCELLED"].includes(statusUpper) || paymentUpper === "REJECTED";
+  const showAccountsCard = Boolean(statusUpper !== "DRAFT");
+
+  const effectiveAccountsStatus = (() => {
+    if (isDisbursedOrPaid) return "PAID";
+    if (isAccountsApproved || rawAccountsApprovalStatus === "APPROVED") return "APPROVED_PAYMENT_PENDING";
+    if (rawAccountsApprovalStatus === "REJECTED" || (isRejectedClaim && effectiveApprovalStatus !== "REJECTED" && effectiveFinanceStatus !== "REJECTED")) {
+      return "REJECTED";
+    }
+    if (effectiveApprovalStatus === "REJECTED" || effectiveFinanceStatus === "REJECTED") {
+      return "CANCELLED";
+    }
+    if (statusUpper === "APPROVAL_PENDING") {
+      return "WAITING_PRIOR";
+    }
+    return "PENDING";
+  })();
+
+  const effectivePaymentStageStatus = (() => {
+    if (isDisbursedOrPaid) return "PAID";
+    if (isRejectedClaim) return "CANCELLED";
+    if (isAccountsApproved || rawAccountsApprovalStatus === "APPROVED") return "AWAITING_PAYMENT";
+    return "PENDING";
+  })();
+
+  const accountsStatusMeta = {
+    WAITING_PRIOR: { label: "Pending (After Prior Approvals)", shortLabel: "Pending", color: "#64748b", bg: "#f1f5f9", border: "#cbd5e1" },
+    PENDING: { label: "Pending • Awaiting Accounts Approval", shortLabel: "Pending", color: "#d97706", bg: "#fef3c7", border: "#fde68a" },
+    APPROVED_PAYMENT_PENDING: { label: "Approved • Payment Pending", shortLabel: "Approved • Payment Pending", color: "#2563eb", bg: "#dbeafe", border: "#bfdbfe" },
+    PAID: { label: "Paid", shortLabel: "Paid", color: "#059669", bg: "#d1fae5", border: "#a7f3d0" },
+    REJECTED: { label: "Rejected", shortLabel: "Rejected", color: "#dc2626", bg: "#fee2e2", border: "#fecaca" },
+    CANCELLED: { label: "Cancelled (Prior Approval Rejected)", shortLabel: "Cancelled", color: "#64748b", bg: "#f1f5f9", border: "#cbd5e1" },
+  }[effectiveAccountsStatus] || { label: "Pending", shortLabel: "Pending", color: "#d97706", bg: "#fef3c7", border: "#fde68a" };
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
@@ -1048,11 +1357,27 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               </Text>
               <Text style={{ fontSize: 13, fontWeight: "800", color: "#0f172a", marginTop: 2 }}>
                 {dateLabel || "—"}
-                {isLodging && days > 0 ? ` (${days} day${days > 1 ? "s" : ""} / ${claim.numberOfNights || (days - 1) || 1} nights)` : ""}
+                {isLodging && days > 0
+                  ? (() => {
+                      const rawDiff =
+                        claim.fromDate && claim.toDate
+                          ? Math.max(0, Math.round((new Date(claim.toDate) - new Date(claim.fromDate)) / (1000 * 60 * 60 * 24)))
+                          : null;
+                      const lNights =
+                        claim.lodgingNights !== undefined && claim.lodgingNights !== null
+                          ? claim.lodgingNights
+                          : (claim.numberOfNights ?? (rawDiff !== null ? rawDiff : days));
+                      const fDays =
+                        claim.foodDays !== undefined && claim.foodDays !== null
+                          ? claim.foodDays
+                          : (rawDiff !== null ? rawDiff + 1 : lNights + 1);
+                      return ` (${lNights} lodging night${lNights === 1 ? "" : "s"} · ${fDays} food day${fDays === 1 ? "" : "s"})`;
+                    })()
+                  : ""}
               </Text>
-              {isLodging && claim.stayType ? (
+              {isLodging ? (
                 <Text style={{ fontSize: 12, fontWeight: "700", color: "#475569", marginTop: 4 }}>
-                  Stay Type: {(claim.stayType === "WITH_RELATIVE" ? "With Relative" : claim.stayType === "IN_HOTEL" ? "In Hotel" : "")}
+                  Stay Type: {(claim.stayType === "WITH_RELATIVE" || claim.stayType === "RELATIVE" ? "🏠 Stay with Relative" : "🏨 Stay in Hotel")}
                 </Text>
               ) : null}
             </View>
@@ -1077,9 +1402,9 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           ecList.map((ec, idx) => {
             const isSlotOne = idx === 0;
             const empName = ec.employee?.name || (isSlotOne ? (claim.submittedByName || "Myself") : `Employee #${idx + 1}`);
-            const empCode = ec.employee?.employeeIdCode;
-            const empDept = ec.employee?.department;
-            const empDesig = ec.employee?.levelName || ec.employee?.role || ec.employee?.gradeCode;
+            const empCode = ec.employee?.employeeIdCode || (isSlotOne ? claim.submittedBy?.employeeIdCode : "");
+            const empDept = ec.employee?.department || (isSlotOne ? claim.submittedBy?.department : "");
+            const empDesig = ec.employee?.designation || ec.employee?.levelName || ec.employee?.role || ec.employee?.gradeCode || (isSlotOne ? claim.submittedBy?.designation : "");
 
             return (
               <View key={idx} style={styles.slotCard}>
@@ -1090,12 +1415,13 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                   <Text style={styles.slotLabel}>
                     {isSlotOne ? "Employee #1 (Primary / Myself)" : `Employee #${idx + 1}`}
                   </Text>
-                  <Text style={styles.slotName}>{empName}</Text>
-                  {(empDept || empDesig || empCode) ? (
+                  <Text style={styles.slotName}>
+                    {empName}
+                    {empCode ? <Text style={{ color: "#4f46e5", fontWeight: "700", fontSize: 11 }}>{` [${empCode}]`}</Text> : null}
+                  </Text>
+                  {(empDept || empDesig) ? (
                     <Text style={styles.slotMeta}>
-                      {empCode ? `[${empCode}] ` : ""}
-                      {empDesig || ""}
-                      {empDept ? ` · ${empDept}` : ""}
+                      {[empDesig, empDept].filter(Boolean).join(" • ")}
                     </Text>
                   ) : null}
                 </View>
@@ -1109,7 +1435,15 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.slotLabel}>Employee #1 (Primary / Myself)</Text>
-              <Text style={styles.slotName}>{claim.submittedByName || "Myself"}</Text>
+              <Text style={styles.slotName}>
+                {claim.submittedByName || claim.submittedBy?.name || "Myself"}
+                {claim.submittedBy?.employeeIdCode ? <Text style={{ color: "#4f46e5", fontWeight: "700", fontSize: 11 }}>{` [${claim.submittedBy.employeeIdCode}]`}</Text> : null}
+              </Text>
+              {(claim.submittedBy?.designation || claim.submittedBy?.department) ? (
+                <Text style={styles.slotMeta}>
+                  {[claim.submittedBy?.designation, claim.submittedBy?.department].filter(Boolean).join(" • ")}
+                </Text>
+              ) : null}
             </View>
           </View>
         )}
@@ -1132,18 +1466,35 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               {claim.trip?.destinationClass ? ` (Class ${claim.trip.destinationClass})` : ""}
             </Text>
           </View>
-          {!isLodging && (
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Visit Option: </Text>
-              <Text style={[styles.fieldValue, { color: isClaimVisit ? "#4f46e5" : "#475569", fontWeight: "700" }]}>
-                {isClaimVisit ? "📍 2. Visit (Service Report Compulsory)" : "🚫 1. No Visit"}
+          <View style={[styles.fieldRow, { alignItems: "center" }]}>
+            <Text style={styles.fieldLabel}>Visit Option: </Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 5,
+                paddingHorizontal: 8,
+                paddingVertical: 3,
+                borderRadius: 8,
+                backgroundColor: isClaimVisit ? "#eef2ff" : "#f0f9ff",
+                borderWidth: 1,
+                borderColor: isClaimVisit ? "#c7d2fe" : "#bae6fd",
+              }}
+            >
+              {isClaimVisit ? (
+                <Wrench size={13} color="#4f46e5" />
+              ) : (
+                <Building2 size={13} color="#0284c7" />
+              )}
+              <Text style={[styles.fieldValue, { color: isClaimVisit ? "#4f46e5" : "#0284c7", fontWeight: "800" }]}>
+                {isClaimVisit ? "2. Service Call (Service Report Compulsory)" : "1. Normal Travel"}
               </Text>
             </View>
-          )}
+          </View>
           {claim.trip?.travelMode ? (
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Travel Mode: </Text>
-              <Text style={styles.fieldValue}>{claim.trip.travelMode}</Text>
+              <Text style={styles.fieldValue}>{getTravelModeIcon(claim.trip.travelMode)} {claim.trip.travelMode}</Text>
             </View>
           ) : null}
           <View style={[styles.fieldRow, { alignItems: "flex-start" }]}>
@@ -1155,7 +1506,10 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         </View>
 
         {/* ======================================================== */}
-        {/* STEP 4: EXPENSE DETAILS (Entries)                        */}
+        {/* STEP 4: EXPENSE DETAILS (3-Level Expandable Hierarchy)    */}
+        {/* Level 1: Main Claim Record                                */}
+        {/* Level 2: Claim Types / Categories                         */}
+        {/* Level 3: Individual Claim Entries                         */}
         {/* ======================================================== */}
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>
@@ -1168,57 +1522,254 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           </View>
         </View>
 
-        {combinedEntries.map((entry, idx) => {
-          const entryNum = idx + 1;
-          const isPurchase = entry.expenseType === "OTHER" && (entry.otherSubType || "").toUpperCase() === "PURCHASE";
-          const isConveyance = entry.expenseType === "CONVEYANCE" || entry.expenseType === "LOCAL_CONVEYANCE";
-          const isLodgingEntry = entry.expenseType === "LODGING" || entry.expenseType === "LODGING_EXPENSE";
-          const isFoodEntry = entry.expenseType === "FOOD" || entry.expenseType === "FOOD_EXPENSE";
-          const foodSafeLimit = (isFoodEntry || isLodgingEntry)
-            ? `₹${entry.allowedAmount ?? 0}`
-            : (isConveyance || entry.expenseType === "TRAVEL" || entry.expenseType === "OTHER")
-              ? "Actuals (Fully Allowed)"
-              : (entry.limitDisplay || `₹${entry.allowedAmount ?? 0}`);
+        {(() => {
+          const categoryMap = new Map();
+          const getCatMeta = (entry) => {
+            const t = String(entry.expenseType || "").toUpperCase();
+            const isPurchaseEntry = t === "STOCK_PURCHASE" || (t === "OTHER" && String(entry.otherSubType || "").toUpperCase() === "PURCHASE");
+            if (t === "LODGING" || t === "LODGING_EXPENSE") {
+              return { key: "LODGING", title: "Accommodation Claim", icon: "🏨" };
+            }
+            if (t === "TRAVEL" || t === "TRAVEL_EXPENSE") {
+              return { key: "TRAVEL", title: "Travel Claim", icon: "🚆" };
+            }
+            if (t === "FOOD" || t === "FOOD_DA" || t === "FOOD_EXPENSE") {
+              return { key: "FOOD", title: "Food Claim", icon: "🍽️" };
+            }
+            if (t === "CONVEYANCE" || t === "LOCAL_CONVEYANCE" || t === "LOCAL_TRAVEL" || t === "LOCAL") {
+              return { key: "CONVEYANCE", title: "Local Conveyance Claim", icon: "🚗" };
+            }
+            if (isPurchaseEntry) {
+              return { key: "STOCK_PURCHASE", title: "Stock Purchase Claim", icon: "📦" };
+            }
+            return { key: "OTHER", title: "Other Expense Claim", icon: "🧾" };
+          };
+
+          combinedEntries.forEach((entry, idx) => {
+            const meta = getCatMeta(entry);
+            if (!categoryMap.has(meta.key)) {
+              categoryMap.set(meta.key, {
+                ...meta,
+                entries: [],
+                totalRequested: 0,
+                totalAllowed: 0,
+                totalExcess: 0,
+              });
+            }
+            const group = categoryMap.get(meta.key);
+            group.entries.push({ entry, globalIdx: idx });
+            group.totalRequested += Number(entry.requestedAmount || 0);
+            group.totalAllowed += Number(entry.allowedAmount || 0);
+            group.totalExcess += Number(entry.excessAmount || 0);
+          });
+
+          const categoryGroups = Array.from(categoryMap.values());
+          const primaryEmpName = ecList[0]?.employee?.name || claim.submittedByName || claim.submittedBy?.name || "Employee";
+          const allCollapsed = categoryGroups.length > 0 && categoryGroups.every((c) => Boolean(collapsedCategories[c.key]));
 
           return (
-            <View key={idx} style={styles.entryCard}>
-              <View style={styles.entryCardHeader}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
-                  <View style={styles.entryNumberPill}>
-                    <Text style={styles.entryNumberPillText}>#{entryNum}</Text>
-                  </View>
-                  <Text style={styles.entryCardTitle}>
-                    {combinedEntries.length > 1 ? `Expense Details #${entryNum}: ${entry.expenseTypeName}` : entry.expenseTypeName}
+            <View style={{ backgroundColor: "#ffffff", borderRadius: 14, borderWidth: 1, borderColor: "#e2e8f0", overflow: "hidden", marginBottom: 10 }}>
+              {/* Level 1: Main Claim Record Header */}
+              <View style={{ backgroundColor: "#0f172a", paddingHorizontal: 14, paddingVertical: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 13, fontWeight: "800", color: "#ffffff", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }}>
+                    {claim.claimNumber || claim.claimId || "Draft Claim"}
+                  </Text>
+                  <Text style={{ fontSize: 11, fontWeight: "600", color: "#cbd5e1", marginTop: 2 }}>
+                    Employee: <Text style={{ color: "#ffffff", fontWeight: "700" }}>{primaryEmpName}</Text>
+                    {numEmployees > 1 ? ` (+${numEmployees - 1} more)` : ""}
+                    {dateLabel ? ` · ${dateLabel}` : ""}
                   </Text>
                 </View>
-                <View style={[
-                  styles.statusBadge,
-                  entry.hasExcess
-                    ? { backgroundColor: "#fef2f2", borderColor: "#fecaca" }
-                    : { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0" }
-                ]}>
-                  <Text style={[
-                    styles.statusBadgeText,
-                    { color: entry.hasExcess ? "#dc2626" : "#059669" }
-                  ]}>
-                    {entry.hasExcess ? `₹${entry.excessAmount} Excess` : "Fully Allowed"}
-                  </Text>
+                <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: statusInfo.color }}>
+                  <Text style={{ fontSize: 10, fontWeight: "800", color: "#ffffff" }}>{statusInfo.label}</Text>
                 </View>
               </View>
 
-              {/* Sub-category for Other Expense */}
-              {entry.expenseType === "OTHER" && (
-                <View style={styles.fieldRow}>
-                  <Text style={styles.fieldLabel}>Category: </Text>
-                  <Text style={[styles.fieldValue, { color: isPurchase ? "#b45309" : "#4f46e5" }]}>
-                    {isPurchase ? "🛒 Purchase" : "📄 Normal"}
+              {/* Level 2 Sub-Header */}
+              <View style={{ backgroundColor: "#f8fafc", paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#e2e8f0", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <Text style={{ fontSize: 10, fontWeight: "800", color: "#475569", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Claim Categories ({categoryGroups.length})
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (allCollapsed) {
+                      setCollapsedCategories({});
+                    } else {
+                      const next = {};
+                      categoryGroups.forEach((c) => { next[c.key] = true; });
+                      setCollapsedCategories(next);
+                    }
+                  }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: "800", color: "#4f46e5" }}>
+                    {allCollapsed ? "Expand All" : "Collapse All"}
                   </Text>
-                </View>
-              )}
+                </TouchableOpacity>
+              </View>
+
+              {/* Level 2: Claim Types (Expandable Categories) */}
+              <View style={{ padding: 10, gap: 10 }}>
+                {categoryGroups.map((cat) => {
+                  const isCatCollapsed = Boolean(collapsedCategories[cat.key]);
+                  const catHasExcess = cat.totalExcess > 0;
+                  return (
+                    <View key={cat.key} style={{ borderRadius: 12, borderWidth: 1, borderColor: "#cbd5e1", backgroundColor: "#ffffff", overflow: "hidden" }}>
+                      <TouchableOpacity
+                        activeOpacity={0.75}
+                        onPress={() => setCollapsedCategories((prev) => ({ ...prev, [cat.key]: !prev[cat.key] }))}
+                        style={{ backgroundColor: "#f8fafc", paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
+                      >
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                          {isCatCollapsed ? (
+                            <ChevronRight size={16} color="#475569" />
+                          ) : (
+                            <ChevronDown size={16} color="#475569" />
+                          )}
+                          <Text style={{ fontSize: 15 }}>{cat.icon}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13, fontWeight: "800", color: "#0f172a" }}>{cat.title}</Text>
+                            <Text style={{ fontSize: 10, fontWeight: "600", color: "#64748b" }}>
+                              {cat.entries.length} {cat.entries.length === 1 ? "entry" : "entries"}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={{ alignItems: "flex-end" }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                            <View
+                              style={{
+                                paddingHorizontal: 6,
+                                paddingVertical: 2,
+                                borderRadius: 6,
+                                backgroundColor: catHasExcess ? "#fef2f2" : "#f0fdf4",
+                                borderWidth: 1,
+                                borderColor: catHasExcess ? "#fecaca" : "#bbf7d0",
+                              }}
+                            >
+                              <Text style={{ fontSize: 9, fontWeight: "800", color: catHasExcess ? "#dc2626" : "#059669" }}>
+                                {catHasExcess ? `${formatINR(cat.totalExcess)} Excess` : "Fully Allowed"}
+                              </Text>
+                            </View>
+                            <Text style={{ fontSize: 13, fontWeight: "900", color: "#0f172a" }}>
+                              {formatINR(cat.totalRequested)}
+                            </Text>
+                          </View>
+                          <Text style={{ fontSize: 10, fontWeight: "600", color: "#64748b", marginTop: 2 }}>
+                            Allowed: <Text style={{ color: "#059669", fontWeight: "800" }}>{formatINR(cat.totalAllowed)}</Text>
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      {/* Level 3: Claim Entries under this Category */}
+                      {!isCatCollapsed && (
+                        <View style={{ borderTopWidth: 1, borderTopColor: "#e2e8f0", padding: 10, gap: 10, backgroundColor: "#ffffff" }}>
+                          {cat.entries.map(({ entry, globalIdx }) => {
+                            const entryNum = globalIdx + 1;
+                            const isPurchase =
+                              entry.expenseType === "STOCK_PURCHASE" ||
+                              (entry.expenseType === "OTHER" && (entry.otherSubType || "").toUpperCase() === "PURCHASE");
+                            const isConveyance = entry.expenseType === "CONVEYANCE" || entry.expenseType === "LOCAL_CONVEYANCE";
+                            const isLodgingEntry = entry.expenseType === "LODGING" || entry.expenseType === "LODGING_EXPENSE";
+                            const isFoodEntry = entry.expenseType === "FOOD" || entry.expenseType === "FOOD_EXPENSE";
+                            const entryIcon = (() => {
+                              if (isLodgingEntry) {
+                                return (claim.stayType === "WITH_RELATIVE" || claim.stayType === "RELATIVE") ? "🏠" : "🏨";
+                              }
+                              if (entry.expenseType === "TRAVEL" || entry.expenseType === "TRAVEL_EXPENSE") {
+                                return getTravelModeIcon(entry.travelModeName || entry.travelModeCode, entry.travelSubtypeName || entry.travelSubtypeCode);
+                              }
+                              if (isFoodEntry) return "🍽️";
+                              if (isConveyance) {
+                                if (entry.vehicle === "twoWheeler") return "🏍️";
+                                if (entry.vehicle === "eBike" || entry.vehicle === "eCar") return "⚡";
+                                return "🚗";
+                              }
+                              if (isPurchase) return "📦";
+                              return "🧾";
+                            })();
+                            const foodSafeLimit = (isFoodEntry || isLodgingEntry)
+                              ? `₹${entry.policyLimit > 0 ? entry.policyLimit : (entry.allowedAmount ?? 0)}`
+                              : entry.expenseType === "TRAVEL"
+                                ? (entry.limitDisplay || (entry.hasExcess ? `₹${entry.allowedAmount ?? 0}` : "Actuals (Fully Allowed)"))
+                                : (isConveyance || entry.expenseType === "OTHER" || entry.expenseType === "STOCK_PURCHASE")
+                                  ? "Actuals (Fully Allowed)"
+                                  : (entry.limitDisplay || `₹${entry.allowedAmount ?? 0}`);
+
+                            const entryTitleDetail = (() => {
+                              if (entry.expenseType === "TRAVEL" && (entry.travelModeName || entry.travelModeCode)) {
+                                return `${entry.travelModeName || entry.travelModeCode}${entry.travelSubtypeName ? ` (${entry.travelSubtypeName})` : ""}`;
+                              }
+                              if (isConveyance) {
+                                return entry.vehicle === "twoWheeler" ? "2-Wheeler / Bike" :
+                                  entry.vehicle === "car" ? "Car (4W)" :
+                                    entry.vehicle === "eBike" ? "E-Bike" :
+                                      entry.vehicle === "eCar" ? "E-Car" : "Local Conveyance";
+                              }
+                              if (isPurchase && entry.materialName) {
+                                return entry.materialName;
+                              }
+                              if (isLodgingEntry) {
+                                return entry.hotelName || (claim.stayType === "WITH_RELATIVE" || claim.stayType === "RELATIVE" ? "Stay with Relative" : "Hotel Accommodation");
+                              }
+                              return entry.expenseTypeName;
+                            })();
+
+                            const entrySubSummary = [
+                              entry.expenseDate ? String(entry.expenseDate).slice(0, 10) : dateLabel,
+                              claim.destinationCity || claim.trip?.destination ? `${claim.destinationCity || claim.trip?.destination}${claim.trip?.destinationClass ? ` (Class ${claim.trip.destinationClass})` : ""}` : null,
+                              entry.description || null,
+                            ].filter(Boolean).join(" · ");
+
+                            return (
+                              <View key={globalIdx} style={[styles.entryCard, { marginBottom: 0 }]}>
+                                <View style={styles.entryCardHeader}>
+                                  <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8, flex: 1 }}>
+                                    <View style={[styles.entryNumberPill, { backgroundColor: "#4f46e5" }]}>
+                                      <Text style={{ fontSize: 11 }}>{entryIcon}</Text>
+                                      <Text style={[styles.entryNumberPillText, { color: "#ffffff" }]}>
+                                        Entry {String(entryNum).padStart(2, "0")}
+                                      </Text>
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                      <Text style={styles.entryCardTitle}>{entryIcon} {entryTitleDetail}</Text>
+                                      {entrySubSummary ? (
+                                        <Text style={{ fontSize: 10.5, fontWeight: "600", color: "#64748b", marginTop: 2 }}>
+                                          {entrySubSummary}
+                                        </Text>
+                                      ) : null}
+                                    </View>
+                                  </View>
+                                  <View style={{ alignItems: "flex-end", gap: 2 }}>
+                                    <View style={[
+                                      styles.statusBadge,
+                                      entry.hasExcess
+                                        ? { backgroundColor: "#fef2f2", borderColor: "#fecaca" }
+                                        : { backgroundColor: "#f0fdf4", borderColor: "#bbf7d0" }
+                                    ]}>
+                                      <Text style={[
+                                        styles.statusBadgeText,
+                                        { color: entry.hasExcess ? "#dc2626" : "#059669" }
+                                      ]}>
+                                        {entry.hasExcess ? `${formatINR(entry.excessAmount)} Excess` : "Fully Allowed"}
+                                      </Text>
+                                    </View>
+                                    <Text style={{ fontSize: 13, fontWeight: "900", color: "#0f172a" }}>
+                                      {formatINR(entry.requestedAmount)}
+                                    </Text>
+                                  </View>
+                                </View>
 
               {/* Purchase fields */}
               {isPurchase && (
                 <>
+                  {entry.materialName ? (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Material Name: </Text>
+                      <Text style={styles.fieldValue}>
+                        {entry.materialName}
+                      </Text>
+                    </View>
+                  ) : null}
                   {entry.barcodeNumber ? (
                     <View style={styles.fieldRow}>
                       <Text style={styles.fieldLabel}>Barcode Number: </Text>
@@ -1231,6 +1782,48 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                     <View style={styles.fieldRow}>
                       <Text style={styles.fieldLabel}>Quantity: </Text>
                       <Text style={styles.fieldValue}>{entry.quantity}</Text>
+                    </View>
+                  ) : null}
+                </>
+              )}
+
+              {/* Dynamic Travel Mode & Subtype fields */}
+              {entry.expenseType === "TRAVEL" && (
+                <>
+                  {(entry.travelModeName || entry.travelModeCode) ? (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Travel Mode: </Text>
+                      <Text style={styles.fieldValue}>
+                        {getTravelModeIcon(entry.travelModeName || entry.travelModeCode, entry.travelSubtypeName || entry.travelSubtypeCode)}{" "}
+                        {entry.travelModeName || entry.travelModeCode}
+                        {(entry.travelSubtypeName || entry.travelSubtypeCode)
+                          ? ` — ${entry.travelSubtypeName || entry.travelSubtypeCode}`
+                          : ""}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {(entry.travelWorkflow === "KM_RATE" || Number(entry.distanceKm) > 0) && (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Distance &amp; Rate: </Text>
+                      <Text style={styles.fieldValue}>
+                        {entry.distanceKm ?? 0} KM{Number(entry.ratePerKm) > 0 ? ` × ₹${entry.ratePerKm}/km = ${formatINR(entry.requestedAmount ?? 0)}` : ""}
+                      </Text>
+                    </View>
+                  )}
+                  {entry.entitlementStatus === "NOT_ENTITLED" && (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Entitlement: </Text>
+                      <Text style={[styles.fieldValue, { color: "#dc2626", fontWeight: "700" }]}>
+                        Not in Level Entitlement (Allowed ₹0 · Full Excess)
+                      </Text>
+                    </View>
+                  )}
+                  {entry.excessReason ? (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Policy Note: </Text>
+                      <Text style={[styles.fieldValue, { color: "#b45309", flex: 1 }]}>
+                        {entry.excessReason}
+                      </Text>
                     </View>
                   ) : null}
                 </>
@@ -1249,11 +1842,30 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                               entry.vehicle || "Conveyance"}
                     </Text>
                   </View>
-                  <View style={styles.fieldRow}>
+                  <View style={[styles.fieldRow, { alignItems: "center" }]}>
                     <Text style={styles.fieldLabel}>Visit Option: </Text>
-                    <Text style={[styles.fieldValue, { color: entry.isVisit || entry.visitType === "VISIT" ? "#4f46e5" : "#475569", fontWeight: "700" }]}>
-                      {entry.isVisit || entry.visitType === "VISIT" ? "📍 2. Visit (Service Report Attached)" : "🚫 1. No Visit"}
-                    </Text>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 5,
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 8,
+                        backgroundColor: entry.isVisit || entry.visitType === "VISIT" ? "#eef2ff" : "#f0f9ff",
+                        borderWidth: 1,
+                        borderColor: entry.isVisit || entry.visitType === "VISIT" ? "#c7d2fe" : "#bae6fd",
+                      }}
+                    >
+                      {entry.isVisit || entry.visitType === "VISIT" ? (
+                        <Wrench size={13} color="#4f46e5" />
+                      ) : (
+                        <Building2 size={13} color="#0284c7" />
+                      )}
+                      <Text style={[styles.fieldValue, { color: entry.isVisit || entry.visitType === "VISIT" ? "#4f46e5" : "#0284c7", fontWeight: "800" }]}>
+                        {entry.isVisit || entry.visitType === "VISIT" ? "2. Service Call (Service Report Attached)" : "1. Normal Travel"}
+                      </Text>
+                    </View>
                   </View>
                   {entry.distanceKm ? (
                     <View style={styles.fieldRow}>
@@ -1382,8 +1994,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 </View>
               )}
 
-              {/* Conveyance Photo Proofs (Vehicle, Start KM, End KM, Visit Service Reports) */}
-              {isConveyance && ((entry.numberPlatePhotos && entry.numberPlatePhotos.length > 0) || (entry.startKmPhotos && entry.startKmPhotos.length > 0) || (entry.endKmPhotos && entry.endKmPhotos.length > 0) || (entry.serviceReports && entry.serviceReports.length > 0)) && (
+              {/* Conveyance / Own Vehicle Photo Proofs (Vehicle, Start KM, End KM, Visit Service Reports) */}
+              {(isConveyance || (entry.expenseType === "TRAVEL" && entry.travelWorkflow === "KM_RATE")) && ((entry.numberPlatePhotos && entry.numberPlatePhotos.length > 0) || (entry.startKmPhotos && entry.startKmPhotos.length > 0) || (entry.endKmPhotos && entry.endKmPhotos.length > 0) || (entry.serviceReports && entry.serviceReports.length > 0)) && (
                 <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: "#f1f5f9", gap: 6 }}>
                   <Text style={{ fontSize: 10, fontWeight: "800", color: "#2563eb", textTransform: "uppercase" }}>
                     🚗 Conveyance Photo Proofs:
@@ -1506,11 +2118,11 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                     );
                   })}
 
-                  {/* Visit Service Reports attached to this Conveyance entry */}
+                  {/* Service Call Service Reports attached to this Conveyance entry */}
                   {entry.serviceReports && entry.serviceReports.length > 0 && (
                     <View style={{ marginTop: 6, gap: 6 }}>
                       <Text style={{ fontSize: 10, fontWeight: "800", color: "#7e22ce", textTransform: "uppercase" }}>
-                        📑 Visit Service Reports ({entry.serviceReports.length}):
+                        📑 Service Call Reports ({entry.serviceReports.length}):
                       </Text>
                       {entry.serviceReports.map((sr, srIdx) => {
                         const previewUri = resolveProofImageUrl(sr);
@@ -1544,7 +2156,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                               <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                                 <Text style={[styles.detailAttName, { color: "#7e22ce" }]} numberOfLines={1}>{srTitle}</Text>
                                 <View style={{ backgroundColor: "#f3e8ff", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
-                                  <Text style={{ fontSize: 8, fontWeight: "800", color: "#6b21a8" }}>VISIT REPORT</Text>
+                                  <Text style={{ fontSize: 8, fontWeight: "800", color: "#6b21a8" }}>SERVICE REPORT</Text>
                                 </View>
                               </View>
                               <Text style={styles.detailAttSub}>
@@ -1563,8 +2175,75 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 </View>
               )}
             </View>
+                            );
+                          })}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+
+              {/* Total Claim Amount Summary Footer */}
+              <View style={{ backgroundColor: "#0f172a", paddingHorizontal: 14, paddingVertical: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    Total Claim Amount
+                  </Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8, marginTop: 3 }}>
+                    <Text style={{ fontSize: 10.5, fontWeight: "700", color: "#cbd5e1" }}>
+                      Allowed: <Text style={{ color: "#34d399", fontWeight: "800" }}>{formatINR(grandAllow)}</Text>
+                    </Text>
+                    {grandExc > 0 ? (
+                      <Text style={{ fontSize: 10.5, fontWeight: "700", color: "#fca5a5" }}>
+                        Excess: <Text style={{ color: "#f87171", fontWeight: "800" }}>{formatINR(grandExc)}</Text>
+                      </Text>
+                    ) : null}
+                    <Text style={{ fontSize: 10.5, fontWeight: "700", color: "#93c5fd" }}>
+                      Payable: <Text style={{ color: "#60a5fa", fontWeight: "800" }}>{formatINR(payAmt)}</Text>
+                    </Text>
+                  </View>
+                </View>
+                <Text style={{ fontSize: 18, fontWeight: "900", color: "#ffffff" }}>
+                  {formatINR(grandReq)}
+                </Text>
+              </View>
+            </View>
           );
-        })}
+        })()}
+
+        {/* Shared Food Entitlement Summary Card */}
+        {claim.foodSummary ? (
+          <View style={[styles.itemCard, { borderColor: "#bbf7d0", backgroundColor: "#f0fdf4", marginTop: 4 }]}>
+            <Text style={{ fontSize: 13, fontWeight: "800", color: "#065f46", marginBottom: 6 }}>
+              🍽️ Shared Food Allowance Summary ({claim.foodSummary.foodDays || claim.foodDays || days} Day{(claim.foodSummary.foodDays || claim.foodDays || days) === 1 ? "" : "s"})
+            </Text>
+            <View style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>Period Food Entitlement: </Text>
+              <Text style={styles.fieldValue}>
+                ₹{claim.foodSummary.entitlement ?? claim.foodSummary.totalPeriodLimit ?? 0}
+              </Text>
+            </View>
+            {Number(claim.foodSummary.priorConsumed || 0) > 0 && (
+              <View style={styles.fieldRow}>
+                <Text style={[styles.fieldLabel, { color: "#dc2626" }]}>Previously Claimed Food Allowance: </Text>
+                <Text style={[styles.fieldValue, { color: "#dc2626", fontWeight: "700" }]}>-₹{claim.foodSummary.priorConsumed}</Text>
+              </View>
+            )}
+            <View style={styles.fieldRow}>
+              <Text style={[styles.fieldLabel, { color: "#059669" }]}>Remaining Food Entitlement: </Text>
+              <Text style={[styles.fieldValue, { color: "#059669", fontWeight: "800" }]}>
+                ₹{claim.foodSummary.remainingBefore ?? claim.foodSummary.totalRemainingLimit ?? claim.foodSummary.entitlement ?? claim.foodSummary.totalPeriodLimit ?? 0}
+              </Text>
+            </View>
+            <View style={[styles.fieldRow, { marginTop: 4, paddingTop: 4, borderTopWidth: 1, borderTopColor: "#bbf7d0" }]}>
+              <Text style={styles.fieldLabel}>Food Claimed / Allowed / Excess: </Text>
+              <Text style={styles.fieldValue}>
+                ₹{claim.foodSummary.requested ?? claim.foodSummary.claimedAmount ?? 0} / <Text style={{ color: "#059669", fontWeight: "700" }}>₹{claim.foodSummary.allowed ?? claim.foodSummary.allowedAmount ?? 0}</Text> / <Text style={{ color: Number(claim.foodSummary.excess ?? claim.foodSummary.excessAmount ?? 0) > 0 ? "#dc2626" : "#64748b", fontWeight: "700" }}>₹{claim.foodSummary.excess ?? claim.foodSummary.excessAmount ?? 0}</Text>
+              </Text>
+            </View>
+          </View>
+        ) : null}
 
         {/* ======================================================== */}
         {/* STEP 5: FULL PAYMENT (Optional)                          */}
@@ -1602,7 +2281,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                       ? `APPROVED by ${claim.fullPayment?.decidedByName || "Accounts"}`
                       : (claim.fullPayment?.status === "REJECTED"
                         ? "REJECTED"
-                        : statusUpper === "APPROVAL_PENDING" ? "Awaiting Management approval" : "Pending Review"))}
+                        : isFinanceStage ? "Awaiting 2nd approval (CFO / Finance Head)" : statusUpper === "APPROVAL_PENDING" ? "Awaiting Reporting Manager approval" : "Pending Review"))}
                 </Text>
               </View>
 
@@ -1653,14 +2332,19 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           </>
         ) : null}
 
-        {/* Approver (Management for Full Payment / Reporting Manager for Other expense) */}
+        {/* 1st Approval: Reporting Manager / Management (Full Payment / Stock Purchase / Other Expense) */}
         {showApprovalCard ? (
           <View style={[styles.itemCard, { borderColor: isManagementApproval ? "#ddd6fe" : "#c7d2fe", backgroundColor: isManagementApproval ? "#faf5ff" : "#f8faff" }]}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
                 <ShieldCheck size={16} color={isManagementApproval ? "#7c3aed" : "#4f46e5"} />
                 <Text style={{ fontSize: 13, fontWeight: "800", color: isManagementApproval ? "#5b21b6" : "#3730a3" }}>
-                  {isManagementApproval ? "Management Approval (Full Payment)" : "Reporting Manager Approval (Other Expense)"}
+                  {showFinanceCard ? "1st Approval: " : ""}
+                  {isManagementApproval
+                    ? "Reporting Manager Approval (Full Payment)"
+                    : (hasStockPurchase
+                      ? "Reporting Manager Approval (Stock Purchase)"
+                      : `Reporting Manager Approval (${typeInfo?.name || "Other Expense"})`)}
                 </Text>
               </View>
               <View style={{
@@ -1676,7 +2360,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                   fontWeight: "800",
                   color: isClaimantManagement ? "#059669" : approvalStatusMeta.color
                 }}>
-                  {isClaimantManagement ? "Not Applicable" : approvalStatusMeta.label}
+                  {isClaimantManagement ? "Not Applicable" : approvalStatusMeta.shortLabel}
                 </Text>
               </View>
             </View>
@@ -1691,9 +2375,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             ) : (
               <>
                 <View style={styles.fieldRow}>
-                  <Text style={styles.fieldLabel}>
-                    {isManagementApproval ? "Management Approver: " : "Reporting Manager: "}
-                  </Text>
+                  <Text style={styles.fieldLabel}>Reporting Manager: </Text>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.fieldValue, { fontWeight: "800", color: "#0f172a" }]}>
                       {approverName}{approverCode}
@@ -1738,7 +2420,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               </View>
             ) : null}
 
-            {canApprove && !isClaimantManagement ? (
+            {canApprove && !isClaimantManagement && !isFinanceStage ? (
               <View style={styles.approvalBtnRow}>
                 <TouchableOpacity
                   style={[styles.approvalBtn, styles.approvalRejectBtn]}
@@ -1760,6 +2442,303 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             ) : null}
           </View>
         ) : null}
+
+        {/* 2nd Approval: CFO / Finance Head (Full Payment / Stock Purchase) */}
+        {showFinanceCard && effectiveFinanceStatus !== "NOT_REQUIRED" ? (
+          <View style={[styles.itemCard, { borderColor: "#fde68a", backgroundColor: "#fffbeb" }]}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+                <ShieldCheck size={16} color="#b45309" />
+                <Text style={{ fontSize: 13, fontWeight: "800", color: "#92400e" }}>
+                  2nd Approval: CFO / Finance Head
+                </Text>
+              </View>
+              <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, backgroundColor: financeStatusMeta.bg, borderWidth: 1, borderColor: financeStatusMeta.border }}>
+                <Text style={{ fontSize: 10, fontWeight: "800", color: financeStatusMeta.color }}>{financeStatusMeta.shortLabel}</Text>
+              </View>
+            </View>
+
+            <View style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>CFO / Finance Head: </Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.fieldValue, { fontWeight: "800", color: "#0f172a" }]}>
+                  {financeApproverName}{financeApproverCode}
+                </Text>
+                {financeApproverSub ? (
+                  <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{financeApproverSub}</Text>
+                ) : null}
+              </View>
+            </View>
+
+            <View style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>Approval Status: </Text>
+              <Text style={[styles.fieldValue, { color: financeStatusMeta.color, fontWeight: "700" }]}>
+                {financeStatusMeta.label}
+              </Text>
+            </View>
+
+            {financeApproval.requestedAt ? (
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>Requested On: </Text>
+                <Text style={styles.fieldValue}>{formatDateTime(financeApproval.requestedAt)}</Text>
+              </View>
+            ) : null}
+
+            {financeApproval.decidedAt ? (
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>Decided On: </Text>
+                <Text style={[styles.fieldValue, { fontWeight: "600" }]}>{formatDateTime(financeApproval.decidedAt)}</Text>
+              </View>
+            ) : null}
+
+            {financeApproval.remarks ? (
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>Decision Remarks: </Text>
+                <Text style={[styles.fieldValue, { flex: 1, color: "#334155" }]}>{financeApproval.remarks}</Text>
+              </View>
+            ) : null}
+
+            {canApprove && isFinanceStage ? (
+              <View style={styles.approvalBtnRow}>
+                <TouchableOpacity
+                  style={[styles.approvalBtn, styles.approvalRejectBtn]}
+                  onPress={() => setDecisionMode("reject")}
+                  disabled={deciding}
+                >
+                  <XCircle size={15} color="#dc2626" />
+                  <Text style={[styles.approvalBtnText, { color: "#dc2626" }]}>Reject</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.approvalBtn, { backgroundColor: "#059669" }]}
+                  onPress={() => setDecisionMode("approve")}
+                  disabled={deciding}
+                >
+                  <CheckCircle2 size={15} color="#ffffff" />
+                  <Text style={[styles.approvalBtnText, { color: "#ffffff" }]}>Approve</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* Accounts Admin Approval & Payment Card (Only shown once approved by Reporting Manager & CFO) */}
+        {showAccountsCard ? (() => {
+          const paymentProofsList = Array.isArray(claim.paymentProofs) && claim.paymentProofs.length > 0
+            ? claim.paymentProofs
+            : (Array.isArray(claim.disbursement?.paymentProofs) && claim.disbursement.paymentProofs.length > 0
+              ? claim.disbursement.paymentProofs
+              : (claim.disbursement?.paymentProof?.url ? [claim.disbursement.paymentProof] : []));
+          const paymentRemarkText = claim.disbursement?.remarks || (isDisbursedOrPaid ? claim.accountsRemarks : "");
+          const isAccDone = isAccountsApproved || isDisbursedOrPaid || rawAccountsApprovalStatus === "APPROVED";
+
+          return (
+            <View style={[
+              styles.itemCard,
+              isDisbursedOrPaid
+                ? { borderColor: "#a7f3d0", backgroundColor: "#ecfdf5" }
+                : isAccountsApproved
+                  ? { borderColor: "#bfdbfe", backgroundColor: "#eff6ff" }
+                  : effectiveAccountsStatus === "REJECTED"
+                    ? { borderColor: "#fecaca", backgroundColor: "#fef2f2" }
+                    : { borderColor: "#e2e8f0", backgroundColor: "#f8fafc" },
+            ]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+                  {isAccDone ? (
+                    <CheckCircle2 size={16} color={isDisbursedOrPaid ? "#059669" : "#2563eb"} />
+                  ) : effectiveAccountsStatus === "REJECTED" ? (
+                    <XCircle size={16} color="#dc2626" />
+                  ) : (
+                    <Clock size={16} color="#d97706" />
+                  )}
+                  <Text style={{ fontSize: 13, fontWeight: "800", color: isDisbursedOrPaid ? "#065f46" : isAccountsApproved ? "#1e40af" : effectiveAccountsStatus === "REJECTED" ? "#991b1b" : "#1e293b" }}>
+                    Accounts Admin Approval &amp; Payment
+                  </Text>
+                </View>
+                <View style={{
+                  paddingHorizontal: 8,
+                  paddingVertical: 2,
+                  borderRadius: 8,
+                  backgroundColor: accountsStatusMeta.bg,
+                  borderWidth: 1,
+                  borderColor: accountsStatusMeta.border,
+                }}>
+                  <Text style={{ fontSize: 10, fontWeight: "800", color: accountsStatusMeta.color }}>
+                    {accountsStatusMeta.shortLabel}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>Accounts Status: </Text>
+                <Text style={[styles.fieldValue, { color: accountsStatusMeta.color, fontWeight: "800" }]}>
+                  {accountsStatusMeta.label}
+                </Text>
+              </View>
+
+              {isAccDone ? (
+                <View style={styles.fieldRow}>
+                  <Text style={styles.fieldLabel}>Approved By: </Text>
+                  <Text style={[styles.fieldValue, { fontWeight: "800", color: "#0f172a" }]}>
+                    {claim.accountsApproval?.approvedByName || claim.accountsApproval?.approvedBy?.name || claim.disbursement?.recordedByName || "Accounts Admin"}
+                  </Text>
+                </View>
+              ) : null}
+
+              {claim.accountsApproval?.approvedAt ? (
+                <View style={styles.fieldRow}>
+                  <Text style={styles.fieldLabel}>Approved On: </Text>
+                  <Text style={styles.fieldValue}>{formatDateTime(claim.accountsApproval.approvedAt)}</Text>
+                </View>
+              ) : null}
+
+              {claim.accountsApproval?.remarks ? (
+                <View style={styles.fieldRow}>
+                  <Text style={styles.fieldLabel}>Approval Remark: </Text>
+                  <Text style={[styles.fieldValue, { flex: 1, color: "#334155", fontWeight: "600" }]}>
+                    {claim.accountsApproval.remarks}
+                  </Text>
+                </View>
+              ) : null}
+
+              {isDisbursedOrPaid ? (
+                <>
+                  <View style={styles.fieldRow}>
+                    <Text style={styles.fieldLabel}>Paid Amount: </Text>
+                    <Text style={[styles.fieldValue, { color: "#059669", fontWeight: "800" }]}>
+                      ₹{Number(claim.paidAmount || claim.disbursement?.amount || claim.payableAmount || 0).toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+                  <View style={styles.fieldRow}>
+                    <Text style={styles.fieldLabel}>Payment Method: </Text>
+                    <Text style={[styles.fieldValue, { fontWeight: "700" }]}>
+                      {claim.disbursement?.paymentMethod || claim.paymentMethod || "Bank Transfer"}
+                    </Text>
+                  </View>
+                  {(claim.disbursement?.paymentReference || claim.utr || claim.paymentReference) ? (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Transaction Ref / UTR: </Text>
+                      <Text style={[styles.fieldValue, { fontWeight: "700" }]}>
+                        {claim.disbursement?.paymentReference || claim.utr || claim.paymentReference}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {(claim.disbursement?.recordedByName || claim.disbursedBy?.name) ? (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Paid / Recorded By: </Text>
+                      <Text style={[styles.fieldValue, { fontWeight: "700" }]}>
+                        {claim.disbursement?.recordedByName || claim.disbursedBy?.name}
+                      </Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+
+              {isDisbursedOrPaid && (claim.disbursedAt || claim.paymentDate || claim.disbursement?.paymentDate) ? (
+                <View style={styles.fieldRow}>
+                  <Text style={styles.fieldLabel}>Paid On: </Text>
+                  <Text style={[styles.fieldValue, { color: "#059669", fontWeight: "800" }]}>
+                    {formatDateTime(claim.disbursedAt || claim.paymentDate || claim.disbursement?.paymentDate)}
+                  </Text>
+                </View>
+              ) : null}
+
+              {effectiveAccountsStatus === "REJECTED" ? (
+                <>
+                  {(claim.rejection?.rejectedByName || claim.rejection?.rejectedBy?.name) ? (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Rejected By: </Text>
+                      <Text style={[styles.fieldValue, { color: "#dc2626", fontWeight: "800" }]}>
+                        {claim.rejection?.rejectedByName || claim.rejection?.rejectedBy?.name}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {claim.rejection?.rejectedAt ? (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Rejected On: </Text>
+                      <Text style={[styles.fieldValue, { color: "#dc2626", fontWeight: "700" }]}>
+                        {formatDateTime(claim.rejection.rejectedAt)}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {(claim.rejection?.reason || claim.accountsRemarks) ? (
+                    <View style={styles.fieldRow}>
+                      <Text style={styles.fieldLabel}>Rejection Reason: </Text>
+                      <Text style={[styles.fieldValue, { flex: 1, color: "#991b1b", fontWeight: "700" }]}>
+                        {claim.rejection?.reason || claim.accountsRemarks}
+                      </Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+
+              {((claim.pettyCashSummary?.debitedAmount || 0) > 0 || (claim.pettyCash?.debitedPaise || 0) > 0) ? (
+                <View style={styles.fieldRow}>
+                  <Text style={styles.fieldLabel}>Petty Cash Wallet: </Text>
+                  <Text style={[styles.fieldValue, { flex: 1, color: isDisbursedOrPaid ? "#059669" : "#b45309", fontWeight: "700" }]}>
+                    {isDisbursedOrPaid
+                      ? `Credited ₹${Number(claim.pettyCashSummary?.creditedAmount || claim.paidAmount || claim.payableAmount || 0).toLocaleString("en-IN")} to Petty Cash`
+                      : "Amount added to Petty Cash only when Paid by Accounts Admin"}
+                  </Text>
+                </View>
+              ) : null}
+
+              {isDisbursedOrPaid && paymentRemarkText ? (
+                <View style={styles.fieldRow}>
+                  <Text style={styles.fieldLabel}>Payment Remark: </Text>
+                  <Text style={[styles.fieldValue, { flex: 1, color: "#334155", fontWeight: "600" }]}>
+                    {paymentRemarkText}
+                  </Text>
+                </View>
+              ) : null}
+
+              {paymentProofsList.length > 0 ? (
+                <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: "#a7f3d0", gap: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: "800", color: "#065f46" }}>
+                    🧾 Payment Confirmation Proof ({paymentProofsList.length})
+                  </Text>
+                  {paymentProofsList.map((pf, pIdx) => {
+                    const pUri = resolveProofImageUrl(pf);
+                    const pTitle = pf.name || `Payment Confirmation Proof #${pIdx + 1}`;
+                    const isPdf = pf.type === "application/pdf" || (pTitle && pTitle.toLowerCase().endsWith(".pdf"));
+                    return (
+                      <TouchableOpacity
+                        key={pIdx}
+                        style={[styles.detailAttCard, { backgroundColor: "#ffffff", borderColor: "#a7f3d0" }]}
+                        activeOpacity={0.75}
+                        onPress={() => {
+                          if (!pUri) return;
+                          if (isPdf) {
+                            Linking.openURL(pUri).catch(() => {
+                              Alert.alert("Document", "Unable to open PDF document.");
+                            });
+                          } else {
+                            setPhotoPreviewModal({
+                              visible: true,
+                              uri: pUri,
+                              title: pTitle,
+                            });
+                          }
+                        }}
+                      >
+                        {isPdf ? (
+                          <FileText size={16} color="#dc2626" />
+                        ) : (
+                          <FileCheck size={16} color="#059669" />
+                        )}
+                        <Text style={styles.detailAttName} numberOfLines={1}>{pTitle}</Text>
+                        <View style={[styles.detailAttEyePill, { backgroundColor: "#d1fae5" }]}>
+                          <Eye size={11} color="#059669" />
+                          <Text style={[styles.detailAttEyeText, { color: "#059669" }]}>View</Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </View>
+          );
+        })() : null}
 
         {/* ======================================================== */}
         {/* STEP 6: CALCULATION BREAKDOWN & POLICY EXPLANATION       */}
@@ -1802,7 +2781,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           </View>
 
           {/* Structured Policy Explanation */}
-          {isLodgingOrFood && empLines.length > 0 ? (
+          {(isLodging || (isFood && combinedEntries.length === 1)) && empLines.length > 0 ? (
             <View style={{ gap: 6, marginTop: 4 }}>
               {/* 1. One day each employee limit */}
               <View style={styles.calcSubBox}>
@@ -1819,15 +2798,29 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
 
               {/* 2. Combined Policy Limit */}
               <View style={styles.calcCombinedBox}>
-                <Text style={{ fontSize: 11, fontWeight: "800", color: "#312e81" }}>
+                <Text style={{ fontSize: 11, fontWeight: "800", color: "#312e81", flexShrink: 1 }}>
                   ⚖️ {isLodging ? (numEmployees > 1 ? "Combined Stay Policy Limit:" : "Stay Policy Limit:") : (numEmployees > 1 ? "Combined Daily Policy Limit:" : "Daily Policy Limit:")}
                 </Text>
                 <View style={{ backgroundColor: "#ffffff", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: "#c7d2fe" }}>
                   <Text style={{ fontSize: 12, fontWeight: "900", color: "#4338ca" }}>
-                    ₹{(isFood || isLodging) ? (grandLimit > 0 ? grandLimit : grandAllow) : grandLimit} {isLodging ? `(${days} days)` : ""}
+                    ₹{isLodging
+                      ? (Number(claim.lodgingSummary?.policyLimit) || Number(combinedEntries.find(e => e.expenseType === "LODGING" || e.expenseType === "LODGING_EXPENSE")?.policyLimit) || (grandLimit > 0 ? grandLimit : grandAllow))
+                      : ((isFood || isLodging) ? (grandLimit > 0 ? grandLimit : grandAllow) : grandLimit)} {isLodging ? `(${days} ${days === 1 ? "night" : "nights"})` : ""}
                   </Text>
                 </View>
               </View>
+              {isLodging && claim.includeFood && claim.foodSummary ? (
+                <View style={styles.calcCombinedBox}>
+                  <Text style={{ fontSize: 11, fontWeight: "800", color: "#312e81", flexShrink: 1 }}>
+                    🍽️ {numEmployees > 1 ? "Combined Food Policy Limit:" : "Food Policy Limit:"}
+                  </Text>
+                  <View style={{ backgroundColor: "#ffffff", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: "#c7d2fe" }}>
+                    <Text style={{ fontSize: 12, fontWeight: "900", color: "#4338ca" }}>
+                      ₹{claim.foodSummary.remainingEntitlement ?? claim.foodSummary.totalEntitlement ?? 0} ({claim.foodSummary.foodDays || claim.foodDays || days + 1} {(claim.foodSummary.foodDays || claim.foodDays || days + 1) === 1 ? "day" : "days"})
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
 
               {/* 3. Allowed & Excess Calculation Breakdown */}
               <View style={[
@@ -1954,12 +2947,46 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         <View style={styles.statusBox}>
           <View style={styles.statusRow}>
             <Text style={styles.statusLabel}>Claim Number</Text>
-            <Text style={styles.statusValue}>{claim.claimId || claim.claimNumber || "Draft Claim"}</Text>
+            <Text style={styles.statusValue}>{claim.claimNumber || claim.claimId || "Draft Claim"}</Text>
           </View>
           <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>Status</Text>
-            <Text style={[styles.statusValue, { color: statusInfo.color }]}>{statusInfo.label}</Text>
+            <Text style={styles.statusLabel}>Overall Status</Text>
+            <Text style={[styles.statusValue, { color: statusInfo.color }]}>
+              {isDisbursedOrPaid
+                ? "PAID"
+                : isAccountsApproved
+                  ? "APPROVED BY ACCOUNTS (PAYMENT PENDING)"
+                  : statusInfo.label.toUpperCase()}
+            </Text>
           </View>
+          {showApprovalCard && !isClaimantManagement && statusUpper !== "DRAFT" ? (
+            <View style={styles.statusRow}>
+              <Text style={styles.statusLabel}>
+                {showFinanceCard ? "1st Approval (Reporting Manager)" : "Reporting Manager Approval"}
+              </Text>
+              <Text style={[styles.statusValue, { color: approvalStatusMeta.color }]}>
+                {approvalStatusMeta.shortLabel.toUpperCase()} by {approverName}
+              </Text>
+            </View>
+          ) : null}
+          {showFinanceCard && effectiveFinanceStatus !== "NOT_REQUIRED" ? (
+            <View style={styles.statusRow}>
+              <Text style={styles.statusLabel}>2nd Approval (CFO / Finance Head)</Text>
+              <Text style={[styles.statusValue, { color: financeStatusMeta.color }]}>
+                {financeStatusMeta.shortLabel.toUpperCase()} by {financeApproverName}
+              </Text>
+            </View>
+          ) : null}
+          {showAccountsCard ? (
+            <View style={styles.statusRow}>
+              <Text style={styles.statusLabel}>Accounts Admin Approval</Text>
+              <Text style={[styles.statusValue, { color: accountsStatusMeta.color }]}>
+                {effectiveAccountsStatus === "APPROVED_PAYMENT_PENDING" || effectiveAccountsStatus === "PAID"
+                  ? `APPROVED by ${claim.accountsApproval?.approvedByName || claim.accountsApproval?.approvedBy?.name || "Accounts Admin"}${!isDisbursedOrPaid ? " (Awaiting Payment)" : ""}`
+                  : accountsStatusMeta.shortLabel.toUpperCase()}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.statusRow}>
             <Text style={styles.statusLabel}>Payment</Text>
             <Text
@@ -1975,12 +3002,20 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               ]}
             >
               {isDisbursedOrPaid
-                ? "Paid"
+                ? "PAID"
                 : statusUpper === "REJECTED" || paymentUpper === "REJECTED"
-                  ? "Rejected"
-                  : "Pending"}
+                  ? "REJECTED"
+                  : "UNPAID"}
             </Text>
           </View>
+          {isDisbursedOrPaid && (claim.disbursedAt || claim.paymentDate || claim.disbursement?.paymentDate) ? (
+            <View style={styles.statusRow}>
+              <Text style={styles.statusLabel}>Paid Date</Text>
+              <Text style={[styles.statusValue, { color: "#059669" }]}>
+                {formatDateTime(claim.disbursedAt || claim.paymentDate || claim.disbursement?.paymentDate)}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.statusRow}>
             <Text style={styles.statusLabel}>Applied Date &amp; Time</Text>
             <Text style={styles.statusValue}>
@@ -1990,60 +3025,168 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         </View>
 
         {/* Workflow Journey Stepper */}
-        {claim.status !== "DRAFT" ? (
-          <View style={styles.workflowCard}>
-            <Text style={styles.workflowTitle}>Claim Journey</Text>
+        {claim.status !== "DRAFT" ? (() => {
+          const journeySteps = [];
+          const submitterName = claim.submittedByName || claim.submittedBy?.name || ecList[0]?.employee?.name || "Employee";
+          const submitterCode = claim.submittedBy?.employeeIdCode || ecList[0]?.employee?.employeeIdCode || "";
+          journeySteps.push({
+            key: "submitted",
+            title: "Claim Submitted",
+            badgeLabel: "Submitted",
+            badgeColor: "#059669",
+            badgeBg: "#d1fae5",
+            badgeBorder: "#a7f3d0",
+            state: "COMPLETED",
+            desc: `Submitted by ${submitterName}${submitterCode ? ` (${submitterCode})` : ""} on ${claim.submittedAt ? formatDateTime(claim.submittedAt) : formatDateTime(claim.createdAt)} for ${formatINR(grandReq)}.`,
+          });
 
-            {/* Step 1: Submission */}
-            <View style={styles.workflowStepRow}>
-              <View style={[styles.stepCircle, styles.stepCompleted]}>
-                <CheckCircle2 size={15} color="#ffffff" />
-              </View>
-              <View style={styles.stepContent}>
-                <Text style={styles.stepName}>1. Claim Submitted</Text>
-                <Text style={styles.stepDesc}>
-                  Submitted on {claim.submittedAt ? formatDateTime(claim.submittedAt) : formatDateTime(claim.createdAt)}
-                </Text>
-              </View>
-            </View>
+          if (showApprovalCard && !isClaimantManagement) {
+            const firstDone = effectiveApprovalStatus === "APPROVED";
+            const firstRej = effectiveApprovalStatus === "REJECTED";
+            const fpRoutingDefault = isFullPayment && firstDone && fullPaymentProofs.length > 0
+              ? "Full payment requested with supporting proofs. Routed directly to Accounts for review of proofs and disbursement."
+              : "";
+            const firstRemark = managerApproval.remarks || claim.fullPayment?.decisionRemarks || fpRoutingDefault;
+            const firstDecidedTime = managerApproval.decidedAt || claim.fullPayment?.decidedAt || (firstDone ? claim.submittedAt : null);
+            journeySteps.push({
+              key: "first_approval",
+              title: `${showFinanceCard ? "1st Approval: " : ""}Reporting Manager${isFullPayment ? " (Full Payment)" : ""}`,
+              badgeLabel: firstDone ? "Approved" : firstRej ? "Rejected" : "Pending",
+              badgeColor: firstDone ? "#059669" : firstRej ? "#dc2626" : "#d97706",
+              badgeBg: firstDone ? "#d1fae5" : firstRej ? "#fee2e2" : "#fef3c7",
+              badgeBorder: firstDone ? "#a7f3d0" : firstRej ? "#fecaca" : "#fde68a",
+              state: firstDone ? "COMPLETED" : firstRej ? "REJECTED" : "ACTIVE",
+              desc: firstDone
+                ? `Approved by ${approverName}${approverCode}${firstDecidedTime ? ` on ${formatDateTime(firstDecidedTime)}` : ""}.${firstRemark ? ` Remark: "${firstRemark}"` : ""}`
+                : firstRej
+                  ? `Rejected by ${approverName}${approverCode}${firstRemark ? `: "${firstRemark}"` : ""}`
+                  : `Pending approval from ${approverName}${approverCode}.`,
+            });
+          }
 
-            <View style={styles.stepConnector} />
+          if (showFinanceCard && effectiveFinanceStatus !== "NOT_REQUIRED") {
+            const secDone = effectiveFinanceStatus === "APPROVED";
+            const secRej = effectiveFinanceStatus === "REJECTED";
+            const secCancel = effectiveFinanceStatus === "CANCELLED";
+            journeySteps.push({
+              key: "second_approval",
+              title: "2nd Approval: CFO / Finance Head",
+              badgeLabel: secDone ? "Approved" : secRej ? "Rejected" : secCancel ? "Cancelled" : "Pending",
+              badgeColor: secDone ? "#059669" : secRej ? "#dc2626" : secCancel ? "#64748b" : "#b45309",
+              badgeBg: secDone ? "#d1fae5" : secRej ? "#fee2e2" : secCancel ? "#f1f5f9" : "#fef3c7",
+              badgeBorder: secDone ? "#a7f3d0" : secRej ? "#fecaca" : secCancel ? "#cbd5e1" : "#fde68a",
+              state: secDone ? "COMPLETED" : secRej ? "REJECTED" : isFinanceStage ? "ACTIVE" : "PENDING",
+              desc: secDone
+                ? `Approved by ${financeApproverName}${financeApproverCode}${financeApproval.decidedAt ? ` on ${formatDateTime(financeApproval.decidedAt)}` : ""}.${financeApproval.remarks ? ` Remark: "${financeApproval.remarks}"` : ""}`
+                : secRej
+                  ? `Rejected by ${financeApproverName}${financeApproverCode}${financeApproval.remarks ? `: "${financeApproval.remarks}"` : ""}`
+                  : secCancel
+                    ? "Cancelled because 1st approval was rejected."
+                    : isFinanceStage
+                      ? `Pending 2nd approval from ${financeApproverName}${financeApproverCode} (1st approval completed).`
+                      : `Pending (will be sent to ${financeApproverName}${financeApproverCode} after 1st approval).`,
+            });
+          }
 
-            {/* Step 2: Payment / Decision */}
-            <View style={styles.workflowStepRow}>
-              <View
-                style={[
-                  styles.stepCircle,
-                  isDisbursedOrPaid
+          const accDone =
+            isAccountsApproved ||
+            isDisbursedOrPaid ||
+            rawAccountsApprovalStatus === "APPROVED" ||
+            effectiveAccountsStatus === "APPROVED_PAYMENT_PENDING" ||
+            effectiveAccountsStatus === "PAID";
+          const accRej = effectiveAccountsStatus === "REJECTED";
+          const accCancel = !showAccountsCard && isRejectedClaim;
+          const accByName = claim.accountsApproval?.approvedByName || claim.accountsApproval?.approvedBy?.name || "Accounts Admin";
+          const accByCode = claim.accountsApproval?.approvedBy?.employeeIdCode ? ` (${claim.accountsApproval.approvedBy.employeeIdCode})` : "";
+          journeySteps.push({
+            key: "accounts_approval",
+            title: "Accounts Admin Approval (Step 1)",
+            badgeLabel: accDone ? "Approved" : accRej ? "Rejected" : accCancel ? "Cancelled" : "Pending",
+            badgeColor: accDone ? "#059669" : accRej ? "#dc2626" : accCancel ? "#64748b" : "#d97706",
+            badgeBg: accDone ? "#d1fae5" : accRej ? "#fee2e2" : accCancel ? "#f1f5f9" : "#fef3c7",
+            badgeBorder: accDone ? "#a7f3d0" : accRej ? "#fecaca" : accCancel ? "#cbd5e1" : "#fde68a",
+            state: accDone ? "COMPLETED" : accRej ? "REJECTED" : statusUpper === "SUBMITTED" ? "ACTIVE" : "PENDING",
+            desc: accDone
+              ? `Verified & approved by ${accByName}${accByCode}${claim.accountsApproval?.approvedAt ? ` on ${formatDateTime(claim.accountsApproval.approvedAt)}` : ""}.${claim.accountsApproval?.remarks ? ` Remark: "${claim.accountsApproval.remarks}"` : ""}`
+              : accRej
+                ? `Rejected: ${claim.rejection?.reason || claim.rejectionReason || claim.accountsRemarks || claim.remarks || "Claim not eligible"}`
+                : accCancel
+                  ? "Cancelled due to rejection in prior approval stage."
+                  : statusUpper === "SUBMITTED"
+                    ? "Pending verification & approval by Accounts Admin."
+                    : "Pending (waiting for prior approval stages to complete).",
+          });
+
+          const payDone = effectivePaymentStageStatus === "PAID";
+          const payCancel = effectivePaymentStageStatus === "CANCELLED";
+          journeySteps.push({
+            key: "payment_settlement",
+            title: "Payment & Settlement (Step 2)",
+            badgeLabel: payDone ? "Paid" : payCancel ? "Cancelled" : isAccountsApproved ? "Awaiting Payment" : "Pending",
+            badgeColor: payDone ? "#059669" : payCancel ? "#64748b" : isAccountsApproved ? "#2563eb" : "#d97706",
+            badgeBg: payDone ? "#d1fae5" : payCancel ? "#f1f5f9" : isAccountsApproved ? "#dbeafe" : "#fef3c7",
+            badgeBorder: payDone ? "#a7f3d0" : payCancel ? "#cbd5e1" : isAccountsApproved ? "#bfdbfe" : "#fde68a",
+            state: payDone ? "COMPLETED" : payCancel ? "REJECTED" : isAccountsApproved ? "ACTIVE" : "PENDING",
+            desc: payDone
+              ? `Paid ${formatINR(claim.paidAmount || claim.disbursement?.amount || payAmt)} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${claim.disbursedAt || claim.paymentDate ? ` on ${formatDateTime(claim.disbursedAt || claim.paymentDate)}` : ""}${claim.disbursement?.remarks || claim.accountsRemarks ? ` (${claim.disbursement?.remarks || claim.accountsRemarks})` : ""}.`
+              : payCancel
+                ? "Payment cancelled due to claim rejection."
+                : isAccountsApproved
+                  ? `Approved for ${formatINR(payAmt)} — awaiting disbursement & UTR recording by Accounts Admin.`
+                  : "Pending (awaiting Accounts Admin approval before payment).",
+          });
+
+          return (
+            <View style={styles.workflowCard}>
+              <Text style={styles.workflowTitle}>Claim Journey</Text>
+              {journeySteps.map((step, sIdx) => {
+                const isLast = sIdx === journeySteps.length - 1;
+                const circleStyle =
+                  step.state === "COMPLETED"
                     ? styles.stepCompleted
-                    : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED")
+                    : step.state === "REJECTED"
                       ? styles.stepRejected
-                      : styles.stepInProgressBlue,
-                ]}
-              >
-                {isDisbursedOrPaid ? (
-                  <CheckCircle2 size={15} color="#ffffff" />
-                ) : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED") ? (
-                  <AlertCircle size={15} color="#ffffff" />
-                ) : (
-                  <Clock size={15} color="#ffffff" />
-                )}
-              </View>
-              <View style={styles.stepContent}>
-                <Text style={styles.stepName}>2. Payment &amp; Settlement</Text>
-                <Text style={styles.stepDesc}>
-                  {isDisbursedOrPaid
-                    ? `Paid ₹${claim.paidAmount || claim.disbursement?.amount || payAmt} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${claim.disbursedAt || claim.paymentDate ? ` on ${formatDateTime(claim.disbursedAt || claim.paymentDate)}` : ""}`
-                    : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED")
-                      ? `Rejected: ${claim.rejection?.reason || claim.rejectionReason || claim.remarks || "Claim not eligible"}`
-                      : statusUpper === "APPROVAL_PENDING"
-                        ? `Waiting for approval by ${managerApproval.approver?.name || managerApproval.approverName || "approver"}`
-                        : "Pending payment & verification by Accounts"}
-                </Text>
-              </View>
+                      : step.state === "ACTIVE"
+                        ? styles.stepInProgressBlue
+                        : styles.stepInProgress;
+                return (
+                  <View key={step.key}>
+                    <View style={styles.workflowStepRow}>
+                      <View style={[styles.stepCircle, circleStyle]}>
+                        <Text style={{ fontSize: 11, fontWeight: "900", color: "#ffffff" }}>
+                          {sIdx + 1}
+                        </Text>
+                      </View>
+                      <View style={styles.stepContent}>
+                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                          <Text style={[styles.stepName, { flex: 1 }]}>
+                            {step.title}
+                          </Text>
+                          <View
+                            style={{
+                              paddingHorizontal: 7,
+                              paddingVertical: 1.5,
+                              borderRadius: 6,
+                              backgroundColor: step.badgeBg,
+                              borderWidth: 1,
+                              borderColor: step.badgeBorder,
+                            }}
+                          >
+                            <Text style={{ fontSize: 9.5, fontWeight: "800", color: step.badgeColor }}>
+                              {step.badgeLabel}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.stepDesc}>{step.desc}</Text>
+                      </View>
+                    </View>
+                    {!isLast && <View style={styles.stepConnector} />}
+                  </View>
+                );
+              })}
             </View>
-          </View>
-        ) : null}
+          );
+        })() : null}
 
         {/* ======================================================== */}
         {/* DOWNLOAD PDF ACTION                                      */}
@@ -2171,11 +3314,13 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             <Text style={styles.decisionSub}>
               {decisionMode === "reject"
                 ? "The claim will be rejected and returned to the employee."
-                : "The claim will be sent to Accounts for payment."}
+                : (isFinanceStage
+                  ? "2nd approval (CFO / Finance Head): the claim will be sent to Accounts for payment."
+                  : "1st approval: Full Payment / Stock Purchase claims go to the CFO / Finance Head for 2nd approval; others go to Accounts.")}
             </Text>
             <TextInput
               style={styles.decisionInput}
-              placeholder={decisionMode === "reject" ? "Reason for rejection (required)" : "Remark (optional)"}
+              placeholder={decisionMode === "reject" ? "Reason for rejection (required)" : "Approval remark (required)"}
               placeholderTextColor="#94a3b8"
               value={decisionRemark}
               onChangeText={setDecisionRemark}
@@ -2257,9 +3402,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#c7d2fe",
   },
-  statusRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 3 },
+  statusRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", gap: 8, paddingVertical: 3 },
   statusLabel: { fontSize: 12, color: "#4f46e5", fontWeight: "700" },
-  statusValue: { fontSize: 12, color: "#312e81", fontWeight: "800", textAlign: "right" },
+  statusValue: { fontSize: 12, color: "#312e81", fontWeight: "800", textAlign: "right", flexShrink: 1 },
   sectionTitle: { fontSize: 14, fontWeight: "800", color: "#0f172a", marginTop: 18, marginBottom: 8 },
   sectionHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 18, marginBottom: 8 },
   entryCountBadge: { backgroundColor: "#eef2ff", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: "#c7d2fe" },
@@ -2272,23 +3417,23 @@ const styles = StyleSheet.create({
   slotLabel: { fontSize: 10, fontWeight: "700", color: "#64748b" },
   slotName: { fontSize: 13, fontWeight: "800", color: "#0f172a", marginTop: 1 },
   slotMeta: { fontSize: 11, color: "#64748b", marginTop: 1 },
-  fieldRow: { flexDirection: "row", alignItems: "center", gap: 6, marginVertical: 3 },
+  fieldRow: { flexDirection: "row", alignItems: "flex-start", flexWrap: "wrap", gap: 6, marginVertical: 3 },
   fieldLabel: { fontSize: 12, fontWeight: "700", color: "#475569" },
-  fieldValue: { fontSize: 12, fontWeight: "800", color: "#0f172a" },
+  fieldValue: { fontSize: 12, fontWeight: "800", color: "#0f172a", flexShrink: 1 },
   entryCard: { backgroundColor: "#ffffff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#e2e8f0", marginBottom: 10 },
-  entryCardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
-  entryNumberPill: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#eef2ff", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#c7d2fe" },
-  entryNumberPillText: { fontSize: 10, fontWeight: "800", color: "#4f46e5" },
-  entryCardTitle: { fontSize: 13, fontWeight: "800", color: "#0f172a" },
+  entryCardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6, marginBottom: 10 },
+  entryNumberPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3.5, borderRadius: 6, backgroundColor: "#eef2ff", justifyContent: "center" },
+  entryNumberPillText: { fontSize: 10.5, fontWeight: "800", color: "#4f46e5" },
+  entryCardTitle: { fontSize: 13, fontWeight: "800", color: "#0f172a", flexShrink: 1 },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
   statusBadgeText: { fontSize: 10, fontWeight: "800" },
-  figuresGrid: { flexDirection: "row", backgroundColor: "#f8fafc", borderRadius: 10, padding: 8, borderWidth: 1, borderColor: "#f1f5f9", justifyContent: "space-around", marginVertical: 8 },
-  figureItem: { alignItems: "center" },
+  figuresGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, backgroundColor: "#f8fafc", borderRadius: 10, padding: 8, borderWidth: 1, borderColor: "#f1f5f9", justifyContent: "space-around", marginVertical: 8 },
+  figureItem: { alignItems: "center", minWidth: 58, flexGrow: 1 },
   figureLabel: { fontSize: 9, fontWeight: "800", color: "#64748b" },
-  figureValue: { fontSize: 12, fontWeight: "800", color: "#0f172a", marginTop: 2 },
+  figureValue: { fontSize: 12, fontWeight: "800", color: "#0f172a", marginTop: 2, textAlign: "center" },
   calcCard: { backgroundColor: "#ffffff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#e2e8f0" },
   calcSubBox: { padding: 10, backgroundColor: "#f8fafc", borderRadius: 8, borderWidth: 1, borderColor: "#e2e8f0", marginVertical: 4 },
-  calcCombinedBox: { padding: 10, backgroundColor: "#eef2ff", borderRadius: 8, borderWidth: 1, borderColor: "#c7d2fe", flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginVertical: 4 },
+  calcCombinedBox: { padding: 10, backgroundColor: "#eef2ff", borderRadius: 8, borderWidth: 1, borderColor: "#c7d2fe", flexDirection: "row", flexWrap: "wrap", gap: 6, justifyContent: "space-between", alignItems: "center", marginVertical: 4 },
   calcOutcomeBox: { padding: 10, borderRadius: 8, borderWidth: 1, marginVertical: 4 },
   card: { backgroundColor: "#ffffff", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#e2e8f0", gap: 5 },
   cardText: { fontSize: 12, color: "#334155", lineHeight: 18 },
@@ -2350,7 +3495,7 @@ const styles = StyleSheet.create({
   },
   detailAttEyeText: { fontSize: 10, fontWeight: "800", color: "#4f46e5" },
 
-  actionRow: { flexDirection: "row", gap: 8, marginTop: 20 },
+  actionRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 20 },
   deleteActionBtn: {
     flexDirection: "row",
     alignItems: "center",

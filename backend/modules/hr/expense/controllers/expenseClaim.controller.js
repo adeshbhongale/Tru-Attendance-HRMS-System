@@ -2,12 +2,18 @@ const mongoose = require('mongoose');
 const Company = require('../../../../models/Company');
 const Customer = require('../../../../models/Customer');
 const ExpenseClaim = require('../models/ExpenseClaim');
+const ExpenseEntitlement = require('../models/ExpenseEntitlement');
+const TravelMode = require('../models/TravelMode');
 const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
-const { getExpenseTypes, resolveCityClass, getEntitlements } = require('../services/policyEngine');
+const { getExpenseTypes, resolveCityClass, getEntitlements, findEntitlement, getEmployeeLevelNumber, getEmployeeGradeCode } = require('../services/policyEngine');
 const { round2 } = require('../services/calculationEngine');
 const rules = require('../services/claimRules');
+const food = require('../services/foodEntitlementService');
+const travelPolicy = require('../services/travelPolicyService');
+const { withEmployeeLocks } = require('../services/entitlementLock');
 const access = require('../services/expenseAccess');
 const approvers = require('../services/approverService');
+const finance = require('../services/financeApprovalService');
 const { generateClaimPdf } = require('../services/claimPdfGenerator');
 
 /**
@@ -45,7 +51,87 @@ async function companyFor(req) {
   return companyId;
 }
 
+const pettyCash = require('../services/pettyCashService');
+
+/**
+ * Save the claim and bring the submitter's petty cash wallet in line with it in ONE
+ * transaction: if the save fails the wallet is untouched, and the wallet sync is
+ * delta-based + seq-guarded so retries / double taps never debit twice.
+ */
+async function saveWithWallet(req, claim) {
+  await pettyCash.runAtomic(async (session) => {
+    await claim.save({ session: session || undefined });
+    const res = await pettyCash.syncClaimDebit(claim, { session, req });
+    if (res?.wallet) claim._walletBalancePaise = res.wallet.balancePaise;
+  });
+}
+
 const firstMessage = (errors) => (errors[0]?.hint ? `${errors[0].message} ${errors[0].hint}` : errors[0]?.message) || 'Validation failed';
+
+const isTravelEntry = (e) => String(e?.expenseType || '').toUpperCase() === 'TRAVEL';
+const involvesFood = (input) => (input.claimMode === 'LODGING' && input.includeFood)
+  || (input.entries || []).some((e) => String(e.expenseType || '').toUpperCase() === 'FOOD');
+
+/**
+ * Submissions that reserve food entitlement are serialised per employee: the evaluation
+ * (which re-reads every other claim's consumption) and the save run inside the lock, so two
+ * overlapping claims submitted at the same moment can never reserve the same daily allowance.
+ */
+async function withFoodLock(req, companyId, input, enabled, fn) {
+  if (!enabled || !involvesFood(input)) return fn();
+  const actor = String(access.userId(req) || '');
+  const ids = (input.employeeIds || []).map((id) => (id === 'self' || id === 'me' ? actor : String(id)));
+  return withEmployeeLocks({ companyId, employeeIds: ids, scope: 'FOOD' }, fn);
+}
+
+/** Active Level Entitlement rows for TRAVEL under a policy (with company-wide fallback). */
+async function loadTravelEntitlements(companyId, policyId) {
+  let rows = policyId
+    ? await ExpenseEntitlement.find({ companyId, policyId, expenseTypeCode: 'TRAVEL', status: 'active' }).lean()
+    : [];
+  if (!rows.length) {
+    rows = await ExpenseEntitlement.find({ companyId, expenseTypeCode: 'TRAVEL', status: 'active' }).lean();
+  }
+  return rows;
+}
+
+/**
+ * Daily food limit per employee and date for the lodging Food section. The policy in force on
+ * each date is used, so a policy change inside the range applies its own rate from its start date.
+ */
+async function buildFoodRows({ companyId, employees, dates, destinationClass, basePolicy, excludeClaimId }) {
+  const policyFor = new Map();
+  const entsFor = new Map();
+  const first = dates.length ? await rules.getPolicyForDate(companyId, dates[0]) : basePolicy;
+  const last = dates.length ? await rules.getPolicyForDate(companyId, dates[dates.length - 1]) : basePolicy;
+  const singlePolicy = String(first?._id) === String(last?._id);
+  for (const d of dates) {
+    // eslint-disable-next-line no-await-in-loop
+    const p = singlePolicy ? first : (await rules.getPolicyForDate(companyId, d)) || basePolicy;
+    policyFor.set(food.dateKey(d), p);
+    const pid = String(p?._id || '');
+    if (!entsFor.has(pid)) {
+      // eslint-disable-next-line no-await-in-loop
+      entsFor.set(pid, p ? await getEntitlements(companyId, p._id, ['FOOD'], destinationClass) : []);
+    }
+  }
+  const consumption = await food.getFoodConsumption({
+    companyId, employeeIds: employees.map((e) => e._id), from: dates[0], to: dates[dates.length - 1], excludeClaimId,
+  });
+  const daily = {};
+  employees.forEach((emp) => {
+    const ln = getEmployeeLevelNumber(emp);
+    const gc = getEmployeeGradeCode(emp);
+    const used = consumption.get(String(emp._id)) || new Map();
+    daily[String(emp._id)] = dates.map((d) => {
+      const key = food.dateKey(d);
+      const p = policyFor.get(key);
+      const ent = findEntitlement(entsFor.get(String(p?._id || '')) || [], ln, gc, destinationClass, 'FOOD');
+      return { date: d, dailyLimit: round2(ent ? ent.amount : 0), priorConsumed: round2(used.get(key) || 0) };
+    });
+  });
+  return daily;
+}
 
 /**
  * Validate + calculate a claim payload. Never writes to the database.
@@ -66,9 +152,72 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   const types = await getExpenseTypes(companyId);
   const type = types.find((t) => String(t.code).toUpperCase() === input.expenseType);
   const typeConfig = rules.resolveTypeConfig(type, input.expenseType);
+  const foodTypeConfig = rules.resolveTypeConfig(types.find((t) => String(t.code).toUpperCase() === 'FOOD'), 'FOOD');
+
+  // Travel Mode / Subtype: validated against the Admin configuration on the server. Own Vehicle
+  // amounts are recomputed here (distance x configured rate); client totals are never trusted.
+  const travelErrors = [];
+  let travelModes = [];
+  const travelEntries = input.claimMode === 'NORMAL' ? (input.entries || []).filter(isTravelEntry) : [];
+  if (travelEntries.length) {
+    travelModes = await TravelMode.find({ companyId }).lean();
+    input.entries.forEach((e, idx) => {
+      if (!isTravelEntry(e)) return;
+      const prefix = input.entries.length > 1 ? `entries[${idx}].` : '';
+      travelErrors.push(...travelPolicy.resolveTravelEntry(e, { modes: travelModes, policy, prefix }));
+    });
+    input.requestedAmount = round2(input.entries.reduce((s, e) => s + (Number(e.requestedAmount) || 0), 0)) || input.requestedAmount;
+  }
 
   const isMgmt = access.isManagementUser(req.user);
-  const errors = rules.validateClaimInput(input, { policyConfig, typeConfig, isDraft: !submit, isManagement: isMgmt, user: req.user });
+  const resolvedIds = (input.employeeIds || []).map((id) => (id === 'self' || id === 'me' ? actor : id));
+  const validIds = resolvedIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  const employees = await rules.loadEmployees(companyId, validIds);
+  const actorEmp = employees.find((e) => String(e._id) === String(actor)) || null;
+  const effectiveActorUser = actorEmp
+    ? { ...req.user, ...actorEmp, levelRef: actorEmp.levelRef || req.user?.levelRef }
+    : req.user;
+  const limitParticipants = employees.length > 0
+    ? [effectiveActorUser, ...employees]
+    : [effectiveActorUser];
+  const directAccountLimit = approvers.resolveDirectAccountLimit(limitParticipants, policy?.approvalLimitRules || []);
+  const approvalKind = isMgmt ? 'NONE' : rules.approvalKindFor(input, { policy, policyConfig, types, user: effectiveActorUser, directLimit: directAccountLimit });
+
+  // Auto-resolve Reporting Manager from employee's department hierarchy & dynamic payment limit rules
+  // Applies to both OTHER_EXPENSE and FULL_PAYMENT requests, and escalates
+  // automatically to the above Reporting Manager if a tagged employee on the claim is the direct Reporting Manager.
+  const hasActiveLimitRules = Array.isArray(policy?.approvalLimitRules) &&
+    policy.approvalLimitRules.some((r) => r && r.status !== 'inactive' && String(r.roleName || '').trim());
+  const isSuppliedApproverOnClaim = Boolean(
+    input.approverId &&
+    (String(input.approverId) === String(actor) || resolvedIds.map(String).includes(String(input.approverId)))
+  );
+  if (
+    !isMgmt &&
+    (approvalKind === 'OTHER_EXPENSE' || approvalKind === 'FULL_PAYMENT') &&
+    (!input.approverId || hasActiveLimitRules || approvalKind === 'FULL_PAYMENT' || isSuppliedApproverOnClaim)
+  ) {
+    const payLimitTypes = new Set((policyConfig?.payLimitConfig?.applicableClaimTypes || ['OTHER']).map((t) => String(t).toUpperCase()));
+    const cfoTypes = new Set((policyConfig?.cfoApprovalConfig?.applicableClaimTypes || ['STOCK_PURCHASE']).map((t) => String(t).toUpperCase()));
+    const relevantEntries = (input.entries || []).filter(
+      (e) => e && (payLimitTypes.has(String(e.expenseType).toUpperCase()) || cfoTypes.has(String(e.expenseType).toUpperCase()))
+    );
+    const targetAmount = approvalKind === 'FULL_PAYMENT'
+      ? (Number(input.requestedAmount) || 0)
+      : (relevantEntries.length
+        ? Math.max(...relevantEntries.map((e) => Number(e.requestedAmount) || 0))
+        : (Number(input.requestedAmount) || 0));
+    const autoMgr = await approvers.resolveEmployeeReportingManager(effectiveActorUser, companyId, resolvedIds, {
+      amount: targetAmount,
+      approvalLimitRules: policy?.approvalLimitRules || [],
+    });
+    if (autoMgr && autoMgr._id) {
+      input.approverId = String(autoMgr._id);
+    }
+  }
+
+  const errors = rules.validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig, isDraft: !submit, isManagement: isMgmt, user: effectiveActorUser });
+  errors.push(...(submit ? travelErrors : travelErrors.filter((e) => !e.required)));
 
   // Stay with relative needs a valid configured percentage (never silently defaulted here)
   if (input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE' && rules.resolveRelativeStayPercent(policy) === null) {
@@ -76,9 +225,6 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   }
 
   // Employees: must exist in this company, be active, and be selectable by the filer.
-  const resolvedIds = (input.employeeIds || []).map((id) => (id === 'self' || id === 'me' ? actor : id));
-  const validIds = resolvedIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
-  const employees = await rules.loadEmployees(companyId, validIds);
   if (employees.length !== validIds.length) {
     errors.push({ field: 'employeeIds', code: 'EMPLOYEE_NOT_FOUND', message: 'One or more selected employees were not found in your company.' });
   }
@@ -91,7 +237,6 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
 
   // Approver (Management for full payment, Reporting Manager for OTHER expense)
   // For Management users, approval is not applicable; claims route directly to Accounts.
-  const approvalKind = isMgmt ? 'NONE' : rules.approvalKindFor(input);
   let approver = null;
   if (!isMgmt && approvalKind !== 'NONE' && input.approverId) {
     approver = await approvers.findEligibleApprover({ companyId, kind: approvalKind, approverId: input.approverId });
@@ -115,6 +260,11 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   if (input.customerId && !(await Customer.exists({ _id: input.customerId, companyId }))) input.customerId = null;
 
   const ruleEnd = input.claimMode === 'LODGING' ? input.toDate : input.claimDate;
+  const isLodgingRange = input.claimMode === 'LODGING' && input.fromDate && input.toDate && input.toDate >= input.fromDate;
+  const lodgingNights = isLodgingRange ? rules.nightsBetween(input.fromDate, input.toDate) : null;
+  const foodDays = isLodgingRange ? rules.daysBetween(input.fromDate, input.toDate) : null;
+  const foodRequested = round2((input.foodEntries || []).reduce((s, f) => s + (Number(f.requestedAmount) || 0), 0));
+  const travelModeLabel = [...new Set(travelEntries.filter((e) => e.travel).map((e) => (e.travel.subtypeName ? `${e.travel.modeName} - ${e.travel.subtypeName}` : e.travel.modeName)))].join(', ');
   const base = {
     claimMode: input.claimMode,
     visitType: input.visitType === 'VISIT' || input.isVisit ? 'VISIT' : 'NO_VISIT',
@@ -124,8 +274,13 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
     fromDate: input.fromDate,
     toDate: input.toDate,
     stayType: input.claimMode === 'LODGING' && rules.STAY_TYPES.includes(input.stayType) ? input.stayType : undefined,
-    numberOfDays: input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1,
-    numberOfNights: input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1,
+    // Lodging = nights (checkout - checkin); Food = inclusive calendar days
+    numberOfNights: lodgingNights === null ? 1 : lodgingNights,
+    calcVersion: 2,
+    lodgingNights,
+    foodDays,
+    includeFood: input.claimMode === 'LODGING' ? !!input.includeFood : false,
+    foodEntries: input.claimMode === 'LODGING' && input.includeFood ? input.foodEntries : undefined,
     employeeCount: Number.isInteger(input.numberOfEmployees) && input.numberOfEmployees > 0 ? input.numberOfEmployees : employees.length || 1,
     entries: input.entries && input.entries.length > 0 ? input.entries : undefined,
     trip: {
@@ -136,7 +291,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
       destinationClass: 'C',
       startDate: ruleStart || null,
       endDate: ruleEnd || null,
-      travelMode: '',
+      travelMode: travelModeLabel,
       tourSanctioned: true,
     },
     policyId: policy._id,
@@ -156,7 +311,12 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
       receiptRules: policyConfig.receiptRules,
       fullPaymentRules: policyConfig.fullPaymentRules,
       deadlineRules: policyConfig.deadlineRules,
+      approvalLimitRules: policyConfig.approvalLimitRules,
+      payLimitConfig: policyConfig.payLimitConfig,
+      cfoApprovalConfig: policyConfig.cfoApprovalConfig,
+      directAccountLimit,
       typeConfig,
+      foodTypeConfig,
     },
     receipts: input.receipts.map((r) => ({ ...r, uploadedBy: actor, uploadedAt: new Date() })),
     serviceReports: (input.serviceReports || []).map((r) => ({ ...r, uploadedBy: actor, uploadedAt: new Date() })),
@@ -180,8 +340,10 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
     },
   };
 
+  const hasFood = input.claimMode === 'LODGING' && input.includeFood && foodRequested > 0;
   const canCalculate = typeConfig && typeConfig.claimMode === input.claimMode && employees.length && ruleStart && ruleEnd
-    && (input.claimMode !== 'LODGING' || (base.numberOfDays || base.numberOfNights) >= 1) && (input.requestedAmount > 0 || (input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE'));
+    && (input.claimMode !== 'LODGING' || isLodgingRange)
+    && (input.requestedAmount > 0 || (input.claimMode === 'LODGING' && (input.stayType === 'WITH_RELATIVE' || hasFood)));
 
   if (!canCalculate) {
     // Incomplete draft: keep what was entered, amounts are calculated on submit.
@@ -197,7 +359,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
           claimedBy: actor,
           items: [],
         })),
-        grandRequested: round2(input.requestedAmount > 0 ? input.requestedAmount : 0),
+        grandRequested: round2((input.requestedAmount > 0 ? input.requestedAmount : 0) + (hasFood ? foodRequested : 0)),
         grandAllowed: 0,
         grandExcess: 0,
         payableAmount: 0,
@@ -209,13 +371,32 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   const relevantTypeCodes = input.entries && input.entries.length > 0
     ? [...new Set(input.entries.map((e) => e.expenseType))]
     : [typeConfig.code];
+  if (hasFood && !relevantTypeCodes.includes('FOOD')) relevantTypeCodes.push('FOOD');
   const entitlements = await getEntitlements(companyId, policy._id, relevantTypeCodes, destinationClass);
-  const amounts = await rules.calculateAmounts({ input, typeConfig, employees, policy, entitlements, destinationClass, actor, allTypes: types });
-  // Stay with relative: the claimed amount is the calculated entitlement
+
+  // Shared food entitlement (date-wise, across every claim type) + travel Level Entitlements
+  const foodContext = { normalPrior: {}, daily: {} };
+  const normalFood = input.claimMode === 'NORMAL' && input.claimDate && (input.entries || []).some((e) => String(e.expenseType).toUpperCase() === 'FOOD');
+  if (normalFood) {
+    const used = await food.getFoodConsumption({ companyId, employeeIds: employees.map((e) => e._id), from: input.claimDate, to: input.claimDate, excludeClaimId });
+    employees.forEach((e) => { foodContext.normalPrior[String(e._id)] = (used.get(String(e._id)) || new Map()).get(food.dateKey(input.claimDate)) || 0; });
+  }
+  if (hasFood) {
+    foodContext.daily = await buildFoodRows({
+      companyId, employees, dates: food.enumerateDates(input.fromDate, input.toDate), destinationClass, basePolicy: policy, excludeClaimId,
+    });
+  }
+  const travelEntitlements = travelEntries.length ? await loadTravelEntitlements(companyId, policy._id) : [];
+
+  const amounts = await rules.calculateAmounts({
+    input, typeConfig, employees, policy, entitlements, destinationClass, actor, allTypes: types, foodContext, travelEntitlements,
+  });
+  // Stay with relative: the claimed lodging amount is the calculated entitlement
   const isRelativeStay = input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE';
-  if (isRelativeStay && base.entries) base.entries.forEach((e) => { e.requestedAmount = amounts.grandRequested; });
-  const relativeStayErrors = isRelativeStay && !(amounts.grandRequested > 0)
-    ? [{ field: 'stayType', code: 'RELATIVE_STAY_NO_ALLOWANCE', message: 'No lodging allowance is payable for a stay with relative under the current policy.' }]
+  const lodgingRequested = amounts.lodgingSummary ? amounts.lodgingSummary.requested : amounts.grandRequested;
+  if (isRelativeStay && base.entries) base.entries.forEach((e) => { e.requestedAmount = lodgingRequested; });
+  const relativeStayErrors = isRelativeStay && lodgingNights > 0 && !(lodgingRequested > 0)
+    ? [{ field: 'stayType', code: 'RELATIVE_STAY_NO_ALLOWANCE', message: 'No lodging allowance is payable for a stay at relative under the current policy.' }]
     : [];
   const businessRules = await rules.evaluateBusinessRules({
     companyId,
@@ -239,8 +420,14 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
       ...base,
       trip: { ...base.trip, destinationClass },
       employeeClaims: amounts.employeeClaims,
-      numberOfDays: amounts.numberOfDays || amounts.numberOfNights || 1,
-      numberOfNights: amounts.numberOfDays || amounts.numberOfNights || 1,
+      numberOfDays: amounts.numberOfDays || 1,
+      numberOfNights: input.claimMode === 'LODGING' ? amounts.numberOfNights : 1,
+      lodgingNights: amounts.lodgingNights ?? base.lodgingNights,
+      foodDays: amounts.foodDays ?? base.foodDays,
+      foodEntries: amounts.foodEntries || base.foodEntries,
+      foodSummary: amounts.foodSummary,
+      lodgingSummary: amounts.lodgingSummary,
+      policySnapshot: { ...base.policySnapshot, travelEntitlementsConfigured: travelEntitlements.length > 0 },
       grandRequested: amounts.grandRequested,
       grandAllowed: amounts.grandAllowed,
       grandExcess: amounts.grandExcess,
@@ -258,7 +445,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
 }
 
 function applyData(claim, data) {
-  const { isSharedLodging, ...fields } = data;
+  const { isSharedLodging, numberOfDays, ...fields } = data;
   Object.assign(claim, fields);
   return claim;
 }
@@ -266,6 +453,7 @@ function applyData(claim, data) {
 async function finalizeSubmission(req, claim, { deadlineOverridden }) {
   const isMgmt = access.isManagementUser(req.user);
   rules.routeSubmission(claim, { user: req.user, isManagement: isMgmt });
+  claim.accountsApproval = { status: 'PENDING', approvedBy: null, approvedByName: '', approvedAt: null, remarks: '' };
   const ma = claim.managerApproval || {};
   const awaiting = claim.status === 'APPROVAL_PENDING';
   const approverLabel = ma.approverRole === 'MANAGEMENT' ? 'Management' : 'Reporting Manager';
@@ -309,11 +497,14 @@ async function auditSubmission(req, claim, { deadlineOverridden }) {
   }
   if (claim.status === 'APPROVAL_PENDING') {
     const ma = claim.managerApproval || {};
+    const approvalTypeLabel = ma.kind === 'FULL_PAYMENT'
+      ? 'Full payment'
+      : (finance.isStockPurchaseClaim(claim) ? 'Stock purchase' : 'Other expense');
     await access.audit({
       req,
       action: 'APPROVAL_REQUESTED',
       claim,
-      description: `${ma.kind === 'FULL_PAYMENT' ? 'Full payment' : 'Other expense'} approval requested from ${ma.approverName || 'approver'}.`,
+      description: `${approvalTypeLabel} approval requested from ${ma.approverName || 'approver'}.`,
       metadata: { kind: ma.kind, approver: ma.approver, approverRole: ma.approverRole },
     });
   }
@@ -324,6 +515,9 @@ async function auditSubmission(req, claim, { deadlineOverridden }) {
 
 function withComputed(req, claim) {
   const c = claim.toObject ? claim.toObject() : claim;
+  if (String(c.claimMode || '').toUpperCase() === 'LOGGING' || String(c.claimType || '').toUpperCase() === 'LODGING') {
+    c.claimMode = 'LODGING';
+  }
   const isNormalMode = String(c.claimMode || 'NORMAL').toUpperCase() !== 'LODGING';
   const hasVisitInEntries = Array.isArray(c.entries) && c.entries.some((e) => e && (String(e.visitType || '').toUpperCase() === 'VISIT' || e.isVisit === true));
   const hasVisitInItems = Array.isArray(c.employeeClaims) && c.employeeClaims.some((ec) => Array.isArray(ec?.items) && ec.items.some((it) => it && (String(it.visitType || '').toUpperCase() === 'VISIT' || it.isVisit === true)));
@@ -340,7 +534,78 @@ function withComputed(req, claim) {
     const sum = c.employeeClaims.reduce((s, ec) => s + (ec.policyLimitTotal || ec.items?.[0]?.policyLimit || 0), 0);
     if (sum > 0) c.grandPolicyLimit = sum;
   }
-  return { ...c, permissions: access.claimPermissions(req, c) };
+  if ((!Array.isArray(c.paymentProofs) || c.paymentProofs.length === 0) && c.disbursement) {
+    if (Array.isArray(c.disbursement.paymentProofs) && c.disbursement.paymentProofs.length > 0) {
+      c.paymentProofs = c.disbursement.paymentProofs;
+    } else if (c.disbursement.paymentProof?.url) {
+      c.paymentProofs = [c.disbursement.paymentProof];
+    }
+  }
+  const pc = c.pettyCash || {};
+  const isPaid = access.businessStatus(c) === 'PAID';
+  const pettyCashSummary = {
+    debitedAmount: pettyCash.fromPaise(pc.debitedPaise || 0),
+    creditedAmount: isPaid ? pettyCash.fromPaise(pc.creditedPaise || 0) : 0,
+    ...(claim._walletBalancePaise !== undefined ? { walletBalance: pettyCash.fromPaise(claim._walletBalancePaise) } : {}),
+  };
+  return { ...c, pettyCashSummary, permissions: access.claimPermissions(req, c) };
+}
+
+async function attachFinanceHeadPreview(claim) {
+  if (!claim || claim.status === 'DRAFT') return claim;
+  const sub = claim.submittedBy && typeof claim.submittedBy === 'object' ? claim.submittedBy : null;
+  if (sub && access.isManagementUser(sub)) return claim;
+  const companyId = claim.companyId?._id || claim.companyId;
+  const headRec = companyId ? await finance.getFinanceHeadRecord(companyId).catch(() => null) : null;
+  const needsCfo = finance.needsFinanceApproval(claim, { financeHead: headRec });
+  const mgr = claim.managerApproval || {};
+  const fp = claim.fullPayment || {};
+  const computedKind = rules.approvalKindFor(claim, { financeHead: headRec });
+  const isExplicitlyNotRequired = mgr.status === 'NOT_REQUIRED' && (!mgr.kind || mgr.kind === 'NONE') && !mgr.decidedAt && !mgr.remarks;
+  const needsMgrApproval = Boolean(
+    claim.requestFullPayment ||
+    fp.requested ||
+    (fp.status && fp.status !== 'NOT_REQUESTED') ||
+    (mgr.status && mgr.status !== 'NOT_REQUIRED') ||
+    mgr.decidedAt ||
+    mgr.remarks ||
+    needsCfo ||
+    (!isExplicitlyNotRequired && computedKind !== 'NONE')
+  );
+  if (needsMgrApproval && !mgr.approver && !mgr.approverName) {
+    if (sub?.reportsTo && typeof sub.reportsTo === 'object' && sub.reportsTo.name) {
+      claim.managerApproval = {
+        ...mgr,
+        approver: sub.reportsTo,
+        approverName: sub.reportsTo.name || '',
+      };
+    } else if (sub && companyId) {
+      const resolvedMgr = await approvers.resolveEmployeeReportingManager(sub, companyId, [sub._id]).catch(() => null);
+      if (resolvedMgr && resolvedMgr.name) {
+        claim.managerApproval = {
+          ...mgr,
+          approver: resolvedMgr,
+          approverName: resolvedMgr.name || '',
+        };
+      }
+    }
+  }
+  if (!needsCfo) return claim;
+  const fin = claim.financeApproval || {};
+  if (fin.approver || fin.approverName) return claim;
+  if (!companyId) return claim;
+  const head = headRec?.employee && !rules.ACTIVE_USER_EXCLUDED.includes(headRec.employee.status)
+    ? headRec.employee
+    : await finance.getFinanceHead(companyId).catch(() => null);
+  if (head) {
+    claim.financeApproval = {
+      ...fin,
+      status: fin.status || 'NOT_REQUIRED',
+      approver: head,
+      approverName: head.name || '',
+    };
+  }
+  return claim;
 }
 
 // ─── Status groups for My Claims / registers ────────────────────────────────
@@ -369,7 +634,22 @@ function buildFilters(q) {
   if (q.claimMode && ['NORMAL', 'LODGING'].includes(String(q.claimMode).toUpperCase())) and.push({ claimMode: String(q.claimMode).toUpperCase() });
   if (q.employeeId && mongoose.Types.ObjectId.isValid(q.employeeId)) and.push({ 'employeeClaims.employee.employeeId': new mongoose.Types.ObjectId(q.employeeId) });
   if (q.department) and.push({ 'employeeClaims.employee.department': { $regex: `^${escapeRegex(q.department)}$`, $options: 'i' } });
-  if (q.expenseType) and.push({ claimType: String(q.expenseType).toUpperCase() });
+  if (q.expenseType) {
+    const t = String(q.expenseType).trim().toUpperCase();
+    if (t === 'COMBINE' || t === 'COMBINED') {
+      and.push({
+        $or: [
+          { claimType: { $in: ['COMBINE', 'COMBINED'] } },
+          { 'entries.1': { $exists: true } },
+          { 'employeeClaims.0.items.1': { $exists: true } },
+          { claimMode: 'LODGING', includeFood: true },
+          { claimMode: 'LODGING', 'foodEntries.0': { $exists: true } },
+        ],
+      });
+    } else if (t !== 'ALL') {
+      and.push({ claimType: t });
+    }
+  }
   if (q.customer) and.push({ 'trip.customerName': { $regex: escapeRegex(q.customer), $options: 'i' } });
   if (q.destination) and.push({ 'trip.destination': { $regex: escapeRegex(q.destination), $options: 'i' } });
   if (q.paymentStatus) and.push({ paymentStatus: String(q.paymentStatus).toUpperCase() });
@@ -405,7 +685,7 @@ function buildFilters(q) {
   return and;
 }
 
-function userShare(c, uid) {
+function userShare(c, uid, req) {
   const isApplicant = String(c.submittedBy?._id || c.submittedBy) === String(uid);
   const actualRequested = c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0);
   const actualAllowed = c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed !== undefined ? c.grandAllowed : actualRequested);
@@ -415,14 +695,23 @@ function userShare(c, uid) {
   const userAllowed = actualAllowed;
   const userExcess = actualExcess;
   const isLodgingCoveredByOther = false;
-  return { ...c, isApplicant, userRequested, userAllowed, userExcess, isLodgingCoveredByOther };
+  const permissions = c.permissions || (req ? access.claimPermissions(req, c) : undefined);
+  return { ...c, isApplicant, userRequested, userAllowed, userExcess, isLodgingCoveredByOther, ...(permissions ? { permissions } : {}) };
 }
 
 const LIST_POPULATE = [
-  { path: 'submittedBy', select: 'name employeeIdCode department designation mobile email phone' },
+  {
+    path: 'submittedBy',
+    select: 'name employeeIdCode department designation mobile email phone role roleCode levelRef responsibilityCodes departmentAdminType adminType reportsTo',
+    populate: { path: 'reportsTo', select: 'name employeeIdCode department designation mobile email phone role roleCode' },
+  },
   { path: 'employeeClaims.employee.employeeId', select: 'name employeeIdCode department designation mobile email phone' },
   { path: 'managerApproval.approver', select: 'name employeeIdCode department designation mobile email phone role roleCode' },
+  { path: 'financeApproval.approver', select: 'name employeeIdCode department designation mobile email phone role roleCode' },
+  { path: 'accountsApproval.approvedBy', select: 'name employeeIdCode department designation mobile email phone role roleCode' },
   { path: 'fullPayment.decidedBy', select: 'name employeeIdCode department designation mobile email phone' },
+  { path: 'disbursement.recordedBy', select: 'name employeeIdCode department designation mobile email phone' },
+  { path: 'rejection.rejectedBy', select: 'name employeeIdCode department designation mobile email phone' },
 ];
 
 /**
@@ -446,8 +735,28 @@ exports.listClaims = async (req, res) => {
       } else {
         and.push({ $or: [{ submittedBy: uid }, { 'employeeClaims.employee.employeeId': uid, status: { $ne: 'DRAFT' } }] });
       }
+    } else if (access.isAccounts(req.user) && !access.isCompanyAdmin(req.user) && !access.isHR(req.user)) {
+      and.push({
+        $or: [
+          {
+            status: { $nin: [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES] },
+            'managerApproval.status': { $nin: ['PENDING', 'REJECTED'] },
+            'financeApproval.status': { $nin: ['PENDING', 'REJECTED'] },
+          },
+          { submittedBy: uid },
+        ],
+      });
     } else {
-      and.push({ $or: [{ status: { $ne: 'DRAFT' } }, { submittedBy: uid }] });
+      and.push({
+        $or: [
+          {
+            status: { $nin: [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES] },
+            'managerApproval.status': { $ne: 'PENDING' },
+            'financeApproval.status': { $ne: 'PENDING' },
+          },
+          { submittedBy: uid },
+        ],
+      });
     }
     const filter = and.length ? { $and: and } : {};
 
@@ -463,13 +772,13 @@ exports.listClaims = async (req, res) => {
 
     res.json({
       success: true,
-      data: claims.map((c) => userShare(c, uid)),
+      data: claims.map((c) => userShare(c, uid, req)),
       total,
       page,
       pages: Math.ceil(total / limit),
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -478,7 +787,7 @@ exports.myClaims = async (req, res) => {
   try {
     const companyId = await companyFor(req);
     const uid = req.user._id;
-    const and = buildFilters({ status: req.query.status, claimMode: req.query.claimMode, search: req.query.search });
+    const and = buildFilters({ status: req.query.status, claimMode: req.query.claimMode, expenseType: req.query.expenseType, search: req.query.search });
     and.push({ $or: [{ submittedBy: uid }, { 'employeeClaims.employee.employeeId': uid, status: { $ne: 'DRAFT' } }] });
     if (companyId) and.push({ companyId });
     const claims = await ExpenseClaim.find({ $and: and })
@@ -486,9 +795,9 @@ exports.myClaims = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(Math.min(500, parseInt(req.query.limit, 10) || 200))
       .lean();
-    res.json({ success: true, data: claims.map((c) => userShare(c, uid)) });
+    res.json({ success: true, data: claims.map((c) => userShare(c, uid, req)) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -508,9 +817,10 @@ exports.getClaim = async (req, res) => {
         ? 'Draft claims are private and can only be viewed by the creator.'
         : 'You are not authorized to view this expense claim.');
     }
+    await attachFinanceHeadPreview(claim);
     res.json({ success: true, data: userShare(withComputed(req, claim), req.user._id) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -532,6 +842,7 @@ exports.downloadClaimPdf = async (req, res) => {
         : 'You are not authorized to download this expense claim.');
     }
 
+    await attachFinanceHeadPreview(claim);
     const computed = userShare(withComputed(req, claim), req.user._id);
     const filename = `Claim_${claim.claimNumber || claim.claimId || claim._id}.pdf`;
 
@@ -553,7 +864,7 @@ exports.getClaimByRequestId = async (req, res) => {
     if (!claim) return fail(res, 404, 'No claim found for this request.');
     res.json({ success: true, data: withComputed(req, claim) });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -573,8 +884,18 @@ exports.getClaimConfig = async (req, res) => {
     const types = (await getExpenseTypes(companyId))
       .map(rules.resolveTypeConfig)
       .filter((t) => t.claimMode === mode)
-      .map(({ code, name, claimMode, maxClaimAmount, sameDateLimit, allowOverlap, requiresOutstation, proofRequired }) =>
-        ({ code, name, claimMode, maxClaimAmount, sameDateLimit, allowOverlap, requiresOutstation, proofRequired }));
+      .map(({ code, name, category, claimMode, maxClaimAmount, sameDateLimit, allowOverlap, requiresOutstation, proofRequired, payLimitEnabled, cfoApprovalRequired, managerApprovalRequired }) =>
+        ({ code, name, category, claimMode, maxClaimAmount, sameDateLimit, allowOverlap, requiresOutstation, proofRequired, payLimitEnabled, cfoApprovalRequired, managerApprovalRequired }));
+    const travelModes = mode === 'NORMAL' ? travelPolicy.serializeModes(await TravelMode.find({ companyId }).lean(), policy) : [];
+    const foodType = rules.resolveTypeConfig((await getExpenseTypes(companyId)).find((t) => String(t.code).toUpperCase() === 'FOOD'), 'FOOD');
+    const actorId = access.userId(req);
+    const [actorEmp] = actorId && mongoose.Types.ObjectId.isValid(String(actorId))
+      ? await rules.loadEmployees(companyId, [String(actorId)])
+      : [];
+    const effectiveActor = actorEmp
+      ? { ...req.user, ...actorEmp, levelRef: actorEmp.levelRef || req.user?.levelRef }
+      : req.user;
+    const directAccountLimit = approvers.resolveDirectAccountLimit(effectiveActor, policyConfig.approvalLimitRules || []);
     res.json({
       success: true,
       data: {
@@ -585,19 +906,141 @@ exports.getClaimConfig = async (req, res) => {
           name: policy.name,
           version: policy.version,
           conveyanceRates: policy.conveyanceRates,
+          approvalLimitRules: policyConfig.approvalLimitRules,
+          payLimitConfig: policyConfig.payLimitConfig,
+          cfoApprovalConfig: policyConfig.cfoApprovalConfig,
+          directAccountLimit,
         } : null,
         conveyanceRates: policy?.conveyanceRates || null,
         types,
+        // NORMAL form: active travel modes + subtypes (visibility is never limited by entitlement)
+        travelModes,
+        // LODGING form: Food section proof rule
+        foodProofRequired: foodType ? foodType.proofRequired === true : false,
         claimRules: policyConfig.claimRules,
         receiptRules: policyConfig.receiptRules,
         fullPaymentRules: policyConfig.fullPaymentRules,
         deadlineRules: policyConfig.deadlineRules,
+        approvalLimitRules: policyConfig.approvalLimitRules,
+        payLimitConfig: policyConfig.payLimitConfig,
+        cfoApprovalConfig: policyConfig.cfoApprovalConfig,
+        directAccountLimit,
         canSelectAnyEmployee: access.isStaff(req.user),
         today: rules.todayDateOnly().toISOString().slice(0, 10),
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /api/expense/travel-config?destinationCity=&cityClass=&employeeId=
+ * Active travel modes + subtypes with the requesting employee's Level Entitlement for each.
+ * Every active mode / subtype is returned (all employees may select them); `entitlement.status`
+ * only tells the form whether the amount will be allowed, capped or treated as excess.
+ */
+exports.getTravelConfig = async (req, res) => {
+  try {
+    const companyId = await companyFor(req);
+    if (!companyId) return fail(res, 400, 'Company context missing.');
+    await ensureExpenseMasters(companyId);
+    const date = rules.parseDateOnly(req.query.date) || rules.todayDateOnly();
+    const policy = await rules.getPolicyForDate(companyId, date);
+    const modes = await TravelMode.find({ companyId }).lean();
+
+    // Employees see their own entitlement; HR / Admin may look up another employee.
+    let empId = String(access.userId(req));
+    if (req.query.employeeId && access.isStaff(req.user) && mongoose.Types.ObjectId.isValid(req.query.employeeId)) empId = String(req.query.employeeId);
+    const [emp] = await rules.loadEmployees(companyId, [empId]);
+    const cityClass = req.query.destinationCity
+      ? await resolveCityClass(companyId, req.query.destinationCity)
+      : (['A+', 'A', 'B', 'C'].includes(String(req.query.cityClass || '').toUpperCase()) ? String(req.query.cityClass).toUpperCase() : 'C');
+    const rows = policy ? await loadTravelEntitlements(companyId, policy._id) : [];
+    const levelNumber = emp ? getEmployeeLevelNumber(emp) : null;
+    const gradeCode = emp ? getEmployeeGradeCode(emp) : '';
+    const entFor = (m, s) => {
+      const e = travelPolicy.resolveTravelEntitlement(rows, { levelNumber, gradeCode, cityClass, modeId: m._id, modeCode: m.code, subtypeId: s ? s._id : null, subtypeCode: s ? s.code : null, requiresSubtype: Boolean(m.requiresSubtype || (m.subtypes && m.subtypes.length > 0)) });
+      const status = !e.configured ? 'NOT_CONFIGURED' : (!e.entitled ? 'NOT_ENTITLED' : (e.maxAmount === null || e.maxAmount === undefined ? 'ACTUALS' : 'LIMIT'));
+      return { status, maxAmount: e.entitled ? (e.maxAmount ?? null) : 0 };
+    };
+    const data = travelPolicy.serializeModes(modes, policy).map((m) => ({
+      ...m,
+      entitlement: m.requiresSubtype ? null : entFor(m, null),
+      subtypes: m.subtypes.map((s) => ({ ...s, entitlement: entFor(m, s) })),
+    }));
+    res.json({
+      success: true,
+      data: {
+        modes: data,
+        cityClass,
+        employee: emp ? { _id: emp._id, name: emp.name, levelNumber, levelName: emp.levelRef?.name || '', gradeCode } : null,
+        travelEntitlementsConfigured: rows.length > 0,
+        conveyanceRates: policy?.conveyanceRates || null,
+      },
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /api/expense/claims/food-entitlement
+ * { fromDate, toDate, employeeIds?, destinationCity, claimId? }
+ * Lodging nights, inclusive food days and the date-wise remaining food entitlement after
+ * every overlapping claim that reserves food allowance (normal Food + Lodging + Food).
+ */
+exports.foodEntitlement = async (req, res) => {
+  try {
+    const companyId = await companyFor(req);
+    if (!companyId) return fail(res, 400, 'Company context missing.');
+    const from = rules.parseDateOnly(req.body.fromDate);
+    const to = rules.parseDateOnly(req.body.toDate);
+    if (!from || !to) return fail(res, 422, 'Please select valid From and To dates.', [{ field: 'fromDate', code: 'INVALID_DATE', message: 'Please select valid From and To dates.' }]);
+    if (to < from) return fail(res, 422, 'To Date cannot be earlier than From Date.', [{ field: 'toDate', code: 'INVALID_DATE_RANGE', message: 'To Date cannot be earlier than From Date.' }]);
+    if (rules.daysBetween(from, to) > 366) return fail(res, 422, 'The date range is too long.');
+
+    const actor = String(access.userId(req));
+    const rawIds = Array.isArray(req.body.employeeIds) && req.body.employeeIds.length ? req.body.employeeIds : [actor];
+    const ids = [...new Set(rawIds.map((id) => (id === 'self' || id === 'me' ? actor : String(id && id._id ? id._id : id))))].filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (!access.isStaff(req.user) && !ids.includes(actor)) return fail(res, 403, 'You can only check food entitlement for claims that include yourself.');
+    const employees = await rules.loadEmployees(companyId, ids);
+    if (!employees.length) return fail(res, 422, 'No valid employees selected.');
+
+    await ensureExpenseMasters(companyId);
+    const policy = await rules.getPolicyForDate(companyId, from);
+    if (!policy) return fail(res, 422, 'No active expense policy is configured.');
+    const destinationClass = await resolveCityClass(companyId, req.body.destinationCity || '');
+    const excludeClaimId = mongoose.Types.ObjectId.isValid(req.body.claimId) ? req.body.claimId : null;
+    const daily = await buildFoodRows({ companyId, employees, dates: food.enumerateDates(from, to), destinationClass, basePolicy: policy, excludeClaimId });
+
+    const out = employees.map((emp) => {
+      const rows = (daily[String(emp._id)] || []).map((r) => ({
+        date: food.dateKey(r.date),
+        dailyLimit: r.dailyLimit,
+        priorConsumed: r.priorConsumed,
+        remaining: round2(Math.max(0, r.dailyLimit - r.priorConsumed)),
+      }));
+      const sum = (k) => round2(rows.reduce((s, r) => s + r[k], 0));
+      return { employeeId: emp._id, name: emp.name, dates: rows, entitlement: sum('dailyLimit'), priorConsumed: sum('priorConsumed'), remaining: sum('remaining') };
+    });
+    const total = (k) => round2(out.reduce((s, e) => s + e[k], 0));
+    res.json({
+      success: true,
+      data: {
+        fromDate: food.dateKey(from),
+        toDate: food.dateKey(to),
+        lodgingNights: rules.nightsBetween(from, to),
+        foodDays: rules.daysBetween(from, to),
+        destinationClass,
+        employees: out,
+        entitlement: total('entitlement'),
+        priorConsumed: total('priorConsumed'),
+        remaining: total('remaining'),
+      },
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -635,7 +1078,7 @@ exports.previewClaim = async (req, res) => {
       : (d.employeeClaims?.[0]?.items?.[0]?.policyLimit && d.employeeClaims[0].items[0].policyLimit > 0
           ? d.employeeClaims[0].items[0].policyLimit
           : stdAllowed);
-    const days = d.numberOfDays || d.numberOfNights || 1;
+    const days = input.claimMode === 'LODGING' ? (d.numberOfNights || 1) : 1;
     const perDayLimit = d.perDayLimit ?? (d.employeeClaims?.[0]?.items?.[0]?.perDayLimit || (days > 0 ? round2(polLimit / days) : polLimit));
 
     let standardExplanation = d.plainExplanation || d.employeeClaims?.[0]?.items?.[0]?.plainExplanation || null;
@@ -672,8 +1115,23 @@ exports.previewClaim = async (req, res) => {
         fullPaymentRequested: isFull,
         fullPaymentAmount: isFull ? (d.grandRequested || input.requestedAmount || 0) : 0,
         fullPaymentExplanation,
-        numberOfDays: d.numberOfDays || d.numberOfNights || (input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1),
-        numberOfNights: d.numberOfDays || d.numberOfNights || (input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1),
+        numberOfDays: d.numberOfDays || (input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1),
+        numberOfNights: d.numberOfNights ?? (input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.nightsBetween(input.fromDate, input.toDate) : 1),
+        // Lodging form: nights for lodging, inclusive days for food (same date range)
+        lodgingNights: d.lodgingNights ?? null,
+        foodDays: d.foodDays ?? null,
+        includeFood: !!d.includeFood,
+        foodSummary: d.foodSummary || null,
+        lodgingSummary: d.lodgingSummary || null,
+        foodEntries: d.foodEntries || [],
+        entries: (d.entries || []).map((e) => ({
+          expenseType: e.expenseType,
+          requestedAmount: e.requestedAmount,
+          allowedAmount: e.allowedAmount,
+          excessAmount: e.excessAmount,
+          distanceKm: e.distanceKm,
+          travel: e.travel || null,
+        })),
         claimEligibleUntil: d.claimEligibleUntil || null,
         destinationClass: d.trip?.destinationClass || null,
         outstation: d.outstation || null,
@@ -690,6 +1148,7 @@ exports.previewClaim = async (req, res) => {
             expenseType: it.expenseType,
             expenseTypeName: it.expenseTypeName,
             otherSubType: it.otherSubType || '',
+            materialName: it.materialName || '',
             barcodeNumber: it.barcodeNumber || '',
             quantity: it.quantity || 1,
             description: it.description || '',
@@ -716,13 +1175,27 @@ exports.previewClaim = async (req, res) => {
             limitText: it.limitText,
             ruleCode: it.ruleCode,
             formula: it.formula,
+            // Travel mode / subtype + entitlement outcome
+            travelModeId: it.travelModeId || null,
+            travelModeName: it.travelModeName || '',
+            travelSubtypeId: it.travelSubtypeId || null,
+            travelSubtypeName: it.travelSubtypeName || '',
+            travelWorkflow: it.travelWorkflow || '',
+            startKm: it.startKm ?? null,
+            endKm: it.endKm ?? null,
+            ratePerKm: it.ratePerKm || 0,
+            entitlementStatus: it.entitlementStatus || '',
+            excessReason: it.excessReason || '',
+            // Food: date-wise use of the shared entitlement
+            foodDays: it.foodDays || 0,
+            dailyAllocations: it.dailyAllocations || [],
           })),
         })),
       },
     });
   } catch (err) {
     console.error('[previewClaim error]:', err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -741,37 +1214,51 @@ exports.createClaim = async (req, res) => {
       if (existing) return res.status(200).json({ success: true, duplicate: true, data: withComputed(req, existing) });
     }
 
-    const result = await evaluateClaim(req, input, { submit, companyId });
-    if (result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
-
-    const claim = new ExpenseClaim({
-      companyId,
-      company: companyId,
-      submittedBy: req.user._id,
-      submittedByName: req.user.name || '',
-      clientRequestId: input.clientRequestId || undefined,
-      status: 'DRAFT',
-      paymentStatus: 'PENDING',
-      timeline: [{
-        action: 'CREATED',
-        description: `${input.claimMode === 'LODGING' ? 'Lodging' : 'Expense'} claim created by ${req.user.name || 'employee'}.`,
-        user: req.user._id,
-        timestamp: new Date(),
-      }],
-    });
-    applyData(claim, result.data);
-    let submission = null;
-    if (submit) submission = await finalizeSubmission(req, claim, result);
-
-    try {
-      await claim.save();
-    } catch (err) {
-      if (err && err.code === 11000 && input.clientRequestId) {
-        const existing = await ExpenseClaim.findOne({ companyId, submittedBy: req.user._id, clientRequestId: input.clientRequestId });
-        if (existing) return res.status(200).json({ success: true, duplicate: true, data: withComputed(req, existing) });
+    // Evaluate + save inside the per-employee food lock: the shared food entitlement is
+    // re-read and recalculated immediately before the claim is committed.
+    const outcome = await withFoodLock(req, companyId, input, submit, async () => {
+      // Re-check idempotency inside the lock (a concurrent retry may have just committed)
+      if (input.clientRequestId) {
+        const dup = await ExpenseClaim.findOne({ companyId, submittedBy: req.user._id, clientRequestId: input.clientRequestId });
+        if (dup) return { duplicate: dup };
       }
-      throw err;
-    }
+      const result = await evaluateClaim(req, input, { submit, companyId });
+      if (result.errors.length) return { result };
+
+      const claim = new ExpenseClaim({
+        companyId,
+        company: companyId,
+        submittedBy: req.user._id,
+        submittedByName: req.user.name || '',
+        clientRequestId: input.clientRequestId || undefined,
+        status: 'DRAFT',
+        paymentStatus: 'PENDING',
+        timeline: [{
+          action: 'CREATED',
+          description: `${input.claimMode === 'LODGING' ? 'Lodging' : 'Expense'} claim created by ${req.user.name || 'employee'}.`,
+          user: req.user._id,
+          timestamp: new Date(),
+        }],
+      });
+      applyData(claim, result.data);
+      let submission = null;
+      if (submit) submission = await finalizeSubmission(req, claim, result);
+
+      try {
+        await saveWithWallet(req, claim);
+      } catch (err) {
+        if (err && err.code === 11000 && input.clientRequestId) {
+          const existing = await ExpenseClaim.findOne({ companyId, submittedBy: req.user._id, clientRequestId: input.clientRequestId });
+          if (existing) return { duplicate: existing };
+        }
+        throw err;
+      }
+      return { result, claim, submission };
+    });
+
+    if (outcome.duplicate) return res.status(200).json({ success: true, duplicate: true, data: withComputed(req, outcome.duplicate) });
+    const { result, claim, submission } = outcome;
+    if (result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
 
     await access.audit({
       req,
@@ -785,7 +1272,7 @@ exports.createClaim = async (req, res) => {
 
     res.status(201).json({ success: true, data: withComputed(req, claim), warnings: result.warnings || [] });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -807,7 +1294,12 @@ exports.updateClaim = async (req, res) => {
     const claim = await loadOwnEditableClaim(req, res);
     if (!claim) return;
     if (!access.claimPermissions(req, claim).canEdit) {
-      return fail(res, access.isLocked(claim) ? 423 : 409, 'This claim is already Paid or locked and can no longer be edited.');
+      const msg = access.isLocked(claim)
+        ? 'This claim is already Paid or locked and can no longer be edited.'
+        : access.isFirstApprovalApproved(claim)
+          ? 'This claim has already been approved by the 1st approver and can no longer be edited.'
+          : 'This claim can no longer be edited.';
+      return fail(res, access.isLocked(claim) ? 423 : 409, msg);
     }
 
     const companyId = String(claim.companyId);
@@ -815,27 +1307,42 @@ exports.updateClaim = async (req, res) => {
     const wasAlreadySubmitted = access.businessStatus(claim) === 'PENDING';
     const wasRejected = access.businessStatus(claim) === 'REJECTED';
     const submit = req.body.submit === true || req.body.submit === 'true' || wasAlreadySubmitted;
-    const result = await evaluateClaim(req, input, { submit, companyId, excludeClaimId: claim._id });
-    if (result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
+    const outcome = await withFoodLock(req, companyId, input, submit, async () => {
+      const result = await evaluateClaim(req, input, { submit, companyId, excludeClaimId: claim._id });
+      if (result.errors.length) return { result };
 
-    const before = access.snapshot(claim);
-    const loadedStatus = claim.status;
-    applyData(claim, result.data);
+      const before = access.snapshot(claim);
+      const loadedStatus = claim.status;
+      applyData(claim, result.data);
 
-    let submission = null;
-    if (submit) {
-      submission = await finalizeSubmission(req, claim, result);
-      if (wasRejected) {
-        claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
-        claim.accountsRemarks = '';
-        claim.paymentStatus = 'PENDING';
-        claim.timeline.push({
-          action: 'RESUBMITTED',
-          description: `Claim resubmitted by ${req.user.name || 'employee'} after rejection. Pending payment decision.`,
-          user: req.user._id,
-          timestamp: new Date(),
-        });
+      let submission = null;
+      if (submit) {
+        submission = await finalizeSubmission(req, claim, result);
+        if (wasRejected) {
+          claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
+          claim.accountsRemarks = '';
+          claim.paymentStatus = 'PENDING';
+          claim.timeline.push({
+            action: 'RESUBMITTED',
+            description: `Claim resubmitted by ${req.user.name || 'employee'} after rejection. Pending payment decision.`,
+            user: req.user._id,
+            timestamp: new Date(),
+          });
+        } else {
+          claim.timeline.push({
+            action: 'UPDATED',
+            description: `Claim updated by ${req.user.name || 'employee'}.`,
+            user: req.user._id,
+            timestamp: new Date(),
+          });
+        }
       } else {
+        claim.status = 'DRAFT';
+        claim.paymentStatus = 'PENDING';
+        if (wasRejected) {
+          claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
+          claim.accountsRemarks = '';
+        }
         claim.timeline.push({
           action: 'UPDATED',
           description: `Claim updated by ${req.user.name || 'employee'}.`,
@@ -843,28 +1350,19 @@ exports.updateClaim = async (req, res) => {
           timestamp: new Date(),
         });
       }
-    } else {
-      claim.status = 'DRAFT';
-      claim.paymentStatus = 'PENDING';
-      if (wasRejected) {
-        claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
-        claim.accountsRemarks = '';
+      // Only save if nobody marked it Paid / Rejected meanwhile.
+      claim.$where = { status: loadedStatus };
+      try {
+        await saveWithWallet(req, claim);
+      } catch (err) {
+        if (err.name === 'DocumentNotFoundError') return { conflict: true };
+        throw err;
       }
-      claim.timeline.push({
-        action: 'UPDATED',
-        description: `Claim updated by ${req.user.name || 'employee'}.`,
-        user: req.user._id,
-        timestamp: new Date(),
-      });
-    }
-    // Only save if nobody marked it Paid / Rejected meanwhile.
-    claim.$where = { status: loadedStatus };
-    try {
-      await claim.save();
-    } catch (err) {
-      if (err.name === 'DocumentNotFoundError') return fail(res, 409, 'This claim was just processed by Accounts and can no longer be edited.');
-      throw err;
-    }
+      return { result, before, submission };
+    });
+    if (outcome.conflict) return fail(res, 409, 'This claim was just processed by Accounts and can no longer be edited.');
+    const { result, before, submission } = outcome;
+    if (result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
 
     await access.audit({
       req,
@@ -878,7 +1376,7 @@ exports.updateClaim = async (req, res) => {
 
     res.json({ success: true, data: withComputed(req, claim), warnings: result.warnings || [] });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -896,39 +1394,44 @@ exports.submitClaim = async (req, res) => {
 
     const wasRejected = bs === 'REJECTED';
     const isLegacyClaim = !claim.claimDate && !claim.fromDate;
-    let result;
     if (isLegacyClaim) {
       // Claims created by the old multi-step form keep their stored calculation.
       const itemCount = (claim.employeeClaims || []).reduce((s, ec) => s + (ec.items?.length || 0), 0);
       if (!itemCount || !(claim.grandRequested > 0)) {
         return fail(res, 422, 'Claim must contain at least one expense with an amount greater than zero.');
       }
-      result = { deadlineOverridden: false };
-    } else {
-      const input = rules.claimToInput(claim);
-      result = await evaluateClaim(req, input, { submit: true, companyId: String(claim.companyId), excludeClaimId: claim._id });
-      if (result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
-      applyData(claim, result.data);
     }
-    const loadedStatus = claim.status;
-    const submission = await finalizeSubmission(req, claim, result);
-    if (wasRejected) {
-      claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
-      claim.accountsRemarks = '';
-      claim.paymentStatus = 'PENDING';
-      claim.timeline.push({
-        action: 'RESUBMITTED',
-        description: `Claim resubmitted by ${req.user.name || 'employee'}. Pending payment decision.`,
-        user: req.user._id,
-        timestamp: new Date(),
-      });
-    }
-    claim.$where = { status: loadedStatus };
-    await claim.save();
+    const input = isLegacyClaim ? null : rules.claimToInput(claim);
+    const outcome = await withFoodLock(req, String(claim.companyId), input || {}, !isLegacyClaim, async () => {
+      let result = { deadlineOverridden: false, warnings: [] };
+      if (!isLegacyClaim) {
+        result = await evaluateClaim(req, input, { submit: true, companyId: String(claim.companyId), excludeClaimId: claim._id });
+        if (result.errors.length) return { result };
+        applyData(claim, result.data);
+      }
+      const loadedStatus = claim.status;
+      const submission = await finalizeSubmission(req, claim, result);
+      if (wasRejected) {
+        claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
+        claim.accountsRemarks = '';
+        claim.paymentStatus = 'PENDING';
+        claim.timeline.push({
+          action: 'RESUBMITTED',
+          description: `Claim resubmitted by ${req.user.name || 'employee'}. Pending payment decision.`,
+          user: req.user._id,
+          timestamp: new Date(),
+        });
+      }
+      claim.$where = { status: loadedStatus };
+      await saveWithWallet(req, claim);
+      return { result, submission };
+    });
+    const { result, submission } = outcome;
+    if (result.errors && result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
     await auditSubmission(req, claim, submission);
     res.json({ success: true, data: withComputed(req, claim), warnings: result.warnings || [] });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
@@ -947,12 +1450,20 @@ exports.deleteClaim = async (req, res) => {
     }
     const info = { _id: claim._id, claimNumber: claim.claimNumber, companyId: claim.companyId };
     const before = access.snapshot(claim);
-    await claim.deleteOne();
+    if ((claim.pettyCash?.debitedPaise || 0) > 0) {
+      // Reverse any remaining petty cash debit together with the delete.
+      await pettyCash.runAtomic(async (session) => {
+        await pettyCash.syncClaimDebit(claim, { session, req, deleted: true });
+        await ExpenseClaim.deleteOne({ _id: claim._id }, { session: session || undefined });
+      });
+    } else {
+      await claim.deleteOne();
+    }
     await access.audit({ req, action: 'CLAIM_DELETED', claim: info, description: `Claim ${info.claimNumber} deleted by ${req.user.name || req.user._id}.`, before });
     res.json({ success: true, message: 'Claim deleted successfully.' });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 };
 
-exports._internal = { evaluateClaim, buildFilters, statusCondition, STATUS_GROUPS };
+exports._internal = { evaluateClaim, buildFilters, statusCondition, STATUS_GROUPS, buildFoodRows, withFoodLock };

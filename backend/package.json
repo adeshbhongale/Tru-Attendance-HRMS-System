@@ -25,6 +25,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^8.5.0",
@@ -41,8 +42,11 @@
     "socket.io-client": "^4.8.3",
     "xlsx": "^0.18.5",
     "xml2js": "^0.6.2",
-    "exceljs": "^4.4.0",
-    "zod": "^3.25.34",
-    "xss-clean": "^0.1.4"
+    "xss-clean": "^0.1.4",
+    "zod": "^3.25.34"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^10.4.3",
+    "supertest": "^7.3.1"
   }
 }

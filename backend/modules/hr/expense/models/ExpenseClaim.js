@@ -35,7 +35,7 @@ const employeeClaimSchema = new mongoose.Schema({
 const approvalEntrySchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   role: String,
-  action: { type: String, enum: ['approved', 'rejected', 'returned', 'disbursed', 'paid', 'reopened'], default: 'approved' },
+  action: { type: String, enum: ['approved', 'accounts_approved', 'rejected', 'returned', 'disbursed', 'paid', 'reopened'], default: 'approved' },
   timestamp: { type: Date, default: Date.now },
   remarks: { type: String, default: '' },
 }, { _id: false });
@@ -79,6 +79,27 @@ const managerApprovalSchema = new mongoose.Schema({
   status: { type: String, enum: ['NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED'], default: 'NOT_REQUIRED' },
   requestedAt: { type: Date, default: null },
   decidedAt: { type: Date, default: null },
+  remarks: { type: String, default: '' },
+}, { _id: false });
+
+// 2nd approval (Full Payment / Stock Purchase): after the Reporting Manager approves,
+// the company's CFO / Finance Head approves before the claim reaches Accounts.
+const financeApprovalSchema = new mongoose.Schema({
+  approver: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  approverName: { type: String, default: '' },
+  status: { type: String, enum: ['NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED'], default: 'NOT_REQUIRED' },
+  requestedAt: { type: Date, default: null },
+  decidedAt: { type: Date, default: null },
+  remarks: { type: String, default: '' },
+}, { _id: false });
+
+// Step 1 of Accounts Admin workflow: Accounts Admin approves or rejects the claim
+// before Step 2 (marking Paid with payment date).
+const accountsApprovalSchema = new mongoose.Schema({
+  status: { type: String, enum: ['NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
+  approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  approvedByName: { type: String, default: '' },
+  approvedAt: { type: Date, default: null },
   remarks: { type: String, default: '' },
 }, { _id: false });
 
@@ -159,11 +180,26 @@ const expenseClaimSchema = new mongoose.Schema(
     fromDate: { type: Date, default: null },
     toDate: { type: Date, default: null },
     numberOfNights: { type: Number, default: 0 },
+    // calcVersion 2 = lodging by nights + inclusive food days + shared food entitlement +
+    // travel Level Entitlements. Older claims keep their stored figures (never recalculated).
+    calcVersion: { type: Number, default: 1 },
+    lodgingNights: { type: Number, default: null },
+    foodDays: { type: Number, default: null },
+    // LODGING only: optional Food section using the same date range
+    includeFood: { type: Boolean, default: false },
+    foodEntries: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    // { requested, allowed, excess, entitlement, priorConsumed, remainingBefore, perDate[] }
+    foodSummary: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    // { requested, allowed, excess, policyLimit, nights }
+    lodgingSummary: { type: mongoose.Schema.Types.Mixed, default: undefined },
 
     receipts: [attachmentSchema],
     serviceReports: [attachmentSchema],
+    paymentProofs: [attachmentSchema],
     fullPayment: { type: fullPaymentSchema, default: () => ({}) },
     managerApproval: { type: managerApprovalSchema, default: () => ({}) },
+    financeApproval: { type: financeApprovalSchema, default: () => ({}) },
+    accountsApproval: { type: accountsApprovalSchema, default: () => ({}) },
 
     // Server-computed submission window + outstation evidence snapshot
     claimEligibleUntil: { type: Date, default: null },
@@ -242,6 +278,8 @@ const expenseClaimSchema = new mongoose.Schema(
       recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
       recordedByName: { type: String, default: '' },
       remarks: { type: String, default: '' },
+      paymentProof: { type: attachmentSchema, default: null },
+      paymentProofs: [attachmentSchema],
     },
 
     // Rejection decision
@@ -250,6 +288,17 @@ const expenseClaimSchema = new mongoose.Schema(
       rejectedAt: { type: Date, default: null },
       rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
       rejectedByName: { type: String, default: '' },
+    },
+
+    // Petty cash wallet link (submitter's wallet). debitedPaise = net amount currently
+    // debited for this claim; creditedPaise = payment credit already posted. Every wallet
+    // change for a claim is computed as a delta against these, so nothing is applied twice.
+    pettyCash: {
+      walletId: { type: mongoose.Schema.Types.ObjectId, ref: 'PettyCashWallet', default: null },
+      debitedPaise: { type: Number, default: 0 },
+      creditedPaise: { type: Number, default: 0 },
+      seq: { type: Number, default: 0 },
+      lastSyncedAt: { type: Date, default: null },
     },
 
     // Set by scripts/migrate_expense_paid_rejected.js: original status before migration
@@ -273,9 +322,12 @@ expenseClaimSchema.index({ companyId: 1, status: 1 });
 expenseClaimSchema.index({ companyId: 1, approvalStatus: 1, paymentStatus: 1 });
 expenseClaimSchema.index({ submittedBy: 1, createdAt: -1 });
 expenseClaimSchema.index({ 'managerApproval.approver': 1, status: 1 });
+expenseClaimSchema.index({ 'financeApproval.approver': 1, status: 1 });
 expenseClaimSchema.index({ companyId: 1, submittedAt: -1 });
 expenseClaimSchema.index({ companyId: 1, disbursedAt: -1 });
 expenseClaimSchema.index({ companyId: 1, 'employeeClaims.employee.employeeId': 1, claimType: 1, claimDate: 1 });
+// Shared food entitlement look-ups (lodging + food ranges overlapping a date window)
+expenseClaimSchema.index({ companyId: 1, 'employeeClaims.employee.employeeId': 1, claimMode: 1, fromDate: 1, toDate: 1 });
 expenseClaimSchema.index(
   { companyId: 1, submittedBy: 1, clientRequestId: 1 },
   { unique: true, partialFilterExpression: { clientRequestId: { $type: 'string' } } }

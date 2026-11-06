@@ -199,6 +199,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       const geofenceCheck = geofenceService.checkPointGeofence(rawLat, rawLng, geofenceList);
       return {
         ...p,
+        location: p.location?.coordinates ? p.location : { type: 'Point', coordinates: [rawLng, rawLat] },
         rawLatitude: rawLat,
         rawLongitude: rawLng,
         isInsideGeofence: geofenceCheck.isInside,
@@ -710,15 +711,17 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
     }
 
     // 9. Background Geocoding (throttled)
+    const lastGeocodedCoords = liveStatus.lastGeocodedLocation?.coordinates || liveStatus.lastLocation?.coordinates;
     if (targetLivePoint) {
-      const currentCoords = targetLivePoint.location.coordinates;
+      const currentLat = targetLivePoint.snappedLatitude ?? targetLivePoint.rawLatitude ?? targetLivePoint.latitude ?? targetLivePoint.location?.coordinates?.[1];
+      const currentLng = targetLivePoint.snappedLongitude ?? targetLivePoint.rawLongitude ?? targetLivePoint.longitude ?? targetLivePoint.location?.coordinates?.[0];
+      const currentCoords = targetLivePoint.location?.coordinates || (currentLng != null && currentLat != null ? [currentLng, currentLat] : null);
       let shouldGeocode = false;
 
-      if (!liveStatus.lastAddress) {
-        shouldGeocode = true;
-      } else {
-        const lastGeocodedCoords = liveStatus.lastGeocodedLocation?.coordinates || liveStatus.lastLocation?.coordinates;
-        if (lastGeocodedCoords) {
+      if (currentCoords && currentCoords[0] != null && currentCoords[1] != null) {
+        if (!liveStatus.lastAddress) {
+          shouldGeocode = true;
+        } else if (lastGeocodedCoords && lastGeocodedCoords[0] != null && lastGeocodedCoords[1] != null) {
           const distSinceLastGeocode = geoService.calculateDistance(
             lastGeocodedCoords[1], lastGeocodedCoords[0],
             currentCoords[1], currentCoords[0]
@@ -733,7 +736,8 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       }
 
       if (shouldGeocode) {
-        reverseGeocodeAsync(resolvedUserId, uniqueRawPoints, targetLivePoint, socketIo, resolvedCompanyId).catch(err => {
+        const geocodePoints = uniqueRawPoints.length > 0 ? uniqueRawPoints : [targetLivePoint];
+        reverseGeocodeAsync(resolvedUserId, geocodePoints, targetLivePoint, socketIo, resolvedCompanyId).catch(err => {
           console.error('[EnterpriseTracking] Background geocoding invocation failed:', err);
         });
       }
@@ -748,8 +752,8 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
     // 10. Real-time broadcast — reduced payload (#25), room-targeted (#21)
     if (socketIo) {
       const broadcastPoint = targetLivePoint || lastPoint;
-      const snappedLat = broadcastPoint?.snappedLatitude || broadcastPoint?.location?.coordinates[1];
-      const snappedLng = broadcastPoint?.snappedLongitude || broadcastPoint?.location?.coordinates[0];
+      const snappedLat = broadcastPoint?.snappedLatitude ?? broadcastPoint?.rawLatitude ?? broadcastPoint?.latitude ?? broadcastPoint?.location?.coordinates?.[1];
+      const snappedLng = broadcastPoint?.snappedLongitude ?? broadcastPoint?.rawLongitude ?? broadcastPoint?.longitude ?? broadcastPoint?.location?.coordinates?.[0];
 
       let batchRoadGeometry = [];
       try {
@@ -759,8 +763,8 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
           pointsForRecon.push({ latitude: lastGeocodedCoords[1], longitude: lastGeocodedCoords[0] });
         }
         pointsForRecon.push(...uniqueRawPoints.filter(p => !p.isSuspicious && p.status !== 'suspicious').map(p => ({
-          latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
-          longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0]
+          latitude: p.snappedLatitude || p.rawLatitude || p.latitude || p.location?.coordinates?.[1],
+          longitude: p.snappedLongitude || p.rawLongitude || p.longitude || p.location?.coordinates?.[0]
         })));
         if (pointsForRecon.length >= 2) {
           const recon = await routeReconstructService.reconstructRoute(pointsForRecon);
@@ -776,8 +780,8 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         userId: resolvedUserId ? resolvedUserId.toString() : userId,
         latitude: snappedLat,
         longitude: snappedLng,
-        rawLatitude: broadcastPoint?.rawLatitude || broadcastPoint?.location?.coordinates[1],
-        rawLongitude: broadcastPoint?.rawLongitude || broadcastPoint?.location?.coordinates[0],
+        rawLatitude: broadcastPoint?.rawLatitude ?? broadcastPoint?.latitude ?? broadcastPoint?.location?.coordinates?.[1],
+        rawLongitude: broadcastPoint?.rawLongitude ?? broadcastPoint?.longitude ?? broadcastPoint?.location?.coordinates?.[0],
         speed: broadcastPoint?.speed,
         distance: liveStatus.totalDistanceToday,
         status: liveStatus.movementState,
@@ -795,14 +799,14 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         outstationDistanceKm: liveStatus?.outstationDistanceKm || 0,
         isCrossDayTransition,
         roadGeometry: batchRoadGeometry.length > 0 ? batchRoadGeometry : uniqueRawPoints.map(p => ({
-          latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
-          longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0]
+          latitude: p.snappedLatitude || p.rawLatitude || p.latitude || p.location?.coordinates?.[1],
+          longitude: p.snappedLongitude || p.rawLongitude || p.longitude || p.location?.coordinates?.[0]
         })),
         path: uniqueRawPoints.map(p => ({
-          lat: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
-          lng: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0],
-          rawLat: p.rawLatitude || p.location.coordinates[1],
-          rawLng: p.rawLongitude || p.location.coordinates[0],
+          lat: p.snappedLatitude || p.rawLatitude || p.latitude || p.location?.coordinates?.[1],
+          lng: p.snappedLongitude || p.rawLongitude || p.longitude || p.location?.coordinates?.[0],
+          rawLat: p.rawLatitude || p.latitude || p.location?.coordinates?.[1],
+          rawLng: p.rawLongitude || p.longitude || p.location?.coordinates?.[0],
           snappedLat: p.status === 'suspicious' || p.isSuspicious ? null : (p.snappedLatitude || null),
           snappedLng: p.status === 'suspicious' || p.isSuspicious ? null : (p.snappedLongitude || null),
           status: p.status,
@@ -890,8 +894,8 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
       const p = pointsToProcess[i];
       const time = new Date(p.timestamp || p.processedTime);
       const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${time.getMinutes()}`;
-      const currentLat = p.snappedLatitude || p.rawLatitude || p.location.coordinates[1];
-      const currentLng = p.snappedLongitude || p.rawLongitude || p.location.coordinates[0];
+      const currentLat = p.snappedLatitude ?? p.rawLatitude ?? p.latitude ?? p.location?.coordinates?.[1];
+      const currentLng = p.snappedLongitude ?? p.rawLongitude ?? p.longitude ?? p.location?.coordinates?.[0];
 
       const isLast = (p.timestamp && targetLastPoint && new Date(p.timestamp).getTime() === new Date(targetLastPoint.timestamp).getTime());
       
@@ -914,8 +918,8 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
 
     for (let i = 0; i < pointsToGeocode.length; i++) {
       const point = pointsToGeocode[i];
-      const lat = point.snappedLatitude || point.rawLatitude || point.location.coordinates[1];
-      const lng = point.snappedLongitude || point.rawLongitude || point.location.coordinates[0];
+      const lat = point.snappedLatitude ?? point.rawLatitude ?? point.latitude ?? point.location?.coordinates?.[1];
+      const lng = point.snappedLongitude ?? point.rawLongitude ?? point.longitude ?? point.location?.coordinates?.[0];
 
       if (i > 0) {
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -951,17 +955,17 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
           // CACHE: Update LiveStatus in RAM (was: LiveEmployeeStatus.updateOne → 1 query)
           await cache.liveStatus.update(userId, resolvedCompanyId, {
             lastAddress: address,
-            lastGeocodedLocation: point.location,
+            lastGeocodedLocation: point.location?.coordinates ? point.location : { type: 'Point', coordinates: [lng, lat] },
             lastGeocodeTime: new Date()
           });
 
           if (socketIo) {
             const updatePayload = {
               userId: userId ? userId.toString() : userId,
-              latitude: point.snappedLatitude || point.location.coordinates[1],
-              longitude: point.snappedLongitude || point.location.coordinates[0],
-              rawLatitude: point.rawLatitude || point.location.coordinates[1],
-              rawLongitude: point.rawLongitude || point.location.coordinates[0],
+              latitude: point.snappedLatitude ?? point.rawLatitude ?? point.latitude ?? point.location?.coordinates?.[1],
+              longitude: point.snappedLongitude ?? point.rawLongitude ?? point.longitude ?? point.location?.coordinates?.[0],
+              rawLatitude: point.rawLatitude ?? point.latitude ?? point.location?.coordinates?.[1],
+              rawLongitude: point.rawLongitude ?? point.longitude ?? point.location?.coordinates?.[0],
               speed: point.speed,
               address: address,
               timestamp: point.timestamp,

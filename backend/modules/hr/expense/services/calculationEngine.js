@@ -27,6 +27,8 @@ async function calculateItem({
   sameDateEntryIndex = 1,
   sameDateEntriesCount = 1,
   itemDate = '',
+  // Part of priorAllowedOnDate already consumed by OTHER claims (shared food entitlement)
+  priorOtherClaims = 0,
 }) {
   const expenseTypeCode = (item.expenseType || 'OTHER').toUpperCase();
   const requested = round2(item.requestedAmount ?? item.amount ?? 0);
@@ -86,14 +88,14 @@ async function calculateItem({
 
         if (sameDateEntriesCount > 1) {
           formula = `MIN(actual ₹${requested}, remaining entitlement ₹${remainingLimit})`;
-          breakdown.steps.push(`Friend/relative lodging: (₹${base}/day x ${days}d = ₹${totalBase}) x 50% = ₹${fullEligible} (${itemDate ? `Date: ${itemDate}, ` : ''}Entry ${sameDateEntryIndex} of ${sameDateEntriesCount})`);
+          breakdown.steps.push(`Friend/relative lodging: (₹${base}/night x ${days} nights = ₹${totalBase}) x 50% = ₹${fullEligible} (${itemDate ? `Date: ${itemDate}, ` : ''}Entry ${sameDateEntryIndex} of ${sameDateEntriesCount})`);
           breakdown.steps.push(`Previously allowed today: ₹${priorAllowedOnDate} -> Remaining budget: ₹${remainingLimit}`);
           breakdown.steps.push(`MIN(${requested}, ${remainingLimit}) = ${allowed}`);
         } else {
           formula = days > 1
-            ? `Friend/relative lodging: (₹${base}/day x ${days} days = ₹${totalBase}) x 50% = ₹${allowed}`
+            ? `Friend/relative lodging: (₹${base}/night x ${days} nights = ₹${totalBase}) x 50% = ₹${allowed}`
             : `Lodging entitlement x 50%`;
-          breakdown.steps.push(`Friend/relative accommodation: ₹${base}/day x ${days} day(s) = ₹${totalBase} x 50% = ₹${allowed}`);
+          breakdown.steps.push(`Friend/relative accommodation: ₹${base}/night x ${days} night(s) = ₹${totalBase} x 50% = ₹${allowed}`);
         }
         break;
       }
@@ -150,14 +152,14 @@ async function calculateItem({
 
         if (sameDateEntriesCount > 1) {
           formula = `MIN(actual ₹${requested}, remaining shared limit ₹${remainingSharedLimit})`;
-          breakdown.steps.push(`Shared lodging (${days}d, ${percent}%): Shared limit = ₹${sharedLimit} (${itemDate ? `Date: ${itemDate}, ` : ''}Entry ${sameDateEntryIndex} of ${sameDateEntriesCount})`);
+          breakdown.steps.push(`Shared lodging (${days} nights, ${percent}%): Shared limit = ₹${sharedLimit} (${itemDate ? `Date: ${itemDate}, ` : ''}Entry ${sameDateEntryIndex} of ${sameDateEntriesCount})`);
           breakdown.steps.push(`Previously allowed today: ₹${priorAllowedOnDate} -> Remaining shared budget: ₹${remainingSharedLimit}`);
           breakdown.steps.push(`MIN(${requested}, ${remainingSharedLimit}) = ${allowed}`);
         } else {
           formula = days > 1
-            ? `(Higher [₹${higherTotal}] + Lower [₹${lowerTotal}]) x ${percent}% = Limit ₹${sharedLimit} (${days} days) -> MIN(₹${requested}, ₹${sharedLimit}) = ₹${allowed}`
+            ? `(Higher [₹${higherTotal}] + Lower [₹${lowerTotal}]) x ${percent}% = Limit ₹${sharedLimit} (${days} nights) -> MIN(₹${requested}, ₹${sharedLimit}) = ₹${allowed}`
             : `(Higher [₹${higherTotal}] + Lower [₹${lowerTotal}]) x ${percent}% = Limit ₹${sharedLimit} -> MIN(₹${requested}, ₹${sharedLimit}) = ₹${allowed}`;
-          breakdown.steps.push(`Shared lodging (${days} days): Higher (₹${higherPerDay}/day x ${days}d = ₹${higherTotal}) + Lower (₹${lowerPerDay}/day x ${days}d = ₹${lowerTotal})`);
+          breakdown.steps.push(`Shared lodging (${days} nights): Higher (₹${higherPerDay}/night x ${days} nights = ₹${higherTotal}) + Lower (₹${lowerPerDay}/night x ${days} nights = ₹${lowerTotal})`);
           breakdown.steps.push(rule === 'HIGHER_ONLY'
             ? `Policy Rule: Higher Entitlement Only -> Shared limit = ₹${sharedLimit}`
             : `Policy Rule: (Higher + Lower) x ${percent}% -> Shared limit = ₹${sharedLimit}`
@@ -189,16 +191,16 @@ async function calculateItem({
 
       if (sameDateEntriesCount > 1) {
         formula = `MIN(actual ₹${requested}, remaining daily entitlement ₹${remainingDailyLimit})`;
-        breakdown.steps.push(`Daily Lodging Entitlement: ₹${perDayEnt}/day (${itemDate ? `Date: ${itemDate}, ` : ''}Entry ${sameDateEntryIndex} of ${sameDateEntriesCount})`);
+        breakdown.steps.push(`Daily Lodging Entitlement: ₹${perDayEnt}/night (${itemDate ? `Date: ${itemDate}, ` : ''}Entry ${sameDateEntryIndex} of ${sameDateEntriesCount})`);
         breakdown.steps.push(`Previously allowed today: ₹${priorAllowedOnDate} -> Remaining daily budget: ₹${remainingDailyLimit}`);
         breakdown.steps.push(`MIN(${requested}, ${remainingDailyLimit}) = ${allowed}`);
       } else {
         formula = days > 1
-          ? `MIN(actual ₹${requested}, entitlement ₹${perDayEnt}/day x ${days} days = ₹${totalEnt}) = ₹${allowed}`
+          ? `MIN(actual ₹${requested}, entitlement ₹${perDayEnt}/night x ${days} nights = ₹${totalEnt}) = ₹${allowed}`
           : 'MIN(actual, daily entitlement)';
         breakdown.steps.push(days > 1
-          ? `Lodging entitlement: ₹${perDayEnt}/day x ${days} day(s) = total entitlement ₹${totalEnt}`
-          : `Daily Lodging Entitlement: ₹${perDayEnt}/day`);
+          ? `Lodging entitlement: ₹${perDayEnt}/night x ${days} night(s) = total entitlement ₹${totalEnt}`
+          : `Daily Lodging Entitlement: ₹${perDayEnt}/night`);
         breakdown.steps.push(`MIN(${requested}, ${totalEnt}) = ${allowed}`);
       }
       break;
@@ -221,11 +223,13 @@ async function calculateItem({
           sameDateEntryIndex,
           sameDateEntriesCount,
           itemDate: itemDate || 'N/A',
+          priorOtherClaims,
         };
 
-        if (sameDateEntriesCount > 1) {
+        if (sameDateEntriesCount > 1 || priorOtherClaims > 0) {
           formula = `MIN(actual ₹${requested}, remaining daily entitlement ₹${remainingDailyLimit})`;
           breakdown.steps.push(`Daily Food Entitlement: ₹${baseEnt}/day (${itemDate ? `Date: ${itemDate}, ` : ''}Entry ${sameDateEntryIndex} of ${sameDateEntriesCount})`);
+          if (priorOtherClaims > 0) breakdown.steps.push(`Already claimed for this date in other claims: ₹${priorOtherClaims}`);
           breakdown.steps.push(`Previously allowed today: ₹${priorAllowedOnDate} -> Remaining daily budget: ₹${remainingDailyLimit}`);
           breakdown.steps.push(`MIN(${requested}, ${remainingDailyLimit}) = ${allowed}`);
         } else {
@@ -276,15 +280,28 @@ async function calculateItem({
       break;
     }
 
+    case 'STOCK_PURCHASE': {
+      allowed = requested;
+      ruleCode = 'STOCK_PURCHASE_FULLY_ALLOWED';
+      formula = 'Stock Purchase (Fully Allowed)';
+      breakdown.rule = ruleCode;
+      breakdown.sourceValues = {
+        requestedAmount: requested,
+        materialName: item.materialName || '',
+        barcodeNumber: item.barcodeNumber || '',
+        quantity: item.quantity || '',
+      };
+      breakdown.steps.push(`Stock purchase expense has no combined limit -> all payment of ₹${requested} is allowed`);
+      break;
+    }
+
     case 'OTHER': {
-      // Other expense (both sub-types PURCHASE and NORMAL): no combined limit values, directly show all payment is allowed
       allowed = requested;
       ruleCode = 'OTHER_FULLY_ALLOWED';
-      const subType = String(item.otherSubType || '').toUpperCase();
-      formula = subType === 'PURCHASE' ? 'Purchase (Fully Allowed)' : 'Actual amount (Fully Allowed)';
+      formula = 'Actual amount (Fully Allowed)';
       breakdown.rule = ruleCode;
-      breakdown.sourceValues = { requestedAmount: requested, otherSubType: subType };
-      breakdown.steps.push(`Other expense (${subType || 'NORMAL'}) has no combined limit -> all payment of ₹${requested} is allowed`);
+      breakdown.sourceValues = { requestedAmount: requested, otherSubType: 'NORMAL' };
+      breakdown.steps.push(`Other official expense has no combined limit -> all payment of ₹${requested} is allowed`);
       break;
     }
 
@@ -312,7 +329,7 @@ async function calculateItem({
     const isShared = item.sharedWith || (sharedLodgingHigherEntitlement !== null && sharedLodgingLowerEntitlement !== null);
     const limitVal = isShared ? (breakdown.sourceValues?.sharedLimit || allowed) : (baseEntitlement ? round2(baseEntitlement.amount * days) : allowed);
     policyLimit = limitVal;
-    limitText = days > 1 ? `₹${limitVal} (${days} days)` : `₹${limitVal}/day`;
+    limitText = days > 1 ? `₹${limitVal} (${days} nights)` : `₹${limitVal}/night`;
     if (sameDateEntriesCount > 1) {
       const totClaimed = totalClaimedOnDate || (priorClaimedOnDate + requested);
       if (excess > 0) {
@@ -333,6 +350,13 @@ async function calculateItem({
     limitText = baseEntitlement ? `₹${limitVal}/day` : `Actuals (No limit)`;
     if (!baseEntitlement) {
       plainExplanation = `Food expense of ₹${allowed} is fully allowed based on eligible actuals.`;
+    } else if (priorOtherClaims > 0) {
+      const remLimit = breakdown.sourceValues?.remainingDailyLimit ?? Math.max(0, round2(limitVal - priorAllowedOnDate));
+      const inClaim = round2(priorAllowedOnDate - priorOtherClaims);
+      const usedText = `₹${priorOtherClaims} of it is already claimed for this date in other claims${inClaim > 0 ? ` and ₹${inClaim} in the above entry` : ''}`;
+      plainExplanation = excess > 0
+        ? `Your daily food limit is ${limitText}; ${usedText}, so the remaining limit was ₹${remLimit}. Therefore, ₹${allowed} is allowed and ₹${excess} is excess beyond your daily limit.`
+        : `Your daily food limit is ${limitText}; ${usedText}, so the remaining limit was ₹${remLimit}, and ₹${allowed} is fully allowed within this remaining limit.`;
     } else if (sameDateEntriesCount > 1) {
       const remLimit = breakdown.sourceValues?.remainingDailyLimit ?? Math.max(0, round2(limitVal - priorAllowedOnDate));
       if (priorAllowedOnDate > 0) {
@@ -362,13 +386,14 @@ async function calculateItem({
     plainExplanation = (rate && distance > 0)
       ? `Local conveyance of ₹${requested} (${distance} km at ₹${rate}/km) is fully allowed.`
       : `Local conveyance expense of ₹${requested} is fully allowed.`;
-  } else if (expenseTypeCode === 'OTHER') {
-    const subType = String(item.otherSubType || '').toUpperCase();
+  } else if (expenseTypeCode === 'STOCK_PURCHASE') {
     policyLimit = requested;
     limitText = `Actuals (Fully Allowed)`;
-    plainExplanation = subType === 'PURCHASE'
-      ? `Purchase expense of ₹${requested} is fully allowed.`
-      : `Other official expense of ₹${requested} is fully allowed.`;
+    plainExplanation = `Stock purchase expense of ₹${requested} is fully allowed.`;
+  } else if (expenseTypeCode === 'OTHER') {
+    policyLimit = requested;
+    limitText = `Actuals (Fully Allowed)`;
+    plainExplanation = `Other official expense of ₹${requested} is fully allowed.`;
   } else {
     // TRAVEL
     policyLimit = requested;
@@ -403,154 +428,7 @@ async function calculateItem({
   };
 }
 
-/**
- * Calculate an array of expense items for a single employee with date-awareness.
- * Multiple items on the same date for daily-capped types (like FOOD) share the single daily budget.
- */
-async function calculateEmployeeItems({
-  items,
-  employeeLevelNumber,
-  employeeGradeCode,
-  entitlements,
-  cityClass,
-  policy,
-  defaultDays = 1,
-  isSharedLodgingClaim = false,
-  sharedHigherEnt = null,
-  sharedLowerEnt = null,
-  sharedLodgingHigherEntitlement = null,
-  sharedLodgingLowerEntitlement = null,
-}) {
-  const getDateKey = (it) => {
-    const raw = it.date || it.expenseDate || it.tripDate || '';
-    if (!raw) return 'NO_DATE';
-    try {
-      const d = new Date(raw);
-      if (isNaN(d.getTime())) return String(raw).slice(0, 10);
-      return d.toISOString().slice(0, 10);
-    } catch (_) {
-      return String(raw).slice(0, 10);
-    }
-  };
-
-  // Group items by date and expense type to count entries and sum totals
-  const dateTypeTotals = {};
-  for (const it of items || []) {
-    const dKey = getDateKey(it);
-    const tKey = (it.expenseType || 'OTHER').toUpperCase();
-    const compoundKey = `${dKey}___${tKey}`;
-    if (!dateTypeTotals[compoundKey]) {
-      dateTypeTotals[compoundKey] = { totalClaimed: 0, count: 0 };
-    }
-    dateTypeTotals[compoundKey].totalClaimed += round2(it.requestedAmount ?? it.amount ?? 0);
-    dateTypeTotals[compoundKey].count += 1;
-  }
-
-  // Running trackers per date + expenseType
-  const runningTrackers = {};
-
-  const calculatedItems = [];
-  for (const item of items || []) {
-    const isLodgingItem = (item.expenseType || '') === 'LODGING';
-    const itemDays = Math.max(1, Number(item.days || item.stayDays || item.nights || defaultDays));
-    const dKey = getDateKey(item);
-    const tKey = (item.expenseType || 'OTHER').toUpperCase();
-    const compoundKey = `${dKey}___${tKey}`;
-
-    if (!runningTrackers[compoundKey]) {
-      runningTrackers[compoundKey] = { priorAllowed: 0, priorClaimed: 0, index: 0 };
-    }
-    runningTrackers[compoundKey].index += 1;
-
-    const groupMeta = dateTypeTotals[compoundKey] || { totalClaimed: 0, count: 1 };
-    const currentTracker = runningTrackers[compoundKey];
-
-    const calc = await calculateItem({
-      item: {
-        ...item,
-        days: itemDays,
-        description: item.description || item.note || '',
-      },
-      employeeLevelNumber,
-      employeeGradeCode,
-      entitlements,
-      cityClass,
-      policy,
-      sharedLodgingHigherEntitlement: isLodgingItem && isSharedLodgingClaim
-        ? (sharedLodgingHigherEntitlement ?? sharedHigherEnt)
-        : null,
-      sharedLodgingLowerEntitlement: isLodgingItem && isSharedLodgingClaim
-        ? (sharedLodgingLowerEntitlement ?? sharedLowerEnt)
-        : null,
-      priorAllowedOnDate: currentTracker.priorAllowed,
-      priorClaimedOnDate: currentTracker.priorClaimed,
-      totalClaimedOnDate: groupMeta.totalClaimed,
-      sameDateEntryIndex: currentTracker.index,
-      sameDateEntriesCount: groupMeta.count,
-      itemDate: dKey !== 'NO_DATE' ? dKey : '',
-    });
-
-    currentTracker.priorAllowed = round2(currentTracker.priorAllowed + (calc.allowedAmount || 0));
-    currentTracker.priorClaimed = round2(currentTracker.priorClaimed + (calc.requestedAmount || 0));
-
-    calculatedItems.push({
-      ...item,
-      days: itemDays,
-      description: item.description || item.note || '',
-      ...calc,
-    });
-  }
-
-  return calculatedItems;
-}
-
-/**
- * Calculate an entire combined claim payload (multi-employee).
- * payload shape:
- * {
- *   trip: {...},
- *   employeeClaims: [ { employeeId, items: [...], sharedWithEmployeeId } ]
- * }
- */
-async function calculateClaim(payload, { policy, entitlements, employeesById, companyId }) {
-  const policyObj = policy || {};
-  const itemsResolved = payload.items;
-  const cityClass = payload.cityClass || (await resolveCityClass(companyId, payload.destination || '')) || 'C';
-
-  // For shared lodging, build a map of employee level numbers to entitlements
-  const levelEntitlementMap = {};
-  Object.values(employeesById || {}).forEach(emp => {
-    const ln = getEmployeeLevelNumber(emp);
-    if (ln === null) return;
-    const ent = findEntitlement(entitlements, ln, getEmployeeGradeCode(emp), cityClass, 'LODGING');
-    if (ent) levelEntitlementMap[ln] = ent.amount;
-  });
-
-  const calculatedItems = await calculateEmployeeItems({
-    items: itemsResolved,
-    employeeLevelNumber: payload.levelNumber,
-    employeeGradeCode: payload.gradeCode,
-    entitlements,
-    cityClass,
-    policy: policyObj,
-  });
-
-  const requestedTotal = round2(calculatedItems.reduce((s, i) => s + (i.requestedAmount || 0), 0));
-  const allowedTotal = round2(calculatedItems.reduce((s, i) => s + (i.allowedAmount || 0), 0));
-  const excessTotal = round2(calculatedItems.reduce((s, i) => s + (i.excessAmount || 0), 0));
-
-  return {
-    cityClass,
-    items: calculatedItems,
-    requestedTotal,
-    allowedTotal,
-    excessTotal,
-  };
-}
-
 module.exports = {
   calculateItem,
-  calculateEmployeeItems,
-  calculateClaim,
   round2,
 };

@@ -25,6 +25,7 @@ import EmployeeTrackRoute from './pages/EmployeeTrackRoute';
 import ExpenseDashboardPage from './pages/ExpenseDashboardPage';
 import ExpenseReportPage from './pages/ExpenseReportPage';
 import ExpenseManagement from './pages/ExpenseManagement';
+import PettyCashManagement from './pages/PettyCashManagement';
 import Holidays from './pages/Holidays';
 import LeaveDashboard from './pages/LeaveDashboard';
 import Leaves from './pages/Leaves';
@@ -246,6 +247,7 @@ const AppContent = () => {
             <Route path="/expenses-dashboard" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseDashboardPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/expense-reports" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseReportPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/expense-report" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseReportPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/petty-cash" element={isAuthenticated ? (canAccessExpenseDashboard ? <PettyCashManagement /> : <Navigate to="/" />) : <Navigate to="/login" />} />
 
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>

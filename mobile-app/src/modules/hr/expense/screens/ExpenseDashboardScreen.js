@@ -44,7 +44,17 @@ const getDisplayStatus = (status, claim) => {
     return { label: "Draft", color: "#64748b" };
   }
   if (s === "APPROVAL_PENDING") {
+    // Full Payment / Stock Purchase: Reporting Manager approved, waiting for the CFO / Finance Head
+    if (String(claim?.financeApproval?.status || "").toUpperCase() === "PENDING") {
+      return { label: "Awaiting 2nd Approval", color: "#b45309" };
+    }
     return { label: "Awaiting Approval", color: "#7c3aed" };
+  }
+  if (s === "ACCOUNTS_APPROVED" || payStatus === "AWAITING_DISBURSEMENT") {
+    return { label: "Approved • Payment Pending", color: "#2563eb" };
+  }
+  if (s === "SUBMITTED") {
+    return { label: "Pending", color: "#d97706" };
   }
   return { label: "Pending", color: "#d97706" };
 };
@@ -72,46 +82,96 @@ const formatDateTime = (dateStr) => {
   }
 };
 
-const getClaimTypeInfo = (claim) => {
-  const firstEntry = claim.entries?.[0] || claim.employeeClaims?.[0]?.items?.[0] || {};
-  const code = (
-    claim.claimType ||
-    claim.expenseType ||
-    firstEntry.expenseType ||
-    (claim.trip?.travelMode ? "TRAVEL" : "OTHER")
-  )?.toUpperCase();
+const CLAIM_TYPE_FILTERS = [
+  { code: "ALL", label: "All" },
+  { code: "COMBINE", label: "Combine" },
+  { code: "FOOD", label: "Food" },
+  { code: "TRAVEL", label: "Travel" },
+  { code: "CONVEYANCE", label: "Local Conveyance" },
+  { code: "LODGING", label: "Lodging" },
+  { code: "STOCK_PURCHASE", label: "Stock Purchase" },
+  { code: "OTHER", label: "Other Expense" },
+];
 
-  const isPurchase = code === "OTHER" && (firstEntry.otherSubType || claim.otherSubType || "").toUpperCase() === "PURCHASE";
+const getClaimTypeInfo = (claim) => {
+  if (!claim) return { code: "OTHER", name: "Expense Claim", label: "Expense" };
+  const rawEntries = Array.isArray(claim.entries) ? claim.entries : [];
+  const firstEcItems = Array.isArray(claim.employeeClaims?.[0]?.items) ? claim.employeeClaims[0].items : [];
+  const cMode = String(claim.claimMode || "").toUpperCase().trim();
+  const hasLodgingWithFood =
+    cMode === "LODGING" &&
+    Boolean(claim.includeFood || (Array.isArray(claim.foodEntries) && claim.foodEntries.length > 0));
+  const rawClaimType = String(claim.claimType || claim.expenseType || "").toUpperCase().trim();
+
+  if (
+    rawEntries.length > 1 ||
+    firstEcItems.length > 1 ||
+    hasLodgingWithFood ||
+    rawClaimType === "COMBINE" ||
+    rawClaimType === "COMBINED"
+  ) {
+    return { code: "COMBINE", name: "Combine Claim", label: "Combine" };
+  }
+
+  const firstEntry = rawEntries[0] || firstEcItems[0] || {};
+  const code = String(
+    firstEntry.expenseType ||
+    firstEntry.claimType ||
+    rawClaimType ||
+    (cMode === "LODGING" ? "LODGING" : (claim.trip?.travelMode ? "TRAVEL" : "OTHER"))
+  ).toUpperCase().trim();
+
+  const subType = String(firstEntry.otherSubType || firstEntry.subType || claim.otherSubType || "").toUpperCase().trim();
+  const isPurchase =
+    code === "STOCK_PURCHASE" ||
+    ((code === "OTHER" || code === "OTHER_EXPENSE") && (subType === "PURCHASE" || subType === "STOCK_PURCHASE"));
+
+  if (isPurchase) {
+    return { code: "STOCK_PURCHASE", name: "Stock Purchase Claim", label: "Stock Purchase" };
+  }
 
   switch (code) {
     case "LODGING":
+    case "LODGING_EXPENSE":
       return {
         code: "LODGING",
         name: (claim.employeeCount || claim.numberOfEmployees) > 1 ? "Shared Lodging Claim" : "Lodging Claim",
+        label: "Lodging",
       };
     case "CONVEYANCE":
-      return { code: "CONVEYANCE", name: "Local Conveyance Claim" };
+    case "LOCAL_CONVEYANCE":
+    case "LOCAL_TRAVEL":
+    case "LOCAL":
+      return { code: "CONVEYANCE", name: "Local Conveyance Claim", label: "Local Conveyance" };
     case "FOOD":
-      return { code: "FOOD", name: "Food Claim" };
+    case "FOOD_DA":
+    case "FOOD_EXPENSE":
+      return { code: "FOOD", name: "Food Claim", label: "Food" };
     case "TRAVEL":
-      return { code: "TRAVEL", name: "Travel Claim" };
+    case "TRAVEL_EXPENSE":
+      return { code: "TRAVEL", name: "Travel Claim", label: "Travel" };
+    case "STOCK_PURCHASE":
+      return { code: "STOCK_PURCHASE", name: "Stock Purchase Claim", label: "Stock Purchase" };
     case "OTHER":
+    case "OTHER_EXPENSE":
     default:
       return {
         code: code || "OTHER",
-        name: isPurchase ? "Purchase Claim" : (code === "OTHER" ? "Other Expense Claim" : `${code || "Expense"} Claim`),
+        name: code === "OTHER" || code === "OTHER_EXPENSE" ? "Other Expense Claim" : `${code || "Expense"} Claim`,
+        label: code === "OTHER" || code === "OTHER_EXPENSE" ? "Other Expense" : (code || "Expense"),
       };
   }
 };
 
 const ExpenseDashboardScreen = ({ navigation }) => {
   const [claims, setClaims] = useState([]);
+  const [selectedTypeFilter, setSelectedTypeFilter] = useState("ALL");
   const [currentUserId, setCurrentUserId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [activePolicy, setActivePolicy] = useState(null);
-  const [photoPreviewModal, setPhotoPreviewModal] = useState({ visible: false, uri: "", title: "" });
+  const [wallet, setWallet] = useState(null);
 
   const load = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
@@ -129,10 +189,12 @@ const ExpenseDashboardScreen = ({ navigation }) => {
       }
       setCurrentUserId(uid ? String(uid) : null);
 
-      const [claimsRes, policy] = await Promise.all([
+      const [claimsRes, policy, walletRes] = await Promise.all([
         expenseApi.getMyClaims("ALL"),
         expenseApi.getActivePolicy(),
+        expenseApi.getMyPettyCashWallet(),
       ]);
+      if (walletRes?.success) setWallet(walletRes.data);
 
       const list = claimsRes?.data?.claims || claimsRes?.data || claimsRes?.claims || (Array.isArray(claimsRes) ? claimsRes : []);
 
@@ -234,7 +296,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
   );
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <ExpenseHeader
         title="Expense Claims"
         subtitle={activePolicy ? `${activePolicy.code} v${activePolicy.version}` : "Expense Management"}
@@ -253,6 +315,40 @@ const ExpenseDashboardScreen = ({ navigation }) => {
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(false); }} />}
       >
+        {/* Petty Cash Wallet Banner — shown only when employee petty cash option is ON */}
+        {Boolean(wallet?.enabled) && (
+          <TouchableOpacity
+            style={[
+              {
+                backgroundColor: wallet?.negative ? "#c2262eff" : "#312e81",
+                borderRadius: 16,
+                padding: 14,
+                marginBottom: 12,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              },
+            ]}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate("PettyCashWallet")}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: "#97e2f0ff", fontSize: 11, fontWeight: "700" }}>
+                PETTY CASH WALLET {wallet?.negative ? "• NEGATIVE" : ""}
+              </Text>
+              <Text style={{ color: "#ffffff", fontSize: 20, fontWeight: "800", marginTop: 2 }}>
+                {`${wallet.balance < 0 ? "-₹" : "₹"}${Math.abs(Number(wallet.balance) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              </Text>
+              <Text style={{ color: "#c7d2fe", fontSize: 11, fontWeight: "700", marginTop: 2 }}>
+                {`Base Limit: ₹${Math.abs(Number(wallet.baseLimit) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              </Text>
+            </View>
+            <View style={{ backgroundColor: "rgba(255,255,255,0.18)", paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 }}>
+              <Text style={{ color: "#ffffff", fontSize: 12, fontWeight: "800" }}>Open Wallet →</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
         {/* Stats Row in Previous UI Colors */}
         <View style={styles.statsRow}>
           {renderStat("Total", summary.total, "#4f46e5")}
@@ -283,6 +379,40 @@ const ExpenseDashboardScreen = ({ navigation }) => {
         </View>
 
         <Text style={styles.sectionTitle}>My Claims</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: 8, paddingBottom: 12 }}
+        >
+          {CLAIM_TYPE_FILTERS.map((f) => {
+            const active = selectedTypeFilter === f.code;
+            return (
+              <TouchableOpacity
+                key={f.code}
+                onPress={() => setSelectedTypeFilter(f.code)}
+                activeOpacity={0.8}
+                style={{
+                  paddingHorizontal: 12,
+                  paddingVertical: 6,
+                  borderRadius: 999,
+                  backgroundColor: active ? "#4f46e5" : "#ffffff",
+                  borderWidth: 1,
+                  borderColor: active ? "#4f46e5" : "#cbd5e1",
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontWeight: "700",
+                    color: active ? "#ffffff" : "#475569",
+                  }}
+                >
+                  {f.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
         {error ? (
           <View style={styles.errorBox}>
             <AlertCircle size={36} color="#ef4444" />
@@ -295,19 +425,34 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           </View>
         ) : loading ? (
           <ActivityIndicator size="large" color="#4f46e5" style={{ marginTop: 30 }} />
-        ) : claims.length === 0 ? (
+        ) : claims.filter((c) => selectedTypeFilter === "ALL" || getClaimTypeInfo(c).code === selectedTypeFilter).length === 0 ? (
           <View style={styles.emptyBox}>
             <Receipt size={36} color="#cbd5e1" />
-            <Text style={styles.emptyText}>No expense claims yet.</Text>
-            <Text style={styles.emptySubtext}>Tap "Expense Claim" or "Lodging Expense Claim" above to file a claim.</Text>
+            <Text style={styles.emptyText}>
+              {selectedTypeFilter === "ALL" ? "No expense claims yet." : "No matching expense claims."}
+            </Text>
+            <Text style={styles.emptySubtext}>
+              {selectedTypeFilter === "ALL"
+                ? 'Tap "Expense Claim" or "Lodging Expense Claim" above to file a claim.'
+                : "Try selecting another claim type filter above."}
+            </Text>
           </View>
         ) : (
-          claims.map((c) => {
+          claims
+            .filter((c) => selectedTypeFilter === "ALL" || getClaimTypeInfo(c).code === selectedTypeFilter)
+            .map((c) => {
             const statusInfo = getDisplayStatus(c.status, c);
             const typeInfo = getClaimTypeInfo(c);
             const claimTypeCode = (typeInfo.code || "").toUpperCase();
-            const showCityInfo = ["FOOD", "LODGING", "TRAVEL", "TOUR", "TRIP"].includes(claimTypeCode);
-            const isOtherType = claimTypeCode === "OTHER";
+            const allEntryTypes = [
+              ...(Array.isArray(c.entries) ? c.entries.map((e) => String(e?.expenseType || "").toUpperCase()) : []),
+              ...(Array.isArray(c.employeeClaims?.[0]?.items) ? c.employeeClaims[0].items.map((it) => String(it?.expenseType || "").toUpperCase()) : []),
+            ];
+            const showCityInfo =
+              ["FOOD", "LODGING", "TRAVEL", "TOUR", "TRIP"].includes(claimTypeCode) ||
+              c.claimMode === "LODGING" ||
+              allEntryTypes.some((t) => ["FOOD", "LODGING", "TRAVEL", "TOUR", "TRIP"].includes(t));
+            const isOtherType = claimTypeCode === "OTHER" || claimTypeCode === "STOCK_PURCHASE";
             const empCount = c.numberOfEmployees || c.employeeCount || 1;
             const statusUpper = String(c.status || "").toUpperCase();
             const creatorId = String(c.submittedBy?._id || c.submittedBy || c.createdBy?._id || c.createdBy || "");
@@ -318,9 +463,8 @@ const ExpenseDashboardScreen = ({ navigation }) => {
               "PAID",
               "DISBURSED",
               "SETTLED",
-            ].includes(statusUpper) || ["PAID", "DISBURSED"].includes(String(c.paymentStatus || "").toUpperCase());
-            const isEditable = isOwner && !isApprovedOrPaid;
-            const isDeletable = isOwner && [
+            ].includes(statusUpper) || ["PAID", "DISBURSED", "AWAITING_DISBURSEMENT"].includes(String(c.paymentStatus || "").toUpperCase()) || String(c.accountsApproval?.status || "").toUpperCase() === "APPROVED";
+            const isDraftOrRejected = [
               "DRAFT",
               "REJECTED",
               "ACCOUNTS_REJECTED",
@@ -328,6 +472,18 @@ const ExpenseDashboardScreen = ({ navigation }) => {
               "RETURNED",
               "CANCELLED",
             ].includes(statusUpper);
+            const maStatusUpper = String(c.managerApproval?.status || "").toUpperCase();
+            const maKindUpper = String(c.managerApproval?.kind || "NONE").toUpperCase();
+            const faStatusUpper = String(c.financeApproval?.status || "").toUpperCase();
+            const isFirstApprovalDone = !isDraftOrRejected && Boolean(
+              isApprovedOrPaid ||
+              faStatusUpper === "PENDING" ||
+              faStatusUpper === "APPROVED" ||
+              (maStatusUpper === "APPROVED" && (maKindUpper !== "NONE" || Boolean(c.managerApproval?.decidedAt || c.managerApproval?.approver))) ||
+              c.permissions?.isFirstApprovalApproved
+            );
+            const isEditable = isOwner && !isApprovedOrPaid && !isFirstApprovalDone && (c.permissions?.canEdit !== false);
+            const isDeletable = isOwner && isDraftOrRejected;
 
             const isLodgingClaim = c.claimMode === "LODGING" || claimTypeCode === "LODGING";
             const appliedDateText = c.submittedAt
@@ -457,46 +613,6 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           })
         )}
       </ScrollView>
-
-      {/* Photo Preview Modal */}
-      <Modal
-        visible={photoPreviewModal.visible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPhotoPreviewModal({ visible: false, uri: "", title: "" })}
-      >
-        <View style={styles.photoModalOverlay}>
-          <View style={styles.photoModalContainer}>
-            <View style={styles.photoModalHeader}>
-              <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <ImageIcon size={18} color="#ffffff" />
-                <Text style={styles.photoModalTitle} numberOfLines={1}>
-                  {photoPreviewModal.title || "Bill / Receipt Preview"}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.photoModalCloseBtn}
-                onPress={() => setPhotoPreviewModal({ visible: false, uri: "", title: "" })}
-              >
-                <X size={18} color="#ffffff" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.photoModalBody}>
-              {photoPreviewModal.uri ? (
-                <Image
-                  source={{ uri: photoPreviewModal.uri }}
-                  style={styles.photoModalImage}
-                  resizeMode="contain"
-                />
-              ) : (
-                <View style={styles.photoModalNoImg}>
-                  <Text style={styles.photoModalNoImgText}>No image preview available</Text>
-                </View>
-              )}
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Global Bottom HR Footer */}
       <HRModuleFooter navigation={navigation} currentScreen="expenseClaim" />
@@ -640,21 +756,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#c2410c",
   },
-  lodgingCoveredNote: {
-    backgroundColor: "#eff6ff",
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  lodgingCoveredText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#1d4ed8",
-  },
   claimTopRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   claimTypeTitle: { fontSize: 14, fontWeight: "800", color: "#0f172a" },
   claimMeta: { fontSize: 11, color: "#64748b", marginTop: 2 },
@@ -693,13 +794,15 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 11, fontWeight: "800" },
   claimAmountsRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
     justifyContent: "space-between",
     marginTop: 10,
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: "#f1f5f9",
   },
-  amountCol: { flex: 1 },
+  amountCol: { flex: 1, minWidth: 80 },
   amountLabel: { fontSize: 10, color: "#94a3b8", fontWeight: "600" },
   amountValue: { fontSize: 14, fontWeight: "800", color: "#0f172a", marginTop: 1 },
   photoModalOverlay: {

@@ -63,8 +63,38 @@ const expenseItemSchema = new mongoose.Schema({
 
   // Other expense sub-type & fields (purchase vs normal)
   otherSubType: { type: String, enum: ['PURCHASE', 'NORMAL', ''], default: '', uppercase: true, trim: true },
+  materialName: { type: String, default: '', trim: true },
   barcodeNumber: { type: String, default: '', trim: true },
   quantity: { type: String, default: '', trim: true },
+
+  // ── Travel mode / subtype snapshot (TRAVEL items). Ids reference TravelMode(.subtypes);
+  // names are stored so history survives configuration changes. ──
+  travelModeId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  travelModeCode: { type: String, default: '' },
+  travelModeName: { type: String, default: '' },
+  travelSubtypeId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  travelSubtypeCode: { type: String, default: '' },
+  travelSubtypeName: { type: String, default: '' },
+  travelWorkflow: { type: String, default: '' }, // STANDARD | KM_RATE
+  // Own Vehicle (KM_RATE) odometer readings + server-applied rate
+  startKm: { type: Number, default: null },
+  endKm: { type: Number, default: null },
+  ratePerKm: { type: Number, default: 0 },
+  // ENTITLED | PARTIAL | NOT_ENTITLED | ACTUALS | NOT_CONFIGURED
+  entitlementStatus: { type: String, default: '' },
+  excessReason: { type: String, default: '' },
+
+  // ── Food: date-wise use of the shared daily food entitlement ──
+  foodDays: { type: Number, default: 0 },
+  dailyAllocations: {
+    type: [new mongoose.Schema({
+      date: { type: Date, required: true },
+      dailyLimit: { type: Number, default: 0 },
+      priorConsumed: { type: Number, default: 0 },
+      allowed: { type: Number, default: 0 },
+    }, { _id: false })],
+    default: undefined,
+  },
 
   // Attachments
   attachments: [attachmentSchema],

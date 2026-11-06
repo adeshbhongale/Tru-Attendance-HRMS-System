@@ -7,6 +7,8 @@ const ExpenseEntitlement = require('../models/ExpenseEntitlement');
 const { getActivePolicy, findEntitlement, getEmployeeLevelNumber, getEmployeeGradeCode } = require('./policyEngine');
 const { calculateItem, round2 } = require('./calculationEngine');
 const { getISTDateComponents, createDateFromIST } = require('../../../../utils/timezone');
+const food = require('./foodEntitlementService');
+const travelPolicy = require('./travelPolicyService');
 
 /**
  * Expense claim rule engine.
@@ -24,7 +26,9 @@ const DAY_MS = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Claims in these statuses never block a new claim (duplicate / overlap checks)
-const NON_BLOCKING_STATUSES = ['DRAFT', 'RETURNED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'];
+// Claims in these statuses never block a new claim (duplicate / overlap checks) and never
+// consume entitlement (shared food entitlement) — one list, owned by foodEntitlementService.
+const NON_BLOCKING_STATUSES = food.NON_CONSUMING_STATUSES;
 
 const DEFAULT_CLAIM_RULES = {
   remarkMinLength: 5,
@@ -42,6 +46,89 @@ const DEFAULT_RECEIPT_RULES = {
 };
 // Full payment is approved in-app by a selected Management user (no proof upload).
 const DEFAULT_FULL_PAYMENT_RULES = { enabled: true, approvalRequired: true, proofRequired: false };
+const DEFAULT_PAY_LIMIT_CONFIG = { enabled: true, applicableClaimTypes: ['OTHER'] };
+const DEFAULT_CFO_APPROVAL_CONFIG = { enabled: true, applyOnFullPayment: true, applicableClaimTypes: ['STOCK_PURCHASE'] };
+
+function normalizeClaimTypeCode(t, sub = '') {
+  const u = String(t || '').trim().toUpperCase();
+  const s = String(sub || '').trim().toUpperCase();
+  if (!u) return '';
+  if (u === 'OTHER' && s === 'PURCHASE') return 'STOCK_PURCHASE';
+  if (u === 'OTHER_EXPENSE') return 'OTHER';
+  return u;
+}
+
+function resolvePayLimitConfig(src = {}, options = {}) {
+  const raw =
+    options?.payLimitConfig ||
+    options?.policyConfig?.payLimitConfig ||
+    options?.policy?.payLimitConfig ||
+    src?.policySnapshot?.payLimitConfig ||
+    src?.payLimitConfig ||
+    null;
+  const enabled = raw?.enabled !== false;
+  let applicableClaimTypes = Array.isArray(raw?.applicableClaimTypes)
+    ? raw.applicableClaimTypes.map((c) => normalizeClaimTypeCode(c)).filter(Boolean)
+    : [...DEFAULT_PAY_LIMIT_CONFIG.applicableClaimTypes];
+
+  if (!options?.payLimitConfig) {
+    const typeList = Array.isArray(options?.types)
+      ? options.types
+      : (src?.policySnapshot?.typeConfig ? [src.policySnapshot.typeConfig] : []);
+    typeList.forEach((t) => {
+      if (!t || !t.code || t.payLimitEnabled === undefined || t.payLimitEnabled === null) return;
+      const code = normalizeClaimTypeCode(t.code);
+      if (!code) return;
+      if (t.payLimitEnabled === true && !applicableClaimTypes.includes(code)) {
+        applicableClaimTypes.push(code);
+      } else if (t.payLimitEnabled === false) {
+        applicableClaimTypes = applicableClaimTypes.filter((c) => c !== code);
+      }
+    });
+  }
+  return {
+    enabled,
+    applicableClaimTypes: [...new Set(applicableClaimTypes)],
+  };
+}
+
+function resolveCfoApprovalConfig(src = {}, options = {}) {
+  const raw =
+    options?.cfoApprovalConfig ||
+    (options?.financeHead && Array.isArray(options.financeHead.applicableClaimTypes) ? options.financeHead : null) ||
+    options?.policyConfig?.cfoApprovalConfig ||
+    options?.policy?.cfoApprovalConfig ||
+    src?.policySnapshot?.cfoApprovalConfig ||
+    src?.cfoApprovalConfig ||
+    options?.financeHead ||
+    null;
+  const enabled = raw?.enabled !== false;
+  const applyOnFullPayment = raw?.applyOnFullPayment !== false;
+  let applicableClaimTypes = Array.isArray(raw?.applicableClaimTypes)
+    ? raw.applicableClaimTypes.map((c) => normalizeClaimTypeCode(c)).filter(Boolean)
+    : [...DEFAULT_CFO_APPROVAL_CONFIG.applicableClaimTypes];
+
+  if (!options?.cfoApprovalConfig) {
+    const typeList = Array.isArray(options?.types)
+      ? options.types
+      : (src?.policySnapshot?.typeConfig ? [src.policySnapshot.typeConfig] : []);
+    typeList.forEach((t) => {
+      if (!t || !t.code || t.cfoApprovalRequired === undefined || t.cfoApprovalRequired === null) return;
+      const code = normalizeClaimTypeCode(t.code);
+      if (!code) return;
+      if (t.cfoApprovalRequired === true && !applicableClaimTypes.includes(code)) {
+        applicableClaimTypes.push(code);
+      } else if (t.cfoApprovalRequired === false) {
+        applicableClaimTypes = applicableClaimTypes.filter((c) => c !== code);
+      }
+    });
+  }
+  return {
+    enabled,
+    applyOnFullPayment,
+    applicableClaimTypes: [...new Set(applicableClaimTypes)],
+  };
+}
 
 const MAX_AMOUNT = 10000000; // sanity ceiling (₹1 crore) for a single claim
 const MAX_TEXT = { customerName: 150, destinationCity: 100, fullPaymentReason: 500 };
@@ -67,6 +154,8 @@ function resolveRelativeStayPercent(policy) {
   return parseRelativeStayPercent(policy?.relativeStayPercent);
 }
 
+const formatINR = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
 /**
  * Apply the relative-stay percentage ONCE to an already-computed lodging stay budget
  * (output of computeLodgingPolicyLimit). Per-employee limits are scaled and the last one
@@ -91,8 +180,8 @@ function applyRelativeStayPercent(result, percent) {
     baseEffectiveLimits: result.effectiveLimits,
     relativeStayPercent: percent,
     ruleCode: `${result.ruleCode}_RELATIVE_${percent}_PCT`,
-    ruleDescription: `${result.ruleDescription} -> Stay with relative: ${percent}% of entitlement`,
-    formula: `${result.formula}. Stay with relative: ${percent}% × ${formatINR(base)} = ${formatINR(totalPolicyLimit)}`,
+    ruleDescription: `${result.ruleDescription} -> Stay at relative: ${percent}% of entitlement`,
+    formula: `${result.formula}. Stay at relative: ${percent}% × ${formatINR(base)} = ${formatINR(totalPolicyLimit)}`,
   };
 }
 
@@ -128,10 +217,10 @@ function computeRelativeStayPolicyLimit({ empLimits, ordered, days, percent }) {
     const perDay = perDays[0] || 0;
     const oneDayRel = oneDayRelativeLimits[0] || 0;
     const baseFormula = effectiveDays > 1
-      ? `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/day × ${effectiveDays} days = ${formatINR(baseTotalPolicyLimit)}`
-      : `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/day`;
+      ? `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/night × ${effectiveDays} nights = ${formatINR(baseTotalPolicyLimit)}`
+      : `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/night`;
     const relFormula = effectiveDays > 1
-      ? `${effectiveDays} days × (${percent}% of ${formatINR(perDay)}/day = ${formatINR(oneDayRel)}/day) = ${formatINR(totalPolicyLimit)}`
+      ? `${effectiveDays} nights × (${percent}% of ${formatINR(perDay)}/night = ${formatINR(oneDayRel)}/night) = ${formatINR(totalPolicyLimit)}`
       : `${percent}% × ${formatINR(baseTotalPolicyLimit)} = ${formatINR(totalPolicyLimit)}`;
     return {
       totalPolicyLimit,
@@ -142,8 +231,8 @@ function computeRelativeStayPolicyLimit({ empLimits, ordered, days, percent }) {
       combinedOneDayRelative,
       relativeStayPercent: percent,
       ruleCode: `SINGLE_EMPLOYEE_RELATIVE_${percent}_PCT`,
-      ruleDescription: `Single employee stay budget (100% individual category entitlement) -> Stay with relative: ${percent}% of entitlement`,
-      formula: `${baseFormula}. Stay with relative: ${relFormula}`,
+      ruleDescription: `Single employee stay budget (100% individual category entitlement) -> Stay at relative: ${percent}% of entitlement`,
+      formula: `${baseFormula}. Stay at relative: ${relFormula}`,
     };
   }
 
@@ -157,8 +246,8 @@ function computeRelativeStayPolicyLimit({ empLimits, ordered, days, percent }) {
     combinedOneDayRelative,
     relativeStayPercent: percent,
     ruleCode: `MULTI_EMPLOYEE_RELATIVE_${percent}_PCT`,
-    ruleDescription: `Stay with relative (${n} employees): ${effectiveDays} day${effectiveDays > 1 ? 's' : ''} × (${oneDayParts.join(' + ')})`,
-    formula: `Stay with relative: ${effectiveDays} day${effectiveDays > 1 ? 's' : ''} × (${oneDayParts.join(' + ')}) = ${formatINR(totalPolicyLimit)}`,
+    ruleDescription: `Stay at relative (${n} employees): ${effectiveDays} night${effectiveDays > 1 ? 's' : ''} × (${oneDayParts.join(' + ')})`,
+    formula: `Stay : ${effectiveDays} night${effectiveDays > 1 ? 's' : ''} × (${oneDayParts.join(' + ')}) = ${formatINR(totalPolicyLimit)}`,
   };
 }
 
@@ -195,32 +284,11 @@ function formatDate(d) {
   return `${String(date.getUTCDate()).padStart(2, '0')} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
-/** Lodging nights (checkout - checkin): 29 Sep -> 02 Oct = 3 nights. */
-function nightsBetween(from, to) {
-  if (!from || !to) return 0;
-  const fTime = from instanceof Date ? from.getTime() : new Date(from).getTime();
-  const tTime = to instanceof Date ? to.getTime() : new Date(to).getTime();
-  if (isNaN(fTime) || isNaN(tTime)) return 0;
-  return Math.max(0, Math.round((tTime - fTime) / DAY_MS));
-}
+/** Lodging nights (checkout - checkin): 28 Oct -> 30 Oct = 2 nights; same day = 0 nights. */
+const nightsBetween = (from, to) => food.lodgingNights(from, to);
 
-/** Lodging days (inclusive calendar span): e.g. 1st to 3rd = 3 days, 1st to 1st = 1 day. */
-function daysBetween(from, to) {
-  if (!from || !to) return 0;
-  const fTime = from instanceof Date ? from.getTime() : new Date(from).getTime();
-  const tTime = to instanceof Date ? to.getTime() : new Date(to).getTime();
-  if (isNaN(fTime) || isNaN(tTime)) return 0;
-  const diff = Math.round((tTime - fTime) / DAY_MS);
-  if (diff < 0) return 0;
-  return diff + 1;
-}
-
-/** End of the IST calendar day that is `days` after `anchor`. */
-function deadlineFrom(anchor, days) {
-  return createDateFromIST(anchor.getUTCFullYear(), anchor.getUTCMonth(), anchor.getUTCDate() + Number(days || 0), 23, 59, 59, 999);
-}
-
-const formatINR = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+/** Food days (inclusive calendar span): 28 Oct -> 30 Oct = 3 days, same day = 1 day. */
+const daysBetween = (from, to) => food.foodDays(from, to);
 
 // ─── Config resolution ──────────────────────────────────────────────────────
 
@@ -245,6 +313,9 @@ function resolvePolicyConfig(policy) {
     receiptRules,
     fullPaymentRules: { ...DEFAULT_FULL_PAYMENT_RULES, ...clean(p.fullPaymentRules) },
     deadlineRules: Array.isArray(p.deadlineRules) ? p.deadlineRules : [],
+    approvalLimitRules: Array.isArray(p.approvalLimitRules) ? p.approvalLimitRules : [],
+    payLimitConfig: resolvePayLimitConfig(p, { policy: p }),
+    cfoApprovalConfig: resolveCfoApprovalConfig(p, { policy: p }),
     approvalRequired: !!p.approvalRequired,
   };
 }
@@ -255,16 +326,28 @@ function resolveTypeConfig(type, fallbackCode = '') {
   const rawCode = String(type?.code || fallbackCode || '').toUpperCase();
   const code = rawCode;
   const pick = (v, d) => (v === undefined || v === null ? d : v);
+  // Same-date / date-based duplicate submission limits apply only to FOOD and LODGING,
+  // never to TRAVEL, CONVEYANCE (Local Conveyance), or OTHER claim types.
+  const isDateLimitedType = code === 'FOOD' || code === 'LODGING' || type?.category === 'FOOD' || type?.category === 'LODGING';
   return {
     code,
-    name: type?.name || (code === 'FOOD' ? 'Food' : code === 'TRAVEL' ? 'Travel' : code === 'LODGING' ? 'Lodging' : code === 'CONVEYANCE' ? 'Local Conveyance' : code),
+    name: type?.name || (code === 'FOOD' ? 'Food' : code === 'TRAVEL' ? 'Travel' : code === 'LODGING' ? 'Lodging' : code === 'CONVEYANCE' ? 'Local Conveyance' : code === 'STOCK_PURCHASE' ? 'Stock Purchase' : code),
     category: type?.category || code,
     claimMode: pick(type?.claimMode, code === 'LODGING' || type?.category === 'LODGING' ? 'LODGING' : 'NORMAL'),
-    sameDateLimit: Number(pick(type?.sameDateLimit, ['FOOD', 'TRAVEL'].includes(code) ? 1 : 0)),
+    sameDateLimit: isDateLimitedType ? Number(pick(type?.sameDateLimit, code === 'FOOD' ? 1 : 0)) : 0,
     allowOverlap: !!pick(type?.allowOverlap, false),
     maxClaimAmount: Number(pick(type?.maxClaimAmount, 0)),
     requiresOutstation: !!pick(type?.requiresOutstation, false),
     proofRequired: type?.proofRequired !== false,
+    payLimitEnabled: type?.payLimitEnabled !== undefined && type?.payLimitEnabled !== null
+      ? Boolean(type.payLimitEnabled)
+      : code === 'OTHER',
+    cfoApprovalRequired: type?.cfoApprovalRequired !== undefined && type?.cfoApprovalRequired !== null
+      ? Boolean(type.cfoApprovalRequired)
+      : code === 'STOCK_PURCHASE',
+    managerApprovalRequired: type?.managerApprovalRequired !== undefined && type?.managerApprovalRequired !== null
+      ? Boolean(type.managerApprovalRequired)
+      : (code === 'OTHER' || code === 'STOCK_PURCHASE'),
   };
 }
 
@@ -318,6 +401,39 @@ function conveyanceKm(src = {}) {
   };
 }
 
+/** Travel Mode / Subtype selection + Own Vehicle odometer readings (TRAVEL entries only). */
+const idStr = (v) => toStr(v && typeof v === 'object' ? v._id : v, 50);
+const numOrNull = (v) => (v === '' || v === null || v === undefined ? null : Number(v));
+function travelFields(src = {}, expenseType = '') {
+  if (String(expenseType).toUpperCase() !== 'TRAVEL') return {};
+  return {
+    travelModeId: idStr(src.travelModeId),
+    travelModeCode: toStr(src.travelModeCode, 50).toUpperCase(),
+    travelModeName: toStr(src.travelModeName, 100),
+    travelSubtypeId: idStr(src.travelSubtypeId),
+    travelSubtypeCode: toStr(src.travelSubtypeCode, 50).toUpperCase(),
+    travelSubtypeName: toStr(src.travelSubtypeName, 100),
+    travelWorkflow: toStr(src.travelWorkflow, 20).toUpperCase(),
+    ratePerKm: numOrNull(src.ratePerKm),
+    startKm: numOrNull(src.startKm),
+    endKm: numOrNull(src.endKm),
+  };
+}
+
+/** Lodging form: optional Food section (several food bills) sharing the lodging date range. */
+function normalizeFoodSection(body, claimMode) {
+  if (claimMode !== 'LODGING') return { includeFood: false, foodEntries: [] };
+  const raw = Array.isArray(body.foodEntries) ? body.foodEntries.slice(0, 50) : [];
+  const foodEntries = raw.map((e) => ({
+    requestedAmount: e?.requestedAmount === '' || e?.requestedAmount === null || e?.requestedAmount === undefined ? null : round2(Number(e.requestedAmount)),
+    remark: toStr(e?.remark || e?.description, 1000),
+    receipts: (Array.isArray(e?.receipts) ? e.receipts : (Array.isArray(e?.attachments) ? e.attachments : [])).map(sanitizeAttachment).filter(Boolean),
+  })).filter((e) => e.requestedAmount !== null || e.remark || e.receipts.length);
+  const flag = body.includeFood;
+  const includeFood = flag === true || flag === 'true' || (flag === undefined && foodEntries.length > 0);
+  return { includeFood, foodEntries: includeFood ? foodEntries : [] };
+}
+
 function normalizeInput(body = {}) {
   const claimMode = String(body.claimMode || '').toUpperCase();
   const fp = body.fullPayment || {};
@@ -332,19 +448,23 @@ function normalizeInput(body = {}) {
   const bodyVisitType = rawBodyVt === 'VISIT' ? 'VISIT' : (rawBodyVt === 'NO_VISIT' ? 'NO_VISIT' : '');
 
   const entries = rawEntries.map((e) => {
+    const eType = toStr(e.expenseType || e.claimType, 50).toUpperCase() || 'OTHER';
     const eSubType = toStr(e.otherSubType || e.subType || '', 20).toUpperCase();
-    const isEPurchase = eSubType === 'PURCHASE';
+    const isStockPurchase = eType === 'STOCK_PURCHASE';
+    const isLegacyPurchase = eType === 'OTHER' && eSubType === 'PURCHASE';
     const rawEVt = String(e.visitType || (e.isVisit === true ? 'VISIT' : '') || bodyVisitType || 'NO_VISIT').toUpperCase().trim();
     const eVt = rawEVt === 'VISIT' ? 'VISIT' : 'NO_VISIT';
     return {
-      expenseType: toStr(e.expenseType || e.claimType, 50).toUpperCase() || 'OTHER',
-      otherSubType: eSubType,
-      barcodeNumber: isEPurchase ? toStr(e.barcodeNumber || e.barcode || '', 100).trim() : '',
-      quantity: isEPurchase ? toStr(e.quantity, 100).trim() : '',
+      expenseType: eType,
+      otherSubType: eType === 'OTHER' ? (eSubType || 'NORMAL') : '',
+      materialName: (isStockPurchase || isLegacyPurchase) ? toStr(e.materialName || '', 200).trim() : '',
+      barcodeNumber: (isStockPurchase || isLegacyPurchase) ? toStr(e.barcodeNumber || e.barcode || '', 100).trim() : '',
+      quantity: (isStockPurchase || isLegacyPurchase) ? toStr(e.quantity, 100).trim() : '',
       requestedAmount: e.requestedAmount === '' || e.requestedAmount === null || e.requestedAmount === undefined ? null : Number(e.requestedAmount),
       remark: toStr(e.remark || e.description, 1000),
       vehicle: toStr(e.vehicle, 50),
       ...conveyanceKm(e),
+      ...travelFields(e, eType),
       visitType: eVt,
       isVisit: eVt === 'VISIT',
       receipts: (Array.isArray(e.receipts) ? e.receipts : (Array.isArray(e.attachments) ? e.attachments : [])).map(sanitizeAttachment).filter(Boolean),
@@ -369,19 +489,23 @@ function normalizeInput(body = {}) {
       finalRemark = entries.map(e => e.remark).filter(Boolean).join('; ');
     }
   } else if (finalAmount !== null || finalExpenseType) {
+    const entryType = finalExpenseType || 'OTHER';
     const bodySubType = toStr(body.otherSubType || body.subType || '', 20).toUpperCase();
-    const isBodyPurchase = bodySubType === 'PURCHASE';
+    const isStockPurchase = entryType === 'STOCK_PURCHASE';
+    const isLegacyPurchase = entryType === 'OTHER' && bodySubType === 'PURCHASE';
     const rawBodyEntryVt = String(body.visitType || (body.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT').toUpperCase().trim();
     const bodyEntryVt = rawBodyEntryVt === 'VISIT' ? 'VISIT' : 'NO_VISIT';
     entries.push({
-      expenseType: finalExpenseType || 'OTHER',
-      otherSubType: bodySubType,
-      barcodeNumber: isBodyPurchase ? toStr(body.barcodeNumber || body.barcode || '', 100).trim() : '',
-      quantity: isBodyPurchase ? toStr(body.quantity, 100).trim() : '',
+      expenseType: entryType,
+      otherSubType: entryType === 'OTHER' ? (bodySubType || 'NORMAL') : '',
+      materialName: (isStockPurchase || isLegacyPurchase) ? toStr(body.materialName || '', 200).trim() : '',
+      barcodeNumber: (isStockPurchase || isLegacyPurchase) ? toStr(body.barcodeNumber || body.barcode || '', 100).trim() : '',
+      quantity: (isStockPurchase || isLegacyPurchase) ? toStr(body.quantity, 100).trim() : '',
       requestedAmount: finalAmount,
       remark: finalRemark,
       vehicle: toStr(body.vehicle, 50),
       ...conveyanceKm(body),
+      ...travelFields(body, finalExpenseType),
       visitType: bodyEntryVt,
       isVisit: bodyEntryVt === 'VISIT',
       receipts: (Array.isArray(body.receipts) ? body.receipts : []).map(sanitizeAttachment).filter(Boolean),
@@ -400,6 +524,7 @@ function normalizeInput(body = {}) {
   const directServiceReports = (Array.isArray(body.serviceReports) ? body.serviceReports : []).map(sanitizeAttachment).filter(Boolean);
   const entryServiceReportsAll = entries.flatMap((e) => e.serviceReports || []);
   const finalServiceReports = directServiceReports.length > 0 ? directServiceReports : entryServiceReportsAll;
+  const { includeFood, foodEntries } = normalizeFoodSection(body, claimMode);
 
   return {
     claimMode,
@@ -409,6 +534,9 @@ function normalizeInput(body = {}) {
     toDate: claimMode === 'LODGING' ? parseDateOnly(body.toDate) : null,
     // LODGING only. Kept as sent (upper-cased) so validation can reject unknown values.
     stayType: lodgingStayType,
+    // LODGING only: Food section over the same (inclusive) date range
+    includeFood,
+    foodEntries,
     rawDates: { claimDate: body.claimDate, fromDate: body.fromDate, toDate: body.toDate },
     numberOfEmployees: body.numberOfEmployees === undefined ? employeeIds.length : Number(body.numberOfEmployees),
     employeeIds,
@@ -437,17 +565,124 @@ function normalizeInput(body = {}) {
 /**
  * Which in-app approval a claim needs before it reaches Accounts (pure).
  * Works on normalized input and on stored claims.
- * FULL_PAYMENT wins when both apply (single Management approval covers everything).
+ * Strict Priority Order:
+ * 1. FULL_PAYMENT (when fullPayment.requested is true — single approval flow covers everything).
+ * 2. Claims with CFO Approval ON and Pay Limit OFF (e.g. STOCK_PURCHASE by default) -> always 'OTHER_EXPENSE'.
+ * 3. Claims with Pay Limit Set ON (e.g. OTHER by default, or any claim type where Pay Limit is toggled ON):
+ *    - if amount <= directLimit -> 'NONE' (direct to Accounts)
+ *    - if amount > directLimit (or no directLimit) -> 'OTHER_EXPENSE' (Reporting Manager approval).
  */
-function approvalKindFor(src = {}) {
+function approvalKindFor(src = {}, options = {}) {
+  // 1st Priority: Full Payment always wins for any claim
   if (src.fullPayment?.requested) return 'FULL_PAYMENT';
-  const isOther = (t) => String(t || '').toUpperCase() === 'OTHER';
-  if (String(src.claimMode || '').toUpperCase() === 'LODGING') return 'NONE';
-  if (isOther(src.expenseType) || isOther(src.claimType)) return 'OTHER_EXPENSE';
-  if ((Array.isArray(src.entries) ? src.entries : []).some((e) => isOther(e?.expenseType))) return 'OTHER_EXPENSE';
+
+  const payLimitCfg = resolvePayLimitConfig(src, options);
+  const cfoCfg = resolveCfoApprovalConfig(src, options);
+
+  const payLimitTypes = new Set(
+    payLimitCfg.enabled !== false
+      ? (payLimitCfg.applicableClaimTypes || []).map((t) => normalizeClaimTypeCode(t)).filter(Boolean)
+      : []
+  );
+  const cfoTypes = new Set(
+    cfoCfg.enabled !== false
+      ? (cfoCfg.applicableClaimTypes || []).map((t) => normalizeClaimTypeCode(t)).filter(Boolean)
+      : []
+  );
+
+  // If Lodging claim and neither LODGING nor FOOD (when includeFood is active) has Pay Limit or CFO approval enabled, return 'NONE'
+  const isLodgingMode = String(src.claimMode || '').toUpperCase() === 'LODGING';
+  if (
+    isLodgingMode &&
+    !payLimitTypes.has('LODGING') &&
+    !cfoTypes.has('LODGING') &&
+    !(src.includeFood && (payLimitTypes.has('FOOD') || cfoTypes.has('FOOD')))
+  ) {
+    return 'NONE';
+  }
+
+  const entries = Array.isArray(src.entries) ? src.entries : [];
   const items = (src.employeeClaims || []).flatMap((ec) => ec?.items || []);
-  if (items.some((it) => isOther(it?.expenseType))) return 'OTHER_EXPENSE';
-  return 'NONE';
+  const typeAmounts = [];
+
+  if (entries.length > 0) {
+    entries.forEach((e) => {
+      if (!e) return;
+      const code = normalizeClaimTypeCode(e.expenseType || e.claimType, e.otherSubType);
+      if (code) typeAmounts.push({ code, amount: Number(e.requestedAmount) || 0 });
+    });
+  } else if (items.length > 0) {
+    const byType = new Map();
+    items.forEach((it) => {
+      if (!it) return;
+      const code = normalizeClaimTypeCode(it.expenseType || it.claimType, it.otherSubType);
+      if (!code) return;
+      byType.set(code, round2((byType.get(code) || 0) + (Number(it.requestedAmount) || 0)));
+    });
+    byType.forEach((amount, code) => typeAmounts.push({ code, amount }));
+  }
+
+  if (typeAmounts.length === 0) {
+    const topCode = normalizeClaimTypeCode(
+      src.expenseType || src.claimType || (isLodgingMode ? 'LODGING' : ''),
+      src.otherSubType
+    );
+    if (topCode) {
+      typeAmounts.push({ code: topCode, amount: Number(src.requestedAmount ?? src.grandRequested) || 0 });
+    }
+  }
+
+  if (isLodgingMode && src.includeFood) {
+    const foodAmt = Array.isArray(src.foodEntries)
+      ? round2(src.foodEntries.reduce((s, f) => s + (Number(f?.requestedAmount) || 0), 0))
+      : 0;
+    if (foodAmt > 0 || !typeAmounts.some((ta) => ta.code === 'FOOD')) {
+      typeAmounts.push({ code: 'FOOD', amount: foodAmt });
+    }
+  }
+
+  // 2nd Priority: Claim types with CFO Approval ON and Pay Limit OFF always require approval
+  const hasUnconditionalApproval = typeAmounts.some(
+    (ta) => cfoTypes.has(ta.code) && !payLimitTypes.has(ta.code)
+  );
+  if (hasUnconditionalApproval) {
+    return 'OTHER_EXPENSE';
+  }
+
+  // 3rd Priority: Claim types where "Pay Limit Set" is ON
+  const payLimitEntries = typeAmounts.filter((ta) => payLimitTypes.has(ta.code));
+  if (payLimitEntries.length === 0) {
+    return 'NONE';
+  }
+
+  const maxPayLimitAmount = Math.max(0, ...payLimitEntries.map((ta) => Number(ta.amount) || 0));
+
+  let directLimit = options.directLimit !== undefined ? options.directLimit : src.policySnapshot?.directAccountLimit;
+  if (directLimit === undefined || directLimit === null) {
+    const rawRules =
+      options.approvalLimitRules ||
+      options.policy?.approvalLimitRules ||
+      options.policyConfig?.approvalLimitRules ||
+      src.policySnapshot?.approvalLimitRules ||
+      src.approvalLimitRules;
+    if (Array.isArray(rawRules) && rawRules.length > 0) {
+      const targetUser = options.user || src.submittedBy || null;
+      const { resolveDirectAccountLimit } = require('./approverService');
+      directLimit = resolveDirectAccountLimit(targetUser, rawRules);
+    }
+  }
+
+  if (
+    directLimit !== null &&
+    directLimit !== undefined &&
+    Number(directLimit) > 0 &&
+    maxPayLimitAmount > 0 &&
+    maxPayLimitAmount <= Number(directLimit)
+  ) {
+    return 'NONE';
+  }
+
+  return 'OTHER_EXPENSE';
 }
 
 const isValidFileUrl = (url) => /^https?:\/\/\S+$/i.test(url) || /^\/uploads\/\S+$/i.test(url);
@@ -456,7 +691,7 @@ const isValidFileUrl = (url) => /^https?:\/\/\S+$/i.test(url) || /^\/uploads\/\S
  * Field-level validation. Returns [{ field, code, message, required? }].
  * `required` errors are skipped for drafts so a half-filled form can be saved.
  */
-function validateClaimInput(input, { policyConfig, typeConfig, today = todayDateOnly(), isDraft = false, user = null, isManagement = false }) {
+function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = null, today = todayDateOnly(), isDraft = false, user = null, isManagement = false }) {
   const errors = [];
   const add = (field, code, message, required = false) => errors.push({ field, code, message, required });
   const { claimRules, receiptRules, fullPaymentRules } = policyConfig;
@@ -484,12 +719,14 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
       else add('toDate', 'TO_DATE_REQUIRED', 'Please select the To Date.', true);
     }
     if (input.fromDate && input.toDate) {
-      if (input.toDate <= input.fromDate) {
-        add('toDate', 'INVALID_DATE_RANGE', 'To Date must be after From Date.');
+      if (input.toDate < input.fromDate) {
+        add('toDate', 'INVALID_DATE_RANGE', 'To Date cannot be earlier than From Date.');
+      } else if (nightsBetween(input.fromDate, input.toDate) < 1) {
+        add('toDate', 'INVALID_DATE_RANGE', 'From Date and To Date cannot be the same date. Please select a To Date after From Date.');
       } else {
-        const days = daysBetween(input.fromDate, input.toDate);
-        if (claimRules.maxLodgingNights > 0 && days > claimRules.maxLodgingNights) {
-          add('toDate', 'INVALID_DATE_RANGE', `A single lodging claim can cover at most ${claimRules.maxLodgingNights} days.`);
+        const nights = nightsBetween(input.fromDate, input.toDate);
+        if (claimRules.maxLodgingNights > 0 && nights > claimRules.maxLodgingNights) {
+          add('toDate', 'INVALID_DATE_RANGE', `A single lodging claim can cover at most ${claimRules.maxLodgingNights} nights.`);
         }
       }
       if (!claimRules.allowFutureDates && (input.fromDate > today || input.toDate > today)) {
@@ -502,9 +739,9 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   // Stay Type (LODGING only): must be explicitly chosen by the employee (no default)
   if (input.claimMode === 'LODGING') {
     if (!input.stayType) {
-      add('stayType', 'STAY_TYPE_REQUIRED', 'Please select the Stay Type (In Hotel or With Relative).', true);
+      add('stayType', 'STAY_TYPE_REQUIRED', 'Please select the Stay Type (In Hotel or At Relative).', true);
     } else if (!STAY_TYPES.includes(input.stayType)) {
-      add('stayType', 'STAY_TYPE_INVALID', 'Stay Type must be either In Hotel or With Relative.');
+      add('stayType', 'STAY_TYPE_INVALID', 'Stay Type must be either In Hotel or At Relative.');
     }
   }
 
@@ -573,13 +810,15 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   const maxFiles = Number(receiptRules.maxFiles) || 10;
   const svcEntries = input.entries || [];
   const isConveyanceEntry = (e) => String(e.expenseType || '').toUpperCase() === 'CONVEYANCE';
-  const allConveyance = svcEntries.length > 0 && svcEntries.every(isConveyanceEntry);
+  // Own Vehicle travel (KM_RATE) uses the Local Conveyance proofs (photos) instead of bills
+  const isKmBasedEntry = (e) => isConveyanceEntry(e) || e.travelWorkflow === 'KM_RATE';
+  const allConveyance = svcEntries.length > 0 && svcEntries.every(isKmBasedEntry);
   // Local Conveyance has no bills/proofs (number plate + Start/End KM instead)
   const receiptsRequired = !isRelativeStay && !allConveyance && Boolean(typeConfig ? typeConfig.proofRequired === true : receiptRules.required);
   const checkFiles = (files, field) => {
     files.forEach((f) => {
       if (!isValidFileUrl(f.url)) add(field, 'UPLOAD_INCOMPLETE', `"${f.name}" has not finished uploading. Please retry or remove it.`);
-      else if (field === 'receipts' && f.type && !allowed.includes(f.type)) add(field, 'UNSUPPORTED_FILE', `"${f.name}" is not a supported file type.`);
+      else if (/receipts$/.test(field) && f.type && !allowed.includes(f.type)) add(field, 'UNSUPPORTED_FILE', `"${f.name}" is not a supported file type.`);
     });
   };
   if (receiptsRequired && input.receipts.length === 0) {
@@ -587,6 +826,26 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   }
   if (input.receipts.length > maxFiles) add('receipts', 'TOO_MANY_FILES', `You can attach a maximum of ${maxFiles} receipts.`);
   checkFiles(input.receipts, 'receipts');
+
+  // Lodging form — Food section (one or more food bills over the same date range)
+  if (input.claimMode === 'LODGING' && input.includeFood) {
+    const foodEntries = input.foodEntries || [];
+    if (!foodEntries.length) add('foodEntries', 'FOOD_ENTRY_REQUIRED', 'Please add at least one Food entry or switch off the Food claim.', true);
+    foodEntries.forEach((f, i) => {
+      const p = `foodEntries[${i}].`;
+      const label = `Food entry #${i + 1}`;
+      if (f.requestedAmount === null) add(`${p}requestedAmount`, 'AMOUNT_REQUIRED', `Please enter the amount for ${label}.`, true);
+      else if (!Number.isFinite(f.requestedAmount)) add(`${p}requestedAmount`, 'AMOUNT_INVALID', `Please enter a valid amount for ${label}.`);
+      else if (f.requestedAmount < 0) add(`${p}requestedAmount`, 'AMOUNT_NEGATIVE', `${label}: amount cannot be negative.`);
+      else if (f.requestedAmount === 0) add(`${p}requestedAmount`, 'AMOUNT_ZERO', `${label}: amount must be greater than zero.`, true);
+      else if (f.requestedAmount > MAX_AMOUNT) add(`${p}requestedAmount`, 'AMOUNT_TOO_HIGH', `${label}: amount cannot exceed ${formatINR(MAX_AMOUNT)}.`);
+      if ((f.receipts || []).length > maxFiles) add(`${p}receipts`, 'TOO_MANY_FILES', `${label}: you can attach a maximum of ${maxFiles} bills.`);
+      checkFiles(f.receipts || [], `${p}receipts`);
+    });
+    if (foodTypeConfig && foodTypeConfig.proofRequired === true && foodEntries.length && foodEntries.every((f) => !(f.receipts || []).length)) {
+      add('foodEntries', 'FOOD_RECEIPT_REQUIRED', 'Please attach at least one food bill or receipt.', true);
+    }
+  }
 
   // Local Conveyance: photo of Vehicle Number Plate, Start KM and End KM (odometer)
   if (input.claimMode === 'NORMAL') {
@@ -627,10 +886,10 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
     }
   }
 
-  // Approver: Management user (full payment) or Reporting Manager (OTHER expense)
+  // Approver: Management user (full payment) or Reporting Manager (OTHER / STOCK_PURCHASE expense)
   // For Management users, approval is not applicable; claims route directly to Accounts.
   const isMgmt = Boolean(isManagement || (user && require('./expenseAccess').isManagementUser(user)));
-  const approvalKind = isMgmt ? 'NONE' : approvalKindFor(input);
+  const approvalKind = isMgmt ? 'NONE' : approvalKindFor(input, { policyConfig, user });
   if (approvalKind !== 'NONE') {
     if (!input.approverId) {
       add('approverId', 'APPROVER_REQUIRED', approvalKind === 'FULL_PAYMENT'
@@ -641,22 +900,22 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
     }
   }
 
-  // Other expense sub-type validation in NORMAL claim mode
+  // Stock Purchase & Other expense validation in NORMAL claim mode
   const validateOtherEntry = (ent, prefix = '') => {
     const eType = String(ent.expenseType || '').toUpperCase();
-    if (eType === 'OTHER') {
-      const sub = String(ent.otherSubType || '').toUpperCase();
-      if (!sub) {
-        add(`${prefix}otherSubType`, 'OTHER_SUBTYPE_REQUIRED', 'Please select either Purchase or Normal for Other expense.', true);
-      } else if (!['PURCHASE', 'NORMAL'].includes(sub)) {
-        add(`${prefix}otherSubType`, 'INVALID_OTHER_SUBTYPE', 'Other expense type must be either Purchase or Normal.');
-      } else if (sub === 'PURCHASE') {
-        if (!ent.barcodeNumber || !ent.barcodeNumber.trim()) {
-          add(`${prefix}barcodeNumber`, 'BARCODE_REQUIRED', 'Barcode number is required for purchase expense.', true);
-        }
-        if (!ent.quantity || !String(ent.quantity).trim()) {
-          add(`${prefix}quantity`, 'QUANTITY_REQUIRED', 'Quantity is required for purchase expense.', true);
-        }
+    if (eType === 'STOCK_PURCHASE') {
+      if (!ent.barcodeNumber || !ent.barcodeNumber.trim()) {
+        add(`${prefix}barcodeNumber`, 'BARCODE_REQUIRED', 'Barcode number is required for Stock Purchase expense.', true);
+      }
+      if (!ent.quantity || !String(ent.quantity).trim()) {
+        add(`${prefix}quantity`, 'QUANTITY_REQUIRED', 'Quantity is required for Stock Purchase expense.', true);
+      }
+    } else if (eType === 'OTHER') {
+      const sub = String(ent.otherSubType || 'NORMAL').toUpperCase();
+      if (sub === 'PURCHASE') {
+        add(`${prefix}otherSubType`, 'PURCHASE_MOVED_TO_STOCK_PURCHASE', 'Purchase claims must be submitted under Stock Purchase, not Other Claim.');
+      } else if (sub !== 'NORMAL') {
+        add(`${prefix}otherSubType`, 'INVALID_OTHER_SUBTYPE', 'Other expense must be a normal claim.');
       }
     }
   };
@@ -666,7 +925,7 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
       input.entries.forEach((ent, idx) => {
         validateOtherEntry(ent, input.entries.length > 1 ? `entries[${idx}].` : '');
       });
-    } else if (String(input.expenseType || '').toUpperCase() === 'OTHER') {
+    } else if (['OTHER', 'STOCK_PURCHASE'].includes(String(input.expenseType || '').toUpperCase())) {
       validateOtherEntry(input, '');
     }
   }
@@ -700,6 +959,11 @@ function computePayable(claim) {
  */
 function routeSubmission(claim, { now = new Date(), isManagement = false, user = null } = {}) {
   const fp = claim.fullPayment || {};
+  // 2nd approval (CFO / Finance Head) starts fresh on every (re)submission; it is
+  // requested only after the Reporting Manager approves (see expenseApproval.controller).
+  claim.financeApproval = {
+    approver: null, approverName: '', status: 'NOT_REQUIRED', requestedAt: null, decidedAt: null, remarks: '',
+  };
   const isMgmt = Boolean(
     isManagement ||
     (user && require('./expenseAccess').isManagementUser(user)) ||
@@ -740,7 +1004,7 @@ function routeSubmission(claim, { now = new Date(), isManagement = false, user =
     return claim;
   }
 
-  const kind = approvalKindFor(claim);
+  const kind = approvalKindFor(claim, { user });
   const prev = claim.managerApproval || {};
   if (fp.requested) {
     fp.requestedAt = fp.requestedAt || now;
@@ -800,7 +1064,7 @@ async function loadEmployees(companyId, ids) {
   const filter = { _id: { $in: ids } };
   if (companyId) filter.companyId = companyId;
   const users = await User.find(filter)
-    .select('name employeeIdCode department designation workingPlace levelRef gradeRef levelNumber gradeCode role status companyId')
+    .select('name employeeIdCode department designation workingPlace levelRef gradeRef levelNumber gradeCode role roleCode roleLevel isTeamLead reportsTo approver status companyId')
     .populate('levelRef')
     .populate('gradeRef')
     .lean();
@@ -860,8 +1124,11 @@ async function evaluateBusinessRules({ companyId, input, typeConfig, employees, 
 
   for (const emp of employees) {
     const who = singleEmp ? '' : ` for ${empLabel(emp)}`;
+    const isFoodOrLodging = code === 'FOOD' || code === 'LODGING' || typeConfig.category === 'FOOD' || typeConfig.category === 'LODGING';
 
-    if (isNormal && typeConfig.sameDateLimit > 0) {
+    // Date-based already-claimed submission check applies ONLY to Food and Lodging claims,
+    // never to Travel, Local Conveyance, or Other claim types.
+    if (isNormal && isFoodOrLodging && typeConfig.sameDateLimit > 0) {
       const count = await ExpenseClaim.countDocuments({
         ...base,
         $or: [
@@ -885,12 +1152,15 @@ async function evaluateBusinessRules({ companyId, input, typeConfig, employees, 
       }
     }
 
-    if (!isNormal && !typeConfig.allowOverlap) {
+    // Lodging overlap is about nights: a same-day (0-night, food-only) claim never overlaps a stay,
+    // and checkout day = next check-in day is not an overlap.
+    if (!isNormal && isFoodOrLodging && !typeConfig.allowOverlap && nightsBetween(start, end) > 0) {
       const existing = await ExpenseClaim.findOne({
         ...base,
         claimMode: 'LODGING',
         claimType: code,
         'employeeClaims.employee.employeeId': emp._id,
+        numberOfNights: { $gt: 0 },
         fromDate: { $lt: end },
         toDate: { $gt: start },
       }).select('claimNumber fromDate toDate').lean();
@@ -905,7 +1175,8 @@ async function evaluateBusinessRules({ companyId, input, typeConfig, employees, 
   // Outstation evidence: primary employee (filer if on the claim) drives the deadline anchor.
   const outstationByEmp = {};
   for (const emp of employees) {
-    outstationByEmp[String(emp._id)] = await getOutstationInfo(emp._id, start, isNormal ? end : addDays(end, -1));
+    const outEnd = isNormal || end <= start ? end : addDays(end, -1);
+    outstationByEmp[String(emp._id)] = await getOutstationInfo(emp._id, start, outEnd);
     if (typeConfig.requiresOutstation && !outstationByEmp[String(emp._id)].verified) {
       add('expenseType', 'OUTSTATION_REQUIRED', isNormal
         ? `Attendance does not show outstation duty${singleEmp ? '' : ` for ${empLabel(emp)}`} on ${formatDate(start)}. ${typeName} can only be claimed for outstation days.`
@@ -917,24 +1188,13 @@ async function evaluateBusinessRules({ companyId, input, typeConfig, employees, 
 
   const anchor = outstation.verified && outstation.returnDate && outstation.returnDate > end ? outstation.returnDate : end;
   const deadline = evaluateDeadline({ deadlineRules: policyConfig.deadlineRules, anchor, stillAway: outstation.verified && outstation.stillAway, now });
-  let deadlineOverridden = false;
-  if (deadline.expired) {
-    if (actorIsSuperAdmin && policyConfig.claimRules.deadlineOverrideAllowed) {
-      deadlineOverridden = true;
-      deadline.warnings.push(`Submission period ended on ${formatDate(parseDateOnly(deadline.claimEligibleUntil))}; submitted with Super Admin override.`);
-    } else {
-      add('claimDate', 'CLAIM_EXPIRED', 'Your expense claim submission period has expired.', {
-        hint: policyConfig.claimRules.deadlineOverrideAllowed ? 'Please contact Super Admin for an override.' : '',
-      });
-    }
-  }
 
   return {
     errors,
     outstation: { verified: outstation.verified, days: outstation.days, returnDate: outstation.returnDate },
     claimEligibleUntil: deadline.claimEligibleUntil,
     deadlineWarnings: deadline.warnings,
-    deadlineOverridden,
+    deadlineOverridden: false,
   };
 }
 
@@ -959,8 +1219,8 @@ function computeLodgingPolicyLimit({ empLimits, ordered, policy, days }) {
       ruleCode: 'SINGLE_EMPLOYEE',
       ruleDescription: 'Single employee stay budget (100% individual category entitlement)',
       formula: days > 1
-        ? `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/day × ${days} days = ${formatINR(lim)}`
-        : `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/day`,
+        ? `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/night × ${days} nights = ${formatINR(lim)}`
+        : `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/night`,
     };
   }
 
@@ -1114,16 +1374,226 @@ function computeLodgingPolicyLimit({ empLimits, ordered, policy, days }) {
   }
 }
 
+/** Snapshot of the resolved Travel Mode / Subtype stored on each TRAVEL item (history-safe). */
+function travelItemFields(entry) {
+  const t = entry?.travel;
+  if (!t) return {};
+  return {
+    travelModeId: t.modeId,
+    travelModeCode: t.modeCode,
+    travelModeName: t.modeName,
+    travelSubtypeId: t.subtypeId || null,
+    travelSubtypeCode: t.subtypeCode || '',
+    travelSubtypeName: t.subtypeName || '',
+    travelWorkflow: t.workflow,
+    startKm: t.workflow === 'KM_RATE' ? t.startKm : null,
+    endKm: t.workflow === 'KM_RATE' ? t.endKm : null,
+    ratePerKm: t.workflow === 'KM_RATE' ? t.ratePerKm : 0,
+    mode: t.subtypeName ? `${t.modeName} - ${t.subtypeName}` : t.modeName,
+  };
+}
+
+/** Apply the Level Entitlement of the selected mode / subtype to one employee's share. */
+function applyTravelToCalc(calc, entry, share, { travelEntitlements, levelNumber, gradeCode, destinationClass, totalEntryRequested, employeeCount = 1 }) {
+  const hasFallbackTravel = Boolean(
+    entry?.travelModeId || entry?.travelModeCode || entry?.travelSubtypeId || entry?.travelSubtypeCode
+  );
+  const t = entry?.travel || (hasFallbackTravel ? {
+    modeId: entry.travelModeId || '',
+    modeCode: entry.travelModeCode || '',
+    modeName: entry.travelModeName || entry.travelModeCode || 'Travel',
+    subtypeId: entry.travelSubtypeId || null,
+    subtypeCode: entry.travelSubtypeCode || '',
+    subtypeName: entry.travelSubtypeName || entry.travelSubtypeCode || '',
+    workflow: entry.travelWorkflow === 'KM_RATE' ? 'KM_RATE' : 'STANDARD',
+    distanceKm: Number(entry.distanceKm || 0),
+    ratePerKm: Number(entry.ratePerKm || 0),
+    startKm: entry.startKm ?? null,
+    endKm: entry.endKm ?? null,
+  } : null);
+  if (!t) return calc;
+  const label = t.subtypeName || t.modeName;
+  const ent = travelPolicy.resolveTravelEntitlement(travelEntitlements, {
+    levelNumber,
+    gradeCode,
+    cityClass: destinationClass,
+    modeId: t.modeId,
+    modeCode: t.modeCode,
+    subtypeId: t.subtypeId,
+    subtypeCode: t.subtypeCode,
+    requiresSubtype: Boolean(t.subtypeId || t.subtypeCode),
+  });
+  const r = travelPolicy.applyTravelEntitlement(share, ent, { label, levelNumber });
+  const totalKmAmt = round2(totalEntryRequested !== undefined ? totalEntryRequested : share);
+  const kmText = t.workflow === 'KM_RATE'
+    ? (employeeCount > 1
+      ? ` (${t.distanceKm} km × ${formatINR(t.ratePerKm)}/km = ${formatINR(totalKmAmt)}, share ${formatINR(share)})`
+      : ` (${t.distanceKm} km × ${formatINR(t.ratePerKm)}/km)`)
+    : '';
+  let explanation;
+  if (r.status === 'NOT_CONFIGURED') explanation = `${label}${kmText}: claimed ${formatINR(share)} is allowed (no travel entitlement is configured in the policy).`;
+  else if (r.status === 'NOT_ENTITLED') explanation = `${label}${kmText}: claimed ${formatINR(share)}. ${r.excessReason} Allowed ${formatINR(0)}, excess ${formatINR(r.excess)}.`;
+  else if (r.status === 'ACTUALS') explanation = `${label}${kmText}: claimed ${formatINR(share)} is fully allowed (actuals as per your entitlement).`;
+  else if (r.excess > 0) explanation = `${label}${kmText}: entitlement ${formatINR(r.policyLimit)}, claimed ${formatINR(share)}. Therefore ${formatINR(r.allowed)} is allowed and ${formatINR(r.excess)} is excess.`;
+  else explanation = `${label}${kmText}: entitlement ${formatINR(r.policyLimit)}, claimed ${formatINR(share)} is fully allowed.`;
+
+  calc.requestedAmount = round2(share);
+  calc.allowedAmount = r.allowed;
+  calc.excessAmount = r.excess;
+  calc.policyLimit = r.policyLimit;
+  calc.limitText = r.limitText;
+  calc.ruleCode = `TRAVEL_${r.status}`;
+  calc.formula = r.status === 'NOT_ENTITLED' ? 'Not entitled -> allowed 0' : (r.status === 'PARTIAL' || r.status === 'ENTITLED' ? 'MIN(claimed, entitlement)' : 'Actuals');
+  calc.plainExplanation = explanation;
+  calc.entitlementStatus = r.status;
+  calc.excessReason = r.excessReason;
+  const kmShareSuffix = employeeCount > 1 ? ` (Employee share: ${formatINR(share)})` : '';
+  const kmStep = t.workflow === 'KM_RATE'
+    ? (t.startKm !== null && t.endKm !== null
+      ? `Distance ${t.endKm} − ${t.startKm} = ${t.distanceKm} km × ${formatINR(t.ratePerKm)}/km = ${formatINR(totalKmAmt)}${kmShareSuffix}`
+      : `Distance ${t.distanceKm} km × ${formatINR(t.ratePerKm)}/km = ${formatINR(totalKmAmt)}${kmShareSuffix}`)
+    : null;
+  calc.calculationBreakdown = {
+    ...(calc.calculationBreakdown || {}),
+    rule: calc.ruleCode,
+    travelMode: t.modeName,
+    travelSubtype: t.subtypeName || null,
+    workflow: t.workflow,
+    distanceKm: t.workflow === 'KM_RATE' ? t.distanceKm : undefined,
+    ratePerKm: t.workflow === 'KM_RATE' ? t.ratePerKm : undefined,
+    levelNumber,
+    gradeCode,
+    cityClass: destinationClass,
+    entitlementRowId: ent.row?._id ? String(ent.row._id) : null,
+    entitlementMax: ent.maxAmount ?? null,
+    entitlementStatus: r.status,
+    policyLimit: r.policyLimit,
+    requestedAmount: round2(share),
+    allowedAmount: r.allowed,
+    excessAmount: r.excess,
+    excessReason: r.excessReason,
+    plainExplanation: explanation,
+    steps: [
+      ...(kmStep ? [kmStep] : []),
+      explanation,
+    ],
+  };
+  return calc;
+}
+
+/**
+ * Food section of a Lodging claim: inclusive food days, shared date-wise entitlement.
+ * foodRows[i] = [{ date, dailyLimit, priorConsumed }] for ordered[i] (prepared by the controller
+ * from the policy in force on each date and the consumption of every other claim).
+ */
+function calculateLodgingFood({ input, ordered, foodRows, destinationClass }) {
+  const entries = input.foodEntries || [];
+  const requested = round2(entries.reduce((s, e) => s + (Number(e.requestedAmount) || 0), 0));
+  const fDays = daysBetween(input.fromDate, input.toDate);
+  const alloc = food.allocateFood({ requested, employees: ordered.map((_, i) => ({ rows: (foodRows && foodRows[i]) || [] })) });
+  const entriesOut = food.allocateEntries(entries, alloc.allowed);
+  const receipts = entries.flatMap((e) => e.receipts || []);
+  const describeDates = (rows) => rows.filter((r) => r.priorConsumed > 0)
+    .map((r) => `${formatDate(r.date)}: ${formatINR(r.priorConsumed)}`).join(', ');
+
+  const items = ordered.map((emp, i) => {
+    const a = alloc.employees[i];
+    const perDay = a.dailyAllocations.length ? a.dailyAllocations[0].dailyLimit : 0;
+    const uniform = a.dailyAllocations.every((r) => r.dailyLimit === perDay);
+    const entText = uniform
+      ? `${fDays} day${fDays === 1 ? '' : 's'} × ${formatINR(perDay)} = ${formatINR(a.entitlement)}`
+      : `${fDays} day${fDays === 1 ? '' : 's'} (date-wise rates) = ${formatINR(a.entitlement)}`;
+    const priorText = a.priorConsumed > 0
+      ? ` Already claimed for overlapping dates in other claims: ${formatINR(a.priorConsumed)} (${describeDates(a.dailyAllocations)}). Remaining: ${formatINR(a.remainingBefore)}.`
+      : '';
+    const outcome = a.excess > 0
+      ? `Claimed ${formatINR(a.requested)} -> ${formatINR(a.allowed)} allowed, ${formatINR(a.excess)} excess beyond the remaining food entitlement.`
+      : `Claimed ${formatINR(a.requested)} is fully allowed.`;
+    const plainExplanation = `Food entitlement: ${entText}.${priorText} ${outcome}`;
+    return {
+      expenseType: 'FOOD',
+      expenseTypeName: 'Food',
+      customerName: input.customerName,
+      description: entries.map((e) => e.remark).filter(Boolean).join('; ') || input.remark,
+      expenseDate: input.fromDate,
+      city: input.destinationCity,
+      cityClass: destinationClass,
+      days: fDays,
+      foodDays: fDays,
+      requestedAmount: a.requested,
+      allowedAmount: a.allowed,
+      excessAmount: a.excess,
+      policyLimit: a.entitlement,
+      perDayLimit: uniform ? perDay : 0,
+      priorAllowedOnDate: a.priorConsumed,
+      remainingLimit: a.remainingAfter,
+      limitText: uniform ? `${formatINR(perDay)}/day × ${fDays} day${fDays === 1 ? '' : 's'}` : `${formatINR(a.entitlement)} (${fDays} days)`,
+      ruleCode: a.priorConsumed > 0 ? 'FOOD_SHARED_ENTITLEMENT_REDUCED' : 'FOOD_SHARED_ENTITLEMENT',
+      formula: 'MIN(claimed, Σ max(0, daily limit − already claimed))',
+      plainExplanation,
+      proofRequired: false,
+      proofStatus: receipts.length ? 'RECEIVED' : 'MISSING',
+      attachments: i === 0 ? receipts : [],
+      dailyAllocations: a.dailyAllocations.map((r) => ({ date: r.date, dailyLimit: r.dailyLimit, priorConsumed: r.priorConsumed, allowed: r.allowed })),
+      calculationBreakdown: {
+        rule: 'FOOD_SHARED_ENTITLEMENT',
+        foodDays: fDays,
+        entitlement: a.entitlement,
+        priorConsumed: a.priorConsumed,
+        remainingBefore: a.remainingBefore,
+        requestedAmount: a.requested,
+        allowedAmount: a.allowed,
+        excessAmount: a.excess,
+        plainExplanation,
+        perDate: a.dailyAllocations.map((r) => ({ date: food.dateKey(r.date), dailyLimit: r.dailyLimit, priorConsumed: r.priorConsumed, remaining: r.remaining, allowed: r.allowed })),
+      },
+    };
+  });
+
+  const perDate = {};
+  alloc.employees.forEach((a) => a.dailyAllocations.forEach((r) => {
+    const k = food.dateKey(r.date);
+    const p = perDate[k] || (perDate[k] = { date: k, dailyLimit: 0, priorConsumed: 0, remaining: 0, allowed: 0 });
+    p.dailyLimit = round2(p.dailyLimit + r.dailyLimit);
+    p.priorConsumed = round2(p.priorConsumed + r.priorConsumed);
+    p.remaining = round2(p.remaining + r.remaining);
+    p.allowed = round2(p.allowed + r.allowed);
+  }));
+
+  return {
+    items,
+    foodEntries: entriesOut,
+    summary: {
+      foodDays: fDays,
+      requested: alloc.requested,
+      allowed: alloc.allowed,
+      excess: alloc.excess,
+      entitlement: alloc.entitlement,
+      priorConsumed: alloc.priorConsumed,
+      remainingBefore: alloc.remainingBefore,
+      remainingAfter: alloc.remainingAfter,
+      perDate: Object.values(perDate).sort((x, y) => (x.date < y.date ? -1 : 1)),
+    },
+  };
+}
+
 /**
  * Build employeeClaims[] + grand totals. One item per employee keeps the
  * existing analytics/reports working. Lodging with 2+ employees uses the
  * official tiered lodging rules (1, 2, 3, 4+ employees).
+ *
+ * foodContext (prepared by the controller from the shared food entitlement service):
+ *   normalPrior: { [employeeId]: amount already consumed on claimDate by other claims }
+ *   daily:       { [employeeId]: [{ date, dailyLimit, priorConsumed }] }  (lodging Food section)
+ * travelEntitlements: active TRAVEL Level Entitlement rows of the policy.
  */
-async function calculateAmounts({ input, typeConfig, employees, policy, entitlements, destinationClass, actor, allTypes = [] }) {
+async function calculateAmounts({ input, typeConfig, employees, policy, entitlements, destinationClass, actor, allTypes = [], foodContext = null, travelEntitlements = [] }) {
   const code = typeConfig ? typeConfig.code : (input.expenseType || 'OTHER');
   const isLodgingMode = input.claimMode === 'LODGING';
   const isLodging = isLodgingMode && (code === 'LODGING' || typeConfig?.category === 'LODGING');
-  const days = isLodgingMode ? daysBetween(input.fromDate, input.toDate) : 1;
+  // Lodging is calculated by NIGHTS (checkout - checkin); Food by inclusive days (see calculateLodgingFood).
+  const days = isLodgingMode ? nightsBetween(input.fromDate, input.toDate) : 1;
+  const zeroNights = isLodgingMode && days === 0;
   const ordered = [...employees].sort((a, b) => (String(a._id) === String(actor) ? -1 : String(b._id) === String(actor) ? 1 : 0));
   const shared = isLodging && ordered.length >= 2;
 
@@ -1140,8 +1610,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     }
 
     const employeeItems = ordered.map(() => []);
-    const priorAllowedPerEmp = ordered.map(() => ({}));
-    const priorClaimedPerEmp = ordered.map(() => ({}));
+    // Shared food entitlement: food already consumed on this date by OTHER claims (normal Food
+    // claims, Lodging + Food claims, ...) is the starting point of the daily budget.
+    const otherClaimsFood = ordered.map((emp) => round2(Number(foodContext?.normalPrior?.[String(emp._id)]) || 0));
+    const priorAllowedPerEmp = ordered.map((_, i) => (otherClaimsFood[i] > 0 ? { FOOD: otherClaimsFood[i] } : {}));
+    const priorClaimedPerEmp = ordered.map((_, i) => (otherClaimsFood[i] > 0 ? { FOOD: otherClaimsFood[i] } : {}));
     const entryIndexByType = {};
 
     for (let eIdx = 0; eIdx < input.entries.length; eIdx++) {
@@ -1248,10 +1721,14 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         const gradeCode = getEmployeeGradeCode(emp);
 
         const isEntryOther = entryCode === 'OTHER';
-        const isEntryPurchase = isEntryOther && ((entry.otherSubType || '').toUpperCase() === 'PURCHASE');
+        const isEntryPurchase = entryCode === 'STOCK_PURCHASE' || (isEntryOther && ((entry.otherSubType || '').toUpperCase() === 'PURCHASE'));
+        // Own Vehicle travel re-uses the Local Conveyance proofs (distance + photos)
+        const isKmEntry = entryCode === 'CONVEYANCE' || (entryCode === 'TRAVEL' && entry.travel?.workflow === 'KM_RATE');
         const item = {
           expenseType: entryCode,
-          expenseTypeName: isEntryPurchase ? 'Purchase' : (entryTypeConfig?.name || (isEntryOther ? 'Other Expense' : entryCode)),
+          expenseTypeName: entryCode === 'STOCK_PURCHASE'
+            ? (entryTypeConfig?.name || 'Stock Purchase')
+            : (isEntryPurchase ? 'Purchase' : (entryTypeConfig?.name || (isEntryOther ? 'Other Expense' : entryCode))),
           customerName: input.customerName,
           description: entry.remark || input.remark,
           expenseDate: input.claimDate,
@@ -1262,17 +1739,19 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           proofRequired: entryTypeConfig?.proofRequired === true,
           proofStatus: entryReceipts.length ? 'RECEIVED' : 'MISSING',
           vehicle: entryCode === 'CONVEYANCE' ? (entry.vehicle || '') : '',
-          distanceKm: entryCode === 'CONVEYANCE' ? Number(entry.distanceKm || 0) : 0,
+          distanceKm: isKmEntry ? Number(entry.distanceKm || 0) : 0,
           visitType: (entry.visitType === 'VISIT' || entry.isVisit || input.visitType === 'VISIT' || input.isVisit) ? 'VISIT' : 'NO_VISIT',
           isVisit: Boolean(entry.isVisit || entry.visitType === 'VISIT' || input.isVisit || input.visitType === 'VISIT'),
-          numberPlatePhotos: entryCode === 'CONVEYANCE' ? (entry.numberPlatePhotos || []) : [],
-          startKmPhotos: entryCode === 'CONVEYANCE' ? (entry.startKmPhotos || []) : [],
-          endKmPhotos: entryCode === 'CONVEYANCE' ? (entry.endKmPhotos || []) : [],
+          numberPlatePhotos: isKmEntry ? (entry.numberPlatePhotos || []) : [],
+          startKmPhotos: isKmEntry ? (entry.startKmPhotos || []) : [],
+          endKmPhotos: isKmEntry ? (entry.endKmPhotos || []) : [],
           serviceReports: entryCode === 'CONVEYANCE' ? (entry.serviceReports || []) : [],
-          otherSubType: isEntryOther ? (entry.otherSubType || '') : '',
+          otherSubType: isEntryOther ? (entry.otherSubType || 'NORMAL') : '',
+          materialName: isEntryPurchase ? toStr(entry.materialName, 200).trim() : '',
           barcodeNumber: isEntryPurchase ? (entry.barcodeNumber || '') : '',
           quantity: isEntryPurchase ? toStr(entry.quantity, 100).trim() : '',
           attachments: entryCode === 'CONVEYANCE' ? [] : entryReceipts,
+          ...(entryCode === 'TRAVEL' ? travelItemFields(entry) : {}),
         };
 
         const itemDateStr = typeof item.expenseDate === 'string'
@@ -1294,6 +1773,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           itemDate: itemDateStr,
           priorAllowedOnDate: priorAllowed,
           priorClaimedOnDate: priorClaimed,
+          priorOtherClaims: entryCode === 'FOOD' ? otherClaimsFood[i] : 0,
           sameDateEntryIndex: currentTypeIndex,
           sameDateEntriesCount: currentTypeCount,
         });
@@ -1319,6 +1799,28 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           calc.excessAmount = 0;
         }
 
+        // TRAVEL: Level Entitlements decide the allowed part of the selected mode / subtype
+        if (entryCode === 'TRAVEL') {
+          applyTravelToCalc(calc, entry, reqShares[i], {
+            travelEntitlements,
+            levelNumber,
+            gradeCode,
+            destinationClass,
+            totalEntryRequested: entryReq,
+            employeeCount: ordered.length,
+          });
+        }
+        // FOOD: record the date-wise use of the shared daily entitlement
+        if (entryCode === 'FOOD' && input.claimDate) {
+          calc.foodDays = 1;
+          calc.dailyAllocations = [{
+            date: input.claimDate,
+            dailyLimit: round2(calc.policyLimit || 0),
+            priorConsumed: round2(priorAllowed),
+            allowed: round2(calc.allowedAmount || 0),
+          }];
+        }
+
         if (isCombinedLimitType) {
           priorAllowedPerEmp[i][entryCode] = round2(priorAllowed + (calc.allowedAmount || 0));
           priorClaimedPerEmp[i][entryCode] = round2(priorClaimed + reqShares[i]);
@@ -1327,10 +1829,41 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         employeeItems[i].push({ ...item, ...calc });
       }
 
-      const entryAllowedTotal = round2(ordered.reduce((s, _, i) => s + (Number(employeeItems[i][eIdx]?.allowedAmount) || 0), 0));
-      const entryExcessTotal = round2(ordered.reduce((s, _, i) => s + (Number(employeeItems[i][eIdx]?.excessAmount) || 0), 0));
+      const allItemsForEntry = ordered.map((_, i) => employeeItems[i]?.[eIdx]).filter(Boolean);
+      const entryAllowedTotal = round2(allItemsForEntry.reduce((s, it) => s + (Number(it.allowedAmount) || 0), 0));
+      const entryExcessTotal = round2(allItemsForEntry.reduce((s, it) => s + (Number(it.excessAmount) || 0), 0));
+      const entryPolicyLimitTotal = round2(allItemsForEntry.reduce((s, it) => s + (Number(it.policyLimit) || 0), 0));
+      const firstCalc = allItemsForEntry[0] || {};
       entry.allowedAmount = entryAllowedTotal;
       entry.excessAmount = entryExcessTotal;
+      entry.policyLimit = entryPolicyLimitTotal;
+
+      if (entryCode === 'TRAVEL' && ordered.length > 1) {
+        const hasConfigured = allItemsForEntry.some((it) => it.entitlementStatus && it.entitlementStatus !== 'NOT_CONFIGURED');
+        if (!hasConfigured) {
+          entry.entitlementStatus = firstCalc.entitlementStatus || 'NOT_CONFIGURED';
+        } else if (entryAllowedTotal === 0 && entryReq > 0) {
+          entry.entitlementStatus = 'NOT_ENTITLED';
+        } else if (entryExcessTotal > 0) {
+          entry.entitlementStatus = 'PARTIAL';
+        } else if (allItemsForEntry.every((it) => it.entitlementStatus === 'ACTUALS')) {
+          entry.entitlementStatus = 'ACTUALS';
+        } else {
+          entry.entitlementStatus = 'ENTITLED';
+        }
+        const distinctReasons = [...new Set(allItemsForEntry.map((it) => it.excessReason).filter(Boolean))];
+        entry.excessReason = distinctReasons.join('; ');
+        const distinctLimits = [...new Set(allItemsForEntry.map((it) => it.limitText).filter(Boolean))];
+        entry.limitText = distinctLimits.length === 1
+          ? distinctLimits[0]
+          : (entry.entitlementStatus === 'NOT_ENTITLED' ? 'Not Entitled' : formatINR(entryPolicyLimitTotal));
+        entry.plainExplanation = ordered.map((emp, i) => `• ${emp.name || `Employee #${i + 1}`}: ${allItemsForEntry[i]?.plainExplanation || ''}`).join('\n');
+      } else {
+        entry.limitText = firstCalc.limitText || '';
+        entry.entitlementStatus = firstCalc.entitlementStatus || '';
+        entry.excessReason = firstCalc.excessReason || '';
+        entry.plainExplanation = firstCalc.plainExplanation || '';
+      }
     }
 
     for (let i = 0; i < ordered.length; i++) {
@@ -1352,7 +1885,10 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
             empPolicyLimitTotal = round2(empPolicyLimitTotal + dailyCap);
           }
         } else {
-          const itemCap = (it.policyLimit && it.policyLimit > 0) ? it.policyLimit : (it.allowedAmount || it.requestedAmount || 0);
+          // TRAVEL with a resolved entitlement: the entitlement limit (even 0) is the policy limit
+          const itemCap = it.entitlementStatus && it.entitlementStatus !== 'NOT_CONFIGURED'
+            ? (Number(it.policyLimit) || 0)
+            : ((it.policyLimit && it.policyLimit > 0) ? it.policyLimit : (it.allowedAmount || it.requestedAmount || 0));
           empPolicyLimitTotal = round2(empPolicyLimitTotal + itemCap);
         }
       }
@@ -1392,9 +1928,15 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     if (input.entries.length === 1 && ordered.length === 1) {
       plainExplanation = firstEmpItems[0]?.plainExplanation || '';
     } else if (input.entries.length === 1 && ordered.length > 1) {
-      const entryType = input.entries[0]?.expenseType || code;
+      const entry0 = input.entries[0] || {};
+      const entryType = entry0.expenseType || code;
       const isComb = entryType === 'FOOD' || entryType === 'LODGING';
-      if (!isComb) {
+      const anyTravelEntitlement = entryType === 'TRAVEL' && employeeClaims.some((ec) => ec.items[0]?.entitlementStatus && ec.items[0].entitlementStatus !== 'NOT_CONFIGURED');
+      const isTravelKm = entryType === 'TRAVEL' && (entry0.travel?.workflow === 'KM_RATE' || entry0.travelWorkflow === 'KM_RATE');
+      if (anyTravelEntitlement || isTravelKm) {
+        plainExplanation = employeeClaims.map((ec) => `• ${ec.employee.name}: ${ec.items[0]?.plainExplanation || ''}`).join('\n')
+          + `\n\nTotal: Claimed ${formatINR(grandRequested)} | Allowed ${formatINR(grandAllowed)}${grandExcess > 0 ? ` | Excess ${formatINR(grandExcess)}` : ''}.`;
+      } else if (!isComb) {
         plainExplanation = `Claimed bill: ${formatINR(grandRequested)}. All payment of ${formatINR(grandAllowed)} is fully allowed across ${ordered.length} employees (${formatINR(round2(grandAllowed / ordered.length))} each).`;
       } else {
         const empLines = ordered.map((emp) => {
@@ -1404,7 +1946,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           const cap = (ent && ent.amount > 0) ? ent.amount : 0;
           return cap > 0 ? `${emp.name}: ${formatINR(cap)}/day` : `${emp.name}: Actuals`;
         });
-        const combinedLimitText = `Combined daily limit: ${formatINR(grandPolicyLimit)}`;
+        const totalPriorFood = round2(otherClaimsFood.reduce((s, v) => s + v, 0));
+        const remCombinedBefore = Math.max(0, round2(grandPolicyLimit - totalPriorFood));
+        const combinedLimitText = totalPriorFood > 0 && entryType === 'FOOD'
+          ? `Combined daily limit: ${formatINR(grandPolicyLimit)}. Previously claimed on this date: -${formatINR(totalPriorFood)}. Remaining daily limit: ${formatINR(remCombinedBefore)}`
+          : `Combined daily limit: ${formatINR(grandPolicyLimit)}`;
         if (grandExcess > 0) {
           plainExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Therefore, ${formatINR(grandAllowed)} is allowed and ${formatINR(grandExcess)} is excess beyond policy limit.`;
         } else {
@@ -1423,9 +1969,14 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         const it = firstEmpItems[idx];
         const priorAllowedForType = runningPriorAllowed[entryCode] || 0;
         const isComb = entryCode === 'FOOD' || entryCode === 'LODGING';
+        const hasTravelEnt = entryCode === 'TRAVEL' && employeeClaims.some((ec) => ec.items[idx]?.entitlementStatus && ec.items[idx].entitlementStatus !== 'NOT_CONFIGURED');
 
         let resultLine = '';
-        if (!isComb) {
+        if (hasTravelEnt) {
+          const label = it?.travelSubtypeName || it?.travelModeName || entry.travelSubtypeName || entry.travelModeName || entryName;
+          const reasonStr = entry.excessReason || it?.excessReason || '';
+          resultLine = `Entry #${idx + 1} (${entryName} - ${label}):\n• Claimed: ${formatINR(entryReq)} -> Allowed: ${formatINR(entryAllowed)}${entryExcess > 0 ? `, Excess: ${formatINR(entryExcess)}` : ''}${reasonStr ? `\n• ${reasonStr}` : ''}`;
+        } else if (!isComb) {
           // For CONVEYANCE, TRAVEL, OTHER: no combined limit values, directly show all payment is allowed
           resultLine = `Entry #${idx + 1} (${entryName}):\n• Claimed: ${formatINR(entryReq)} -> Allowed: ${formatINR(entryAllowed)} (All payment allowed - no limit cap)`;
         } else if (ordered.length > 1) {
@@ -1533,13 +2084,25 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     relativeStayPercent = resolveRelativeStayPercent(policy);
     if (relativeStayPercent === null) throw new Error('Relative stay allowance percentage is not configured in the expense policy.');
   }
-  const lodgingResult = relativeStay
-    ? computeRelativeStayPolicyLimit({ empLimits, ordered, days, percent: relativeStayPercent })
-    : baseLodgingResult;
+  // Same-day stay (0 nights): no lodging allowance at all — only the Food section can be claimed.
+  const zeroNightResult = {
+    totalPolicyLimit: 0,
+    effectiveLimits: ordered.map(() => 0),
+    baseEffectiveLimits: ordered.map(() => 0),
+    baseTotalPolicyLimit: 0,
+    ruleCode: 'ZERO_NIGHTS',
+    ruleDescription: 'Same-day check-in and check-out: 0 lodging nights',
+    formula: '0 lodging nights (same-day check-in and check-out): no lodging allowance',
+  };
+  const lodgingResult = isLodging && zeroNights
+    ? zeroNightResult
+    : (relativeStay
+      ? computeRelativeStayPolicyLimit({ empLimits, ordered, days, percent: relativeStayPercent })
+      : baseLodgingResult);
 
   const totalPolicyLimit = lodgingResult.totalPolicyLimit;
   // Stay with relative: claimed amount = final entitlement (no bill amount is entered)
-  const reqTotal = relativeStay ? lodgingResult.totalPolicyLimit : round2(input.requestedAmount || 0);
+  const reqTotal = isLodging && zeroNights ? 0 : (relativeStay ? lodgingResult.totalPolicyLimit : round2(input.requestedAmount || 0));
   const potentialExcess = isComb ? Math.max(0, round2(reqTotal - totalPolicyLimit)) : 0;
 
   // In multi-employee claims (lodging or food with 2+ employees):
@@ -1574,10 +2137,10 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     const gradeCode = getEmployeeGradeCode(emp);
     const items = [];
     const isOtherCode = code === 'OTHER';
-    const isPurchaseCode = isOtherCode && ((input.entries?.[0]?.otherSubType || input.otherSubType || '').toUpperCase() === 'PURCHASE');
+    const isPurchaseCode = code === 'STOCK_PURCHASE' || (isOtherCode && ((input.entries?.[0]?.otherSubType || input.otherSubType || '').toUpperCase() === 'PURCHASE'));
     const item = {
       expenseType: code,
-      expenseTypeName: isPurchaseCode ? 'Purchase' : typeConfig.name,
+      expenseTypeName: code === 'STOCK_PURCHASE' ? (typeConfig?.name || 'Stock Purchase') : (isPurchaseCode ? 'Purchase' : typeConfig.name),
       customerName: input.customerName,
       description: input.remark,
       expenseDate: isLodgingMode ? input.fromDate : input.claimDate,
@@ -1595,7 +2158,8 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       startKmPhotos: code === 'CONVEYANCE' ? (input.entries?.[0]?.startKmPhotos || []) : [],
       endKmPhotos: code === 'CONVEYANCE' ? (input.entries?.[0]?.endKmPhotos || []) : [],
       serviceReports: code === 'CONVEYANCE' ? (input.entries?.[0]?.serviceReports || input.serviceReports || []) : [],
-      otherSubType: isOtherCode ? (input.entries?.[0]?.otherSubType || input.otherSubType || '') : '',
+      otherSubType: isOtherCode ? (input.entries?.[0]?.otherSubType || input.otherSubType || 'NORMAL') : '',
+      materialName: isPurchaseCode ? toStr(input.entries?.[0]?.materialName || input.materialName, 200).trim() : '',
       barcodeNumber: isPurchaseCode ? (input.entries?.[0]?.barcodeNumber || input.barcodeNumber || '') : '',
       quantity: isPurchaseCode ? toStr(input.entries?.[0]?.quantity || input.quantity, 100).trim() : '',
     };
@@ -1644,9 +2208,26 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         excessAmount: calc.excessAmount,
         steps: [
           ...((calc.calculationBreakdown && calc.calculationBreakdown.steps) || []),
-          `Stay with relative: ${relativeStayPercent}% × base entitlement ${formatINR(baseLimit)} = ${formatINR(finalLimit)} -> MIN(${formatINR(shares[i])}, ${formatINR(finalLimit)}) = ${formatINR(calc.allowedAmount)}`,
+          `Stay at relative: ${relativeStayPercent}% × base entitlement ${formatINR(baseLimit)} = ${formatINR(finalLimit)} -> MIN(${formatINR(shares[i])}, ${formatINR(finalLimit)}) = ${formatINR(calc.allowedAmount)}`,
         ],
       };
+    }
+
+    // Same-day stay: 0 lodging nights -> lodging allowance is zero (food is calculated separately)
+    if (isLodging && zeroNights) {
+      Object.assign(calc, {
+        policyLimit: 0,
+        requestedAmount: 0,
+        allowedAmount: 0,
+        excessAmount: 0,
+        remainingLimit: 0,
+        perDayLimit: 0,
+        ruleCode: 'ZERO_NIGHTS',
+        formula: zeroNightResult.formula,
+        limitText: '0 nights',
+        plainExplanation: 'Check-in and check-out are on the same date (0 lodging nights), so no lodging allowance applies.',
+      });
+      calc.calculationBreakdown = { rule: 'ZERO_NIGHTS', nights: 0, plainExplanation: calc.plainExplanation, steps: [zeroNightResult.formula] };
     }
 
     items.push({ ...item, ...calc });
@@ -1688,15 +2269,15 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     : grandRequested;
 
   // If shared claim with pooled limits, update explanation on the primary item
-  if ((isMultiEmpShared || (relativeStay && ordered.length >= 2)) && employeeClaims[0]?.items?.[0]) {
+  if (!zeroNights && (isMultiEmpShared || (relativeStay && ordered.length >= 2)) && employeeClaims[0]?.items?.[0]) {
     const empLines = ordered.map((e, idx) => {
       const perDay = days > 0 ? round2(empLimits[idx] / days) : empLimits[idx];
       if (relativeStay) {
         const effLimit = lodgingResult.effectiveLimits[idx];
         const effPerDay = days > 0 ? round2(effLimit / days) : effLimit;
         return days > 1
-          ? `${e.name || `Employee #${idx + 1}`}: ${formatINR(effPerDay)}/day (Total: ${formatINR(effLimit)} for ${days} days, ${relativeStayPercent}% of ${formatINR(perDay)}/day)`
-          : `${e.name || `Employee #${idx + 1}`}: ${formatINR(effPerDay)}/day (${relativeStayPercent}% of ${formatINR(perDay)}/day)`;
+          ? `${e.name || `Employee #${idx + 1}`}: ${formatINR(effPerDay)}/night (Total: ${formatINR(effLimit)} for ${days} nights, ${relativeStayPercent}% of ${formatINR(perDay)}/night)`
+          : `${e.name || `Employee #${idx + 1}`}: ${formatINR(effPerDay)}/night (${relativeStayPercent}% of ${formatINR(perDay)}/night)`;
       }
       let tag = '';
       if (ordered.length === 2 && lodgingResult.meta) {
@@ -1709,12 +2290,12 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         else if (idx === lodgingResult.meta.middleIdx) tag = ' (Middle)';
       }
       return days > 1
-        ? `${e.name || `Employee #${idx + 1}`}: ${formatINR(perDay)}/day (Total: ${formatINR(empLimits[idx])} for ${days} days)${tag}`
-        : `${e.name || `Employee #${idx + 1}`}: ${formatINR(perDay)}/day${tag}`;
+        ? `${e.name || `Employee #${idx + 1}`}: ${formatINR(perDay)}/night (Total: ${formatINR(empLimits[idx])} for ${days} nights)${tag}`
+        : `${e.name || `Employee #${idx + 1}`}: ${formatINR(perDay)}/night${tag}`;
     });
 
     const combinedLimitText = isLodging
-      ? `Combined Whole Claim Limit: ${formatINR(grandPolicyLimit)} (${days} day${days > 1 ? 's' : ''})`
+      ? `Combined Whole Claim Limit: ${formatINR(grandPolicyLimit)} (${days} night${days > 1 ? 's' : ''})`
       : `Combined daily limit: ${formatINR(grandPolicyLimit)}`;
 
     let combinedExplanation = '';
@@ -1725,13 +2306,13 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     const formulaPrefix = (isLodging && lodgingResult.formula) ? `${lodgingResult.formula}.\n\n` : '';
 
     if (grandExcess > 0) {
-      combinedExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${formulaPrefix}${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Therefore, ${formatINR(grandAllowed)} is allowed and ${formatINR(grandExcess)} is excess beyond policy limit${perEmpExcessText}.`;
+      combinedExplanation = `Individual limits per night:\n• ${empLines.join('\n• ')}\n\n${formulaPrefix}${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Therefore, ${formatINR(grandAllowed)} is allowed and ${formatINR(grandExcess)} is excess beyond policy limit${perEmpExcessText}.`;
     } else {
-      combinedExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${formulaPrefix}${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Since your bill is within your ${isLodging ? 'combined whole claim limit' : 'combined daily limit'}, ${formatINR(grandAllowed)} is fully allowed.`;
+      combinedExplanation = `Individual limits per night:\n• ${empLines.join('\n• ')}\n\n${formulaPrefix}${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Since your bill is within your ${isLodging ? 'combined whole claim limit' : 'combined daily limit'}, ${formatINR(grandAllowed)} is fully allowed.`;
     }
 
     if (relativeStay) {
-      combinedExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${formulaPrefix}${combinedLimitText}.\n\nStay with relative: no hotel bill required. ${formatINR(grandAllowed)} is allowed.`;
+      combinedExplanation = `Individual limits per night:\n• ${empLines.join('\n• ')}\n\n${formulaPrefix}${combinedLimitText}.\n\nStay at relative: no hotel bill required. ${formatINR(grandAllowed)} is allowed.`;
     }
 
     const combinedFormula = lodgingResult.formula;
@@ -1743,43 +2324,44 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         ec.items[0].perDayLimit = relativeStay ? round2(perDay * (relativeStayPercent / 100)) : perDay;
         ec.items[0].plainExplanation = combinedExplanation;
         ec.items[0].formula = combinedFormula;
-        ec.items[0].limitText = `${formatINR(grandPolicyLimit)} (${days} days combined)`;
+        ec.items[0].limitText = `${formatINR(grandPolicyLimit)} (${days} nights combined)`;
         if (ec.items[0].calculationBreakdown) {
           ec.items[0].calculationBreakdown.plainExplanation = combinedExplanation;
           ec.items[0].calculationBreakdown.formula = combinedFormula;
         }
       }
     }
-  } else if (isLodging && employeeClaims[0]?.items?.[0]) {
+  } else if (isLodging && !zeroNights && employeeClaims[0]?.items?.[0]) {
     const e = ordered[0];
     const perDay = days > 0 ? round2(empLimits[0] / days) : empLimits[0];
     const effLimit = lodgingResult.effectiveLimits[0];
     const effPerDay = days > 0 ? round2(effLimit / days) : effLimit;
     const empLine = relativeStay
       ? (days > 1
-        ? `${e?.name || 'Employee'}: ${formatINR(effPerDay)}/day (Total: ${formatINR(effLimit)} for ${days} days, ${relativeStayPercent}% of ${formatINR(perDay)}/day)`
-        : `${e?.name || 'Employee'}: ${formatINR(effPerDay)}/day (${relativeStayPercent}% of ${formatINR(perDay)}/day)`)
+        ? `${e?.name || 'Employee'}: ${formatINR(effPerDay)}/night (Total: ${formatINR(effLimit)} for ${days} nights, ${relativeStayPercent}% of ${formatINR(perDay)}/night)`
+        : `${e?.name || 'Employee'}: ${formatINR(effPerDay)}/night (${relativeStayPercent}% of ${formatINR(perDay)}/night)`)
       : (days > 1
-        ? `${e?.name || 'Employee'}: ${formatINR(perDay)}/day (Total: ${formatINR(empLimits[0])} for ${days} days)`
-        : `${e?.name || 'Employee'}: ${formatINR(perDay)}/day`);
+        ? `${e?.name || 'Employee'}: ${formatINR(perDay)}/night (Total: ${formatINR(empLimits[0])} for ${days} nights)`
+        : `${e?.name || 'Employee'}: ${formatINR(perDay)}/night`);
 
+    const displayPerNight = relativeStay ? effPerDay : perDay;
     const baseLimitText = days > 1
-      ? `Whole Claim Limit: ${formatINR(grandPolicyLimit)} (${days} days at ${formatINR(perDay)}/day)`
-      : `Whole Claim Limit: ${formatINR(grandPolicyLimit)} (${formatINR(perDay)}/day)`;
+      ? `Whole Claim Limit: ${formatINR(grandPolicyLimit)} (${days} nights at ${formatINR(displayPerNight)}/night)`
+      : `Whole Claim Limit: ${formatINR(grandPolicyLimit)} (${formatINR(displayPerNight)}/night)`;
 
     const limitText = relativeStay
-      ? `${baseLimitText} — stay with relative: ${relativeStayPercent}% of ${formatINR(lodgingResult.baseTotalPolicyLimit)}`
+      ? `${baseLimitText} — stay at relative: ${relativeStayPercent}% of ${formatINR(lodgingResult.baseTotalPolicyLimit)}`
       : baseLimitText;
 
     let singleExplanation = '';
     if (grandExcess > 0) {
-      singleExplanation = `Individual limit per day:\n• ${empLine}\n\n${lodgingResult.formula}.\n\n${limitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Therefore, ${formatINR(grandAllowed)} is allowed and ${formatINR(grandExcess)} is excess beyond policy limit.`;
+      singleExplanation = `Individual limit per night:\n• ${empLine}\n\n${lodgingResult.formula}.\n\n${limitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Therefore, ${formatINR(grandAllowed)} is allowed and ${formatINR(grandExcess)} is excess beyond policy limit.`;
     } else {
-      singleExplanation = `Individual limit per day:\n• ${empLine}\n\n${lodgingResult.formula}.\n\n${limitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Since your bill is within your policy limit, ${formatINR(grandAllowed)} is fully allowed.`;
+      singleExplanation = `Individual limit per night:\n• ${empLine}\n\n${lodgingResult.formula}.\n\n${limitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Since your bill is within your policy limit, ${formatINR(grandAllowed)} is fully allowed.`;
     }
 
     if (relativeStay) {
-      singleExplanation = `Individual limit per day:\n• ${empLine}\n\n${lodgingResult.formula}.\n\n${limitText}.\n\nStay with relative: no hotel bill required. ${formatINR(grandAllowed)} is allowed.`;
+      singleExplanation = `Individual limit per night:\n• ${empLine}\n\n${lodgingResult.formula}.\n\n${limitText}.\n\nStay at relative: no hotel bill required. ${formatINR(grandAllowed)} is allowed.`;
     }
 
     const singleFormula = lodgingResult.formula;
@@ -1805,17 +2387,53 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     ? (days > 0 ? round2(empLimits[0] / days) : empLimits[0])
     : null;
 
+  // Lodging form — Food section: inclusive food days, shared date-wise food entitlement
+  const lodgingTotals = { requested: grandRequested, allowed: grandAllowed, excess: grandExcess, policyLimit: grandPolicyLimit };
+  let foodResult = null;
+  if (isLodging && input.includeFood && (input.foodEntries || []).length) {
+    foodResult = calculateLodgingFood({
+      input,
+      ordered,
+      foodRows: ordered.map((emp) => (foodContext?.daily?.[String(emp._id)]) || []),
+      destinationClass,
+    });
+    employeeClaims.forEach((ec, i) => {
+      const fi = foodResult.items[i];
+      ec.items.push(fi);
+      ec.requestedTotal = round2((ec.requestedTotal || 0) + fi.requestedAmount);
+      ec.allowedTotal = round2((ec.allowedTotal || 0) + fi.allowedAmount);
+      ec.excessTotal = round2((ec.excessTotal || 0) + fi.excessAmount);
+      ec.policyLimitTotal = round2((ec.policyLimitTotal || 0) + fi.policyLimit);
+      ec.itemCount = ec.items.length;
+    });
+  }
+  const fs = foodResult ? foodResult.summary : null;
+  const lodgingExplanation = employeeClaims[0]?.items?.[0]?.plainExplanation || null;
+  const foodExplanation = foodResult
+    ? (ordered.length === 1
+      ? foodResult.items[0].plainExplanation
+      : foodResult.items.map((it, i) => `• ${ordered[i].name || `Employee #${i + 1}`}: ${it.plainExplanation}`).join('\n'))
+    : null;
+
   return {
     employeeClaims,
-    numberOfDays: days,
+    // Inclusive calendar days of the range (= food days) and lodging nights are reported separately
+    numberOfDays: isLodgingMode ? daysBetween(input.fromDate, input.toDate) : days,
     numberOfNights: days,
+    lodgingNights: isLodgingMode ? days : null,
+    foodDays: isLodgingMode ? daysBetween(input.fromDate, input.toDate) : null,
     isSharedLodging: shared,
-    grandRequested,
-    grandAllowed,
-    grandExcess,
-    grandPolicyLimit,
+    grandRequested: round2(grandRequested + (fs ? fs.requested : 0)),
+    grandAllowed: round2(grandAllowed + (fs ? fs.allowed : 0)),
+    grandExcess: round2(grandExcess + (fs ? fs.excess : 0)),
+    grandPolicyLimit: round2(grandPolicyLimit + (fs ? fs.entitlement : 0)),
     perDayLimit: relativeStay && primaryPerDay !== null ? round2(primaryPerDay * (relativeStayPercent / 100)) : primaryPerDay,
-    plainExplanation: employeeClaims[0]?.items?.[0]?.plainExplanation || null,
+    plainExplanation: foodExplanation
+      ? `Lodging (${days} night${days === 1 ? '' : 's'}):\n${lodgingExplanation || ''}\n\nFood (${fs.foodDays} day${fs.foodDays === 1 ? '' : 's'}):\n${foodExplanation}`
+      : lodgingExplanation,
+    lodgingSummary: isLodging ? { nights: days, ...lodgingTotals } : undefined,
+    foodSummary: fs || undefined,
+    foodEntries: foodResult ? foodResult.foodEntries : undefined,
   };
 }
 
@@ -1826,16 +2444,30 @@ function claimToInput(claim) {
     ? claim.entries
     : (claim.employeeClaims?.[0]?.items || []);
   const entries = storedEntries.map((e) => {
-    const isStoredPurchase = String(e.otherSubType || '').toUpperCase() === 'PURCHASE';
+    const eType = String(e.expenseType || '').toUpperCase();
+    const isStoredPurchase = eType === 'STOCK_PURCHASE' || String(e.otherSubType || '').toUpperCase() === 'PURCHASE';
+    // Own Vehicle amounts are always recomputed from the readings with the current rate
+    const isKmTravel = eType === 'TRAVEL' && (e.travelWorkflow === 'KM_RATE' || e.travel?.workflow === 'KM_RATE');
     return {
-      expenseType: e.expenseType,
-      otherSubType: e.otherSubType || '',
+      expenseType: eType === 'OTHER' && String(e.otherSubType || '').toUpperCase() === 'PURCHASE' ? 'STOCK_PURCHASE' : e.expenseType,
+      otherSubType: eType === 'OTHER' && String(e.otherSubType || '').toUpperCase() !== 'PURCHASE' ? (e.otherSubType || 'NORMAL') : '',
+      materialName: isStoredPurchase ? (e.materialName || '') : '',
       barcodeNumber: isStoredPurchase ? (e.barcodeNumber || '') : '',
       quantity: isStoredPurchase ? toStr(e.quantity, 100).trim() : '',
-      requestedAmount: e.requestedAmount,
+      requestedAmount: isKmTravel ? null : e.requestedAmount,
       remark: e.remark || e.description,
       vehicle: e.vehicle,
-      distanceKm: e.distanceKm,
+      distanceKm: Number(e.distanceKm ?? e.travel?.distanceKm ?? 0),
+      travelModeId: e.travelModeId ? String(e.travelModeId) : (e.travel?.modeId || ''),
+      travelModeCode: e.travelModeCode || e.travel?.modeCode || '',
+      travelModeName: e.travelModeName || e.travel?.modeName || '',
+      travelSubtypeId: e.travelSubtypeId ? String(e.travelSubtypeId) : (e.travel?.subtypeId || ''),
+      travelSubtypeCode: e.travelSubtypeCode || e.travel?.subtypeCode || '',
+      travelSubtypeName: e.travelSubtypeName || e.travel?.subtypeName || '',
+      travelWorkflow: e.travelWorkflow || e.travel?.workflow || '',
+      ratePerKm: e.ratePerKm ?? e.travel?.ratePerKm ?? null,
+      startKm: e.startKm ?? e.travel?.startKm ?? null,
+      endKm: e.endKm ?? e.travel?.endKm ?? null,
       visitType: (e.visitType === 'VISIT' || e.isVisit || claim.visitType === 'VISIT' || claim.isVisit) ? 'VISIT' : 'NO_VISIT',
       isVisit: Boolean(e.isVisit || e.visitType === 'VISIT' || claim.isVisit || claim.visitType === 'VISIT'),
       serviceReports: (e.serviceReports || []).map((r) => (r.toObject ? r.toObject() : r)),
@@ -1861,9 +2493,16 @@ function claimToInput(claim) {
     customerId: claim.trip?.customerId ? String(claim.trip.customerId) : null,
     destinationCity: claim.trip?.destination,
     expenseType: claim.claimType,
-    requestedAmount: claim.grandRequested,
+    // Lodging + Food: grandRequested includes food, the lodging box is only the lodging amount
+    requestedAmount: claim.claimMode === 'LODGING' && claim.lodgingSummary ? claim.lodgingSummary.requested : claim.grandRequested,
     remark: claim.trip?.purpose,
     entries,
+    includeFood: !!claim.includeFood,
+    foodEntries: (Array.isArray(claim.foodEntries) ? claim.foodEntries : []).map((f) => ({
+      requestedAmount: f.requestedAmount,
+      remark: f.remark,
+      receipts: (f.receipts || []).map((r) => (r.toObject ? r.toObject() : r)),
+    })),
     receipts: (claim.receipts || []).map((r) => (r.toObject ? r.toObject() : r)),
     serviceReports: (claim.serviceReports || []).map((r) => (r.toObject ? r.toObject() : r)),
     fullPayment: {
@@ -1880,6 +2519,11 @@ module.exports = {
   DEFAULT_CLAIM_RULES,
   DEFAULT_RECEIPT_RULES,
   DEFAULT_FULL_PAYMENT_RULES,
+  DEFAULT_PAY_LIMIT_CONFIG,
+  DEFAULT_CFO_APPROVAL_CONFIG,
+  normalizeClaimTypeCode,
+  resolvePayLimitConfig,
+  resolveCfoApprovalConfig,
   parseDateOnly,
   todayDateOnly,
   addDays,
@@ -1887,7 +2531,8 @@ module.exports = {
   formatINR,
   daysBetween,
   nightsBetween,
-  deadlineFrom,
+  travelItemFields,
+  calculateLodgingFood,
   resolvePolicyConfig,
   resolveTypeConfig,
   getPolicyForDate,

@@ -525,6 +525,14 @@ const ExpenseDashboardPage = () => {
             <RefreshCw size={15} className={loading ? 'animate-spin text-indigo-600' : ''} />
           </button>
 
+          <button
+            onClick={() => navigate('/petty-cash')}
+            className="flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold text-xs shadow-sm transition-all cursor-pointer active:scale-95"
+          >
+            <span>Petty Cash Wallets</span>
+            <ArrowRight size={13} />
+          </button>
+
           {/* Open Expense Claims Report & Disbursement System */}
           <button
             onClick={() => navigate('/expense-reports')}

@@ -68,18 +68,20 @@ const userId = (req) => String(req.user?._id || req.user?.id || '');
  */
 function resolveCompanyId(req, { allowAll = false } = {}) {
   if (isSuperAdmin(req.user)) {
-    const requested = req.headers?.['x-company-id'] || req.query?.companyId;
+    const requested = req.headers?.['x-company-id'] || req.query?.companyId || req.body?.companyId;
     if (allowAll && (!requested || norm(requested) === 'all') && !req.tenant?.companyId) return 'ALL';
     if (allowAll && norm(requested) === 'all') return 'ALL';
+    if (requested && norm(requested) !== 'all') return String(requested);
   }
   let companyId = req.tenant?.companyId || req.companyId || null;
   if (!companyId && !isSuperAdmin(req.user)) companyId = req.user?.companyId || req.user?.company || null;
   if (companyId && typeof companyId === 'object' && companyId._id) companyId = companyId._id;
+  if (companyId && norm(companyId) === 'all') return allowAll && isSuperAdmin(req.user) ? 'ALL' : null;
   return companyId ? String(companyId) : null;
 }
 
 const sameCompany = (claim, companyId) => {
-  const claimComp = claim?.companyId?._id || claim?.companyId;
+  const claimComp = claim?.companyId?._id || claim?.companyId || claim?.company?._id || claim?.company;
   return companyId === 'ALL' || !companyId || !claimComp || String(claimComp) === String(companyId);
 };
 
@@ -101,15 +103,33 @@ const isAssignedApprover = (claim, uid) => {
   return !!a && !!uid && String(a._id || a) === String(uid);
 };
 
+// CFO / Finance Head assigned for the 2nd approval (Full Payment / Stock Purchase).
+const isFinanceApprover = (claim, uid) => {
+  const a = claim?.financeApproval?.approver;
+  return !!a && !!uid && String(a._id || a) === String(uid);
+};
+
+// Waiting for the 2nd approval (CFO / Finance Head): the 1st approval is already done.
+const isFinanceStage = (claim) =>
+  String(claim?.status || '').toUpperCase() === 'APPROVAL_PENDING'
+  && String(claim?.financeApproval?.status || '').toUpperCase() === 'PENDING';
+
+// The approver who decides the claim at its current approval stage.
+const isCurrentStageApprover = (claim, uid) => (isFinanceStage(claim) ? isFinanceApprover(claim, uid) : isAssignedApprover(claim, uid));
+
 // ─── Business status: DRAFT | PENDING | PAID | REJECTED ─────────────────────
 // New claims only use DRAFT / APPROVAL_PENDING / SUBMITTED / PAID / REJECTED. Legacy statuses from the
 // old approval + disbursement workflow are mapped so historical data reads correctly
 // even before scripts/migrate_expense_paid_rejected.js has been run.
 // Approved-but-unpaid legacy claims are PENDING (never treated as paid).
 const DRAFT_STATUSES = ['DRAFT', 'RETURNED'];
+// Accounts Step 1 pending statuses (awaiting Accounts Admin approval).
+const ACCOUNTS_APPROVAL_PENDING_STATUSES = ['SUBMITTED', 'PENDING', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING'];
+// Accounts Step 2 pending statuses (approved by Accounts Admin, awaiting payment).
+const ACCOUNTS_APPROVED_STATUSES = ['ACCOUNTS_APPROVED', 'APPROVED'];
 // Accounts-actionable pending statuses (Accounts Pending queue / Mark Paid / Reject).
-const PENDING_STATUSES = ['SUBMITTED', 'PENDING', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED', 'APPROVED'];
-// Waiting for the selected Management user / Reporting Manager; never visible to Accounts.
+const PENDING_STATUSES = [...ACCOUNTS_APPROVAL_PENDING_STATUSES, ...ACCOUNTS_APPROVED_STATUSES];
+// Waiting for the selected Management user / Reporting Manager / CFO; never visible to Accounts.
 const APPROVAL_PENDING_STATUSES = ['APPROVAL_PENDING'];
 const PAID_STATUSES = ['PAID', 'DISBURSED', 'SETTLED'];
 const REJECTED_STATUSES = ['REJECTED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'CANCELLED'];
@@ -127,14 +147,57 @@ function businessStatus(claim) {
 
 const isAwaitingApproval = (claim) => APPROVAL_PENDING_STATUSES.includes(String(claim?.status || '').toUpperCase());
 
+const isAccountsApproved = (claim) =>
+  String(claim?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED' ||
+  String(claim?.paymentStatus || '').toUpperCase() === 'AWAITING_DISBURSEMENT';
+
+/**
+ * True once the 1st applicable approval on the claim has been approved:
+ * - Reporting Manager (1st approval) approved (managerApproval.status === 'APPROVED' with kind !== 'NONE',
+ *   or claim has advanced to CFO 2nd approval), OR
+ * - Accounts Admin (Step 1) approved (for claims routed directly to Accounts or after manager approval).
+ */
+function isFirstApprovalApproved(claim) {
+  if (!claim) return false;
+  if (isAccountsApproved(claim)) return true;
+  if (String(claim?.accountsApproval?.status || '').toUpperCase() === 'APPROVED') return true;
+  const faStatus = String(claim?.financeApproval?.status || '').toUpperCase();
+  if (faStatus === 'PENDING' || faStatus === 'APPROVED') return true;
+  const maStatus = String(claim?.managerApproval?.status || '').toUpperCase();
+  const maKind = String(claim?.managerApproval?.kind || 'NONE').toUpperCase();
+  if (maStatus === 'APPROVED' && (maKind !== 'NONE' || !!claim?.managerApproval?.decidedAt || !!claim?.managerApproval?.approver)) {
+    return true;
+  }
+  if (String(claim?.fullPayment?.status || '').toUpperCase() === 'APPROVED' && !isManagementUser(claim?.submittedBy)) {
+    return true;
+  }
+  return false;
+}
+
+/** True only once the claim has cleared both Reporting Manager and CFO / Finance Head approvals (when required). */
+function hasReachedAccounts(claim) {
+  if (!claim) return false;
+  const st = String(claim.status || '').toUpperCase();
+  if (DRAFT_STATUSES.includes(st) || APPROVAL_PENDING_STATUSES.includes(st)) return false;
+  const maStatus = String(claim.managerApproval?.status || '').toUpperCase();
+  const faStatus = String(claim.financeApproval?.status || '').toUpperCase();
+  if (maStatus === 'REJECTED' || faStatus === 'REJECTED') return false;
+  return true;
+}
+
 /** View rules: drafts only for creator; otherwise creator, tagged employees, assigned approver, staff of same company. */
 function canViewClaim(req, claim) {
+  if (!sameCompany(claim, resolveCompanyId(req, { allowAll: true }))) return false;
   const uid = userId(req);
   if (isCreator(claim, uid)) return true;
   if (businessStatus(claim) === 'DRAFT') return false;
   if (isOnClaim(claim, uid)) return true;
   if (isAssignedApprover(claim, uid)) return true;
-  return isStaff(req.user) && sameCompany(claim, resolveCompanyId(req, { allowAll: true }));
+  if (isFinanceApprover(claim, uid)) return true;
+  if (isAccounts(req.user) && !isCompanyAdmin(req.user) && !isHR(req.user)) {
+    return hasReachedAccounts(claim);
+  }
+  return isStaff(req.user);
 }
 
 const isLocked = (claim) => !!claim.lockedAt || businessStatus(claim) === 'PAID';
@@ -150,19 +213,30 @@ function claimPermissions(req, claim) {
   const bs = businessStatus(claim);
   const notSelf = !involved || superAdmin || companyAdmin;
   const awaitingApproval = isAwaitingApproval(claim);
-  // Accounts only acts once the claim has cleared the approval stage, OR admin override.
-  const accountsStage = bs === 'PENDING' && (!awaitingApproval || superAdmin || companyAdmin);
-  const approverCanDecide = awaitingApproval && (isAssignedApprover(claim, uid) || superAdmin || companyAdmin) && notSelf;
+  const accountsApproved = isAccountsApproved(claim);
+  const firstApprovalDone = bs === 'PENDING' && isFirstApprovalApproved(claim);
+  const reachedAccounts = hasReachedAccounts(claim);
+  // Accounts only acts once the claim has cleared the approval stage (Reporting Manager & CFO), OR admin override.
+  const accountsStage = bs === 'PENDING' && ((reachedAccounts && !awaitingApproval) || superAdmin || companyAdmin);
+  const approverCanDecide = awaitingApproval && companyOk && (isCurrentStageApprover(claim, uid) || superAdmin || companyAdmin) && notSelf;
   return {
     businessStatus: bs,
     awaitingApproval,
-    // Employees edit while Draft, Pending, or Rejected; Paid claims are final.
-    canEdit: creator && ['DRAFT', 'PENDING', 'REJECTED'].includes(bs) && !isLocked(claim),
-    canSubmit: creator && ['DRAFT', 'PENDING', 'REJECTED'].includes(bs) && !isLocked(claim),
+    isAccountsApproved: accountsApproved,
+    isFirstApprovalApproved: firstApprovalDone,
+    // MANAGER = 1st approval (Reporting Manager), FINANCE = 2nd approval (CFO / Finance Head)
+    approvalStage: awaitingApproval ? (isFinanceStage(claim) ? 'FINANCE' : 'MANAGER') : null,
+    // Employees edit while Draft, Rejected, or Pending before the 1st applicable approval is completed.
+    canEdit: creator && ['DRAFT', 'PENDING', 'REJECTED'].includes(bs) && !isLocked(claim) && !accountsApproved && !firstApprovalDone,
+    canSubmit: creator && ['DRAFT', 'PENDING', 'REJECTED'].includes(bs) && !isLocked(claim) && !accountsApproved && !firstApprovalDone,
     canDelete: (bs === 'DRAFT' && creator) || (bs === 'REJECTED' && (creator || (companyAdmin && companyOk))),
-    // Direct final decisions on a Pending claim. Nobody decides a claim they are on (Super Admin / Company Admin excepted).
-    canMarkPaid: isAccounts(req.user) && companyOk && accountsStage && notSelf,
-    canReject: (isAccounts(req.user) || isHR(req.user)) && companyOk && accountsStage && notSelf,
+    // 2-step Accounts Admin workflow:
+    // Step 1: Accounts Admin approves or rejects the claim (SUBMITTED -> ACCOUNTS_APPROVED | REJECTED).
+    // Step 2: After Accounts approval (ACCOUNTS_APPROVED), Accounts Admin marks Paid with payment date.
+    //         After Accounts approval, Reject is ONLY allowed for Super Admin (never Accounts Admin or Company Admin).
+    canAccountsApprove: isAccounts(req.user) && companyOk && accountsStage && !accountsApproved && notSelf,
+    canMarkPaid: isAccounts(req.user) && companyOk && accountsStage && accountsApproved && notSelf,
+    canReject: companyOk && accountsStage && notSelf && (accountsApproved ? superAdmin : (isAccounts(req.user) || isHR(req.user))),
     // Approval stage: only the employee-selected approver decides (Super Admin and Company Admin can also decide).
     canApprove: approverCanDecide,
     canRejectApproval: approverCanDecide,
@@ -184,7 +258,19 @@ function reportScope(req) {
   const companyId = resolveCompanyId(req, { allowAll: true });
   const conditions = [];
   if (companyId && companyId !== 'ALL') conditions.push({ companyId: new (require('mongoose').Types.ObjectId)(companyId) });
-  if (!isStaff(req.user)) {
+  if (isAccounts(req.user) && !isCompanyAdmin(req.user) && !isHR(req.user)) {
+    // Accounts Admin only sees claims after Reporting Manager and CFO / Finance Head have approved them
+    conditions.push({
+      status: { $nin: [...DRAFT_STATUSES, ...APPROVAL_PENDING_STATUSES] },
+      'managerApproval.status': { $nin: ['PENDING', 'REJECTED'] },
+      'financeApproval.status': { $nin: ['PENDING', 'REJECTED'] },
+    });
+  } else if (isStaff(req.user)) {
+    conditions.push({
+      'managerApproval.status': { $ne: 'PENDING' },
+      'financeApproval.status': { $ne: 'PENDING' },
+    });
+  } else {
     const uid = new (require('mongoose').Types.ObjectId)(userId(req));
     // In reports, do not show tagged claims for tagged employees: only claims they submitted
     conditions.push({ submittedBy: uid });
@@ -210,6 +296,18 @@ function snapshot(claim) {
       kind: claim.managerApproval.kind,
       approver: claim.managerApproval.approver,
       status: claim.managerApproval.status,
+    };
+  }
+  if (claim.financeApproval && claim.financeApproval.status && claim.financeApproval.status !== 'NOT_REQUIRED') {
+    out.financeApproval = {
+      approver: claim.financeApproval.approver,
+      status: claim.financeApproval.status,
+    };
+  }
+  if (claim.accountsApproval && claim.accountsApproval.status && claim.accountsApproval.status !== 'NOT_REQUIRED') {
+    out.accountsApproval = {
+      approvedBy: claim.accountsApproval.approvedBy,
+      status: claim.accountsApproval.status,
     };
   }
   return out;
@@ -250,7 +348,13 @@ module.exports = {
   isOnClaim,
   isCreator,
   isAssignedApprover,
+  isFinanceApprover,
+  isFinanceStage,
+  isCurrentStageApprover,
   isAwaitingApproval,
+  isAccountsApproved,
+  isFirstApprovalApproved,
+  hasReachedAccounts,
   canViewClaim,
   claimPermissions,
   isLocked,
@@ -259,6 +363,8 @@ module.exports = {
   STATUS_LISTS,
   DRAFT_STATUSES,
   PENDING_STATUSES,
+  ACCOUNTS_APPROVAL_PENDING_STATUSES,
+  ACCOUNTS_APPROVED_STATUSES,
   APPROVAL_PENDING_STATUSES,
   PAID_STATUSES,
   REJECTED_STATUSES,

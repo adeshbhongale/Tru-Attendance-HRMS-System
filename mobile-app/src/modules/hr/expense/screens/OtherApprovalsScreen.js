@@ -44,13 +44,60 @@ const fmtDate = (d) => {
 
 const KIND_META = {
   FULL_PAYMENT: { label: "Full Payment", color: "#7c3aed", bg: "#f3e8ff", Icon: Zap },
+  STOCK_PURCHASE: { label: "Stock Purchase", color: "#b45309", bg: "#fef3c7", Icon: Tag },
+  LODGING: { label: "Lodging Claim", color: "#4f46e5", bg: "#eef2ff", Icon: ShieldCheck },
+  TRAVEL: { label: "Travel Claim", color: "#0284c7", bg: "#e0f2fe", Icon: ShieldCheck },
+  CONVEYANCE: { label: "Local Conveyance", color: "#0d9488", bg: "#ccfbf1", Icon: ShieldCheck },
+  FOOD: { label: "Food Allowance", color: "#ea580c", bg: "#ffedd5", Icon: ShieldCheck },
+  COMBINE: { label: "Combined Claim", color: "#6366f1", bg: "#eef2ff", Icon: ShieldCheck },
   OTHER_EXPENSE: { label: "Other Expense", color: "#0369a1", bg: "#e0f2fe", Icon: ShieldCheck },
+};
+
+const getEntryIconAndTitle = (e, claim) => {
+  const t = String(e?.expenseType || "").toUpperCase();
+  const sub = String(e?.otherSubType || "").toUpperCase();
+  const isPurchase = t === "STOCK_PURCHASE" || (t === "OTHER" && sub === "PURCHASE");
+  if (t === "LODGING" || t === "LODGING_EXPENSE") {
+    const isRel = claim?.stayType === "WITH_RELATIVE" || claim?.stayType === "RELATIVE";
+    return {
+      icon: isRel ? "🏠" : "🏨",
+      title: e?.hotelName || (isRel ? "Stay with Relative" : "Hotel Accommodation"),
+    };
+  }
+  if (t === "TRAVEL" || t === "TRAVEL_EXPENSE") {
+    const mode = String(e?.travelModeName || e?.travelModeCode || "Travel").toUpperCase();
+    let icon = "🚆";
+    if (mode.includes("FLIGHT") || mode.includes("AIR")) icon = "✈️";
+    else if (mode.includes("BUS")) icon = "🚌";
+    else if (mode.includes("CAB") || mode.includes("TAXI") || mode.includes("AUTO") || mode.includes("FOUR_WHEELER") || mode.includes("CAR")) icon = "🚗";
+    else if (mode.includes("TWO_WHEELER") || mode.includes("BIKE")) icon = "🏍️";
+    const title = e?.travelModeName || e?.travelModeCode
+      ? `${e.travelModeName || e.travelModeCode}${e.travelSubtypeName ? ` (${e.travelSubtypeName})` : ""}`
+      : "Travel Claim";
+    return { icon, title };
+  }
+  if (t === "FOOD" || t === "FOOD_DA" || t === "FOOD_EXPENSE") {
+    return { icon: "🍽️", title: e?.expenseTypeName || "Food Allowance" };
+  }
+  if (t === "CONVEYANCE" || t === "LOCAL_CONVEYANCE" || t === "LOCAL_TRAVEL") {
+    const v = e?.vehicle;
+    const icon = v === "twoWheeler" ? "🏍️" : (v === "eBike" || v === "eCar") ? "⚡" : "🚗";
+    const title = v === "twoWheeler" ? "2-Wheeler / Bike" : v === "car" ? "Car (4W)" : v === "eBike" ? "E-Bike" : v === "eCar" ? "E-Car" : "Local Conveyance";
+    return { icon, title };
+  }
+  if (isPurchase) {
+    return { icon: "📦", title: e?.materialName || "Stock Purchase" };
+  }
+  return { icon: "🧾", title: e?.expenseTypeName || "Other Expense" };
 };
 
 const DECISION_META = {
   APPROVED: { label: "Approved", color: "#059669", bg: "#d1fae5" },
   REJECTED: { label: "Rejected", color: "#dc2626", bg: "#fee2e2" },
 };
+
+// Full Payment / Stock Purchase: 2nd approval by the CFO / Finance Head after the Reporting Manager
+const SECOND_APPROVAL_META = { label: "Awaiting 2nd Approval", color: "#b45309", bg: "#fef3c7" };
 
 const OtherApprovalsScreen = ({ navigation }) => {
   const [tab, setTab] = useState("PENDING");
@@ -118,6 +165,10 @@ const OtherApprovalsScreen = ({ navigation }) => {
     if (!decision) return;
     const { mode, claim } = decision;
     const text = remark.trim();
+    if (mode === "approve" && !text) {
+      Alert.alert("Remark required", "Please enter an approval remark before approving this claim.");
+      return;
+    }
     if (mode === "reject" && text.length < 3) {
       Alert.alert("Reason required", "Please enter the reason for rejecting this claim.");
       return;
@@ -136,10 +187,13 @@ const OtherApprovalsScreen = ({ navigation }) => {
       return;
     }
     closeDecision();
+    const sentToFinanceHead = mode === "approve" && res.data?.status === "APPROVAL_PENDING" && res.data?.financeApproval?.status === "PENDING";
     Alert.alert(
       mode === "approve" ? "Approved" : "Rejected",
       mode === "approve"
-        ? `${claim.claimNumber || "Claim"} approved and sent to Accounts.`
+        ? (sentToFinanceHead
+          ? `${claim.claimNumber || "Claim"} approved and sent to ${res.data.financeApproval.approverName || "the CFO / Finance Head"} for 2nd approval.`
+          : `${claim.claimNumber || "Claim"} approved and sent to Accounts.`)
         : `${claim.claimNumber || "Claim"} rejected. The employee has been informed.`
     );
     load(tab, false);
@@ -147,10 +201,13 @@ const OtherApprovalsScreen = ({ navigation }) => {
 
   const renderCard = (c) => {
     const ma = c.managerApproval || {};
-    const kind = KIND_META[ma.kind] || KIND_META.OTHER_EXPENSE;
-    const KindIcon = kind.Icon;
-    const isFull = ma.kind === "FULL_PAYMENT";
-    const decided = DECISION_META[ma.status];
+    const fa = c.financeApproval || {};
+    const isFull = ma.kind === "FULL_PAYMENT" || Boolean(c.fullPayment?.requested || c.fullPaymentRequested);
+    // FINANCE = I give the 2nd approval (CFO / Finance Head); MANAGER = 1st approval (Reporting Manager)
+    const isMyFinanceStage = c.myApprovalStage === "FINANCE";
+    const myDecision = isMyFinanceStage ? fa : ma;
+    const awaitingSecond = c.status === "APPROVAL_PENDING" && fa.status === "PENDING";
+    const decided = DECISION_META[myDecision.status];
     const who = c.submittedBy?.name || c.submittedByName || "Employee";
     const empCode = c.submittedBy?.employeeIdCode;
     const empDeptOrDesig = [c.submittedBy?.designation, c.submittedBy?.department].filter(Boolean).join(" • ");
@@ -158,15 +215,93 @@ const OtherApprovalsScreen = ({ navigation }) => {
     const busy = busyId === c._id;
     const pending = c.status === "APPROVAL_PENDING" && c.permissions?.canApprove;
 
-    const entriesList = Array.isArray(c.entries) && c.entries.length > 0 ? c.entries : (c.employeeClaims?.[0]?.items || []);
-    const firstOther = entriesList.find(e => (e.expenseType || "").toUpperCase() === "OTHER") || entriesList[0] || {};
+    // Build complete entries list (including Lodging + Food when includeFood is active)
+    const rawEntries = Array.isArray(c.entries) && c.entries.length > 0 ? c.entries : (c.employeeClaims?.[0]?.items || []);
+    const entriesList = [...rawEntries];
+    const isLodgingClaim = c.claimMode === "LODGING" || String(c.claimType || "").toUpperCase() === "LODGING";
+    if (
+      isLodgingClaim &&
+      !entriesList.some((e) => ["FOOD", "FOOD_EXPENSE"].includes(String(e?.expenseType || "").toUpperCase())) &&
+      (c.includeFood || (Array.isArray(c.foodEntries) && c.foodEntries.length > 0) || Number(c.foodRequestedAmount || c.foodSummary?.requested || 0) > 0)
+    ) {
+      const fReq = Number(c.foodRequestedAmount ?? c.foodSummary?.requested ?? c.foodEntries?.[0]?.requestedAmount ?? 0);
+      const fAllow = Number(c.foodAllowedAmount ?? c.foodSummary?.allowed ?? c.foodEntries?.[0]?.allowedAmount ?? fReq);
+      entriesList.push({
+        expenseType: "FOOD",
+        expenseTypeName: "Shared Food Allowance",
+        requestedAmount: fReq,
+        allowedAmount: fAllow,
+        excessAmount: Math.max(0, fReq - fAllow),
+        remark: c.foodRemark || c.foodEntries?.[0]?.remark || "",
+      });
+    }
+    if (entriesList.length === 0) {
+      entriesList.push({
+        expenseType: c.claimType || c.expenseType || (isLodgingClaim ? "LODGING" : "OTHER"),
+        requestedAmount: c.grandRequested ?? c.requestedAmount ?? 0,
+        allowedAmount: c.grandAllowed ?? c.allowedAmount ?? 0,
+        excessAmount: c.grandExcess ?? c.excessAmount ?? 0,
+        remark: c.remark || c.remarks || "",
+      });
+    }
+
+    const isStockPurchaseItem = (e) => {
+      const t = (e?.expenseType || "").toUpperCase();
+      const sub = (e?.otherSubType || "").toUpperCase();
+      return t === "STOCK_PURCHASE" || (t === "OTHER" && sub === "PURCHASE");
+    };
+    const stockPurchaseEntry = entriesList.find(isStockPurchaseItem);
+    const otherOnlyEntry = entriesList.find((e) => (e?.expenseType || "").toUpperCase() === "OTHER" && !isStockPurchaseItem(e));
+    const firstOther = stockPurchaseEntry || otherOnlyEntry || entriesList[0] || {};
+    const expTypeUpper = (firstOther.expenseType || c.claimType || "").toUpperCase();
     const otherSubType = (firstOther.otherSubType || c.otherSubType || "").toUpperCase();
-    const isPurchase = otherSubType === "PURCHASE";
-    const barcodeNumber = isPurchase ? (firstOther.barcodeNumber || c.barcodeNumber) : null;
-    const quantity = isPurchase ? (firstOther.quantity || c.quantity) : null;
+    const isPurchase = Boolean(stockPurchaseEntry) || expTypeUpper === "STOCK_PURCHASE" || otherSubType === "PURCHASE" || String(c.claimType || "").toUpperCase() === "STOCK_PURCHASE";
+    const distinctTypes = Array.from(new Set(entriesList.map((e) => isStockPurchaseItem(e) ? "STOCK_PURCHASE" : String(e?.expenseType || "").toUpperCase()).filter(Boolean)));
+    const resolvedKindKey = isFull
+      ? "FULL_PAYMENT"
+      : isPurchase
+        ? "STOCK_PURCHASE"
+        : distinctTypes.length > 1
+          ? "COMBINE"
+          : (KIND_META[distinctTypes[0]] ? distinctTypes[0] : (KIND_META[expTypeUpper] ? expTypeUpper : "OTHER_EXPENSE"));
+    const kind = KIND_META[resolvedKindKey] || KIND_META.OTHER_EXPENSE;
+    const KindIcon = kind.Icon;
     const remark = firstOther.remark || firstOther.description || c.remark || c.remarks;
-    const proofsCount = (firstOther.attachments || c.attachments || c.receipts || []).length;
+    const proofsCount = (firstOther.attachments || firstOther.receipts || c.attachments || c.receipts || []).length;
     const fpProofsCount = (c.fullPayment?.proofs || c.fullPaymentProofs || []).length;
+
+    // 1st & 2nd approval status summary
+    const maStatus = String(ma.status || "").toUpperCase();
+    const faStatus = String(fa.status || "").toUpperCase();
+    const mgrApproverObj = typeof ma.approver === "object" && ma.approver ? ma.approver : null;
+    const mgrName = mgrApproverObj?.name || ma.approverName || "Reporting Manager";
+    const mgrCode = mgrApproverObj?.employeeIdCode ? ` (${mgrApproverObj.employeeIdCode})` : "";
+    const mgrRoleSub = [mgrApproverObj?.designation, mgrApproverObj?.department].filter(Boolean).join(" • ");
+    const mgrBadge = maStatus === "APPROVED"
+      ? { label: "Approved", color: "#059669", bg: "#d1fae5" }
+      : maStatus === "REJECTED"
+        ? { label: "Rejected", color: "#dc2626", bg: "#fee2e2" }
+        : { label: "Pending", color: "#d97706", bg: "#fef3c7" };
+
+    const hasSecondApproval = Boolean(
+      c.requiresSecondApproval ||
+      (faStatus && faStatus !== "NOT_REQUIRED") ||
+      fa.approver ||
+      fa.approverName
+    );
+    const finApproverObj = typeof fa.approver === "object" && fa.approver ? fa.approver : null;
+    const finName = finApproverObj?.name || fa.approverName || "CFO / Finance Head";
+    const finCode = finApproverObj?.employeeIdCode ? ` (${finApproverObj.employeeIdCode})` : "";
+    const finRoleSub = [finApproverObj?.designation, finApproverObj?.department].filter(Boolean).join(" • ");
+    const finBadge = faStatus === "APPROVED"
+      ? { label: "Approved", color: "#059669", bg: "#d1fae5" }
+      : faStatus === "REJECTED"
+        ? { label: "Rejected", color: "#dc2626", bg: "#fee2e2" }
+        : maStatus === "REJECTED"
+          ? { label: "Cancelled", color: "#64748b", bg: "#f1f5f9" }
+          : (awaitingSecond || faStatus === "PENDING")
+            ? { label: "Awaiting 2nd Approval", color: "#b45309", bg: "#fef3c7" }
+            : { label: "After 1st Approval", color: "#64748b", bg: "#f1f5f9" };
 
     return (
       <TouchableOpacity
@@ -178,16 +313,28 @@ const OtherApprovalsScreen = ({ navigation }) => {
         <View style={[styles.cardAccent, { backgroundColor: kind.color }]} />
         <View style={styles.cardBody}>
           <View style={styles.rowBetween}>
-            <View style={[styles.kindPill, { backgroundColor: kind.bg }]}>
-              <KindIcon size={12} color={kind.color} />
-              <Text style={[styles.kindText, { color: kind.color }]}>{kind.label}</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap", flex: 1 }}>
+              <View style={[styles.kindPill, { backgroundColor: kind.bg }]}>
+                <KindIcon size={12} color={kind.color} />
+                <Text style={[styles.kindText, { color: kind.color }]}>{kind.label}</Text>
+              </View>
+              <View style={[styles.kindPill, { backgroundColor: isMyFinanceStage ? "#fef3c7" : "#eef2ff" }]}>
+                <Text style={[styles.kindText, { color: isMyFinanceStage ? "#b45309" : "#4f46e5" }]}>
+                  {isMyFinanceStage ? "2nd Approval • CFO" : "1st Approval • Manager"}
+                </Text>
+              </View>
             </View>
-            {decided ? (
+            {awaitingSecond && (!decided || isMyFinanceStage) ? (
+              <View style={[styles.kindPill, { backgroundColor: SECOND_APPROVAL_META.bg }]}>
+                <Clock size={12} color={SECOND_APPROVAL_META.color} />
+                <Text style={[styles.kindText, { color: SECOND_APPROVAL_META.color }]}>{SECOND_APPROVAL_META.label}</Text>
+              </View>
+            ) : decided ? (
               <View style={[styles.kindPill, { backgroundColor: decided.bg }]}>
                 <Text style={[styles.kindText, { color: decided.color }]}>{decided.label}</Text>
               </View>
             ) : (
-              <Text style={styles.dateText}>{fmtDate(ma.requestedAt || c.submittedAt || c.createdAt)}</Text>
+              <Text style={styles.dateText}>{fmtDate(myDecision.requestedAt || ma.requestedAt || c.submittedAt || c.createdAt)}</Text>
             )}
           </View>
 
@@ -215,65 +362,102 @@ const OtherApprovalsScreen = ({ navigation }) => {
           <View style={styles.amountRow}>
             <View style={styles.amountBox}>
               <Text style={styles.amountLabel}>Requested</Text>
-              <Text style={styles.amountValue}>{inr(c.grandRequested)}</Text>
+              <Text style={styles.amountValue}>{inr(c.grandRequested ?? c.requestedAmount)}</Text>
             </View>
             <View style={styles.amountBox}>
               <Text style={styles.amountLabel}>{isFull ? "Policy Allowed" : "Allowed"}</Text>
-              <Text style={styles.amountValue}>{inr(c.grandAllowed)}</Text>
+              <Text style={styles.amountValue}>{inr(c.grandAllowed ?? c.allowedAmount)}</Text>
             </View>
             <View style={[styles.amountBox, { borderRightWidth: 0 }]}>
               <Text style={styles.amountLabel}>{isFull ? "If Approved" : "Payable"}</Text>
               <Text style={[styles.amountValue, { color: kind.color }]}>
-                {inr(isFull ? c.grandRequested : (c.payableAmount ?? c.grandAllowed))}
+                {inr(isFull ? (c.grandRequested ?? c.requestedAmount) : (c.payableAmount ?? c.grandAllowed ?? c.allowedAmount))}
               </Text>
             </View>
           </View>
 
-          {/* Other Expense Specific Details (sub-type, barcode, quantity, purpose, proofs) */}
-          {!isFull && (
-            <View style={{ marginTop: 8, padding: 8, backgroundColor: "#f8fafc", borderRadius: 8, gap: 4 }}>
-              {otherSubType ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  <Text style={{ fontSize: 10, fontWeight: "800", color: "#475569", textTransform: "uppercase" }}>Type: </Text>
-                  <View style={{ paddingHorizontal: 6, paddingVertical: 1, backgroundColor: isPurchase ? "#fef3c7" : "#e0e7ff", borderRadius: 4 }}>
-                    <Text style={{ fontSize: 10, fontWeight: "800", color: isPurchase ? "#92400e" : "#3730a3" }}>
-                      {isPurchase ? "Purchase Expense" : "General Expense"}
-                    </Text>
+          {/* Claim Entries List with Entry 01, Entry 02 Icons */}
+          <View style={{ marginTop: 10, padding: 8, backgroundColor: "#f8fafc", borderRadius: 10, borderWidth: 1, borderColor: "#e2e8f0", gap: 6 }}>
+            <Text style={{ fontSize: 10, fontWeight: "800", color: "#475569", textTransform: "uppercase", letterSpacing: 0.4 }}>
+              Claim Entries ({entriesList.length})
+            </Text>
+            {entriesList.map((entry, idx) => {
+              const { icon, title } = getEntryIconAndTitle(entry, c);
+              const eReq = Number(entry.requestedAmount ?? c.grandRequested ?? 0);
+              const eAllow = Number(entry.allowedAmount ?? eReq);
+              const eExc = Number(entry.excessAmount ?? Math.max(0, eReq - eAllow));
+              const eSub = [
+                entry.materialName && title !== entry.materialName ? `Material: ${entry.materialName}` : null,
+                entry.barcodeNumber ? `Barcode: ${entry.barcodeNumber}` : null,
+                entry.quantity ? `Qty: ${entry.quantity}` : null,
+                entry.distanceKm ? `${entry.distanceKm} km` : null,
+                entry.remark || entry.description || null,
+              ].filter(Boolean).join(" · ");
+
+              return (
+                <View
+                  key={idx}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    backgroundColor: "#ffffff",
+                    paddingHorizontal: 8,
+                    paddingVertical: 6,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: "#eef2f7",
+                    gap: 8,
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "#4f46e5", paddingHorizontal: 6, paddingVertical: 2.5, borderRadius: 5 }}>
+                      <Text style={{ fontSize: 10 }}>{icon}</Text>
+                      <Text style={{ fontSize: 9.5, fontWeight: "800", color: "#ffffff" }}>
+                        Entry {String(idx + 1).padStart(2, "0")}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 11.5, fontWeight: "800", color: "#0f172a" }} numberOfLines={1}>
+                        {icon} {title}
+                      </Text>
+                      {eSub ? (
+                        <Text style={{ fontSize: 10, color: "#64748b", marginTop: 1 }} numberOfLines={1}>
+                          {eSub}
+                        </Text>
+                      ) : null}
+                    </View>
                   </View>
-                  {isPurchase && barcodeNumber ? (
-                    <Text style={{ fontSize: 10, fontWeight: "700", color: "#64748b" }}>
-                      Barcode: {barcodeNumber}
-                    </Text>
-                  ) : null}
-                  {isPurchase && quantity ? (
-                    <Text style={{ fontSize: 10, fontWeight: "700", color: "#64748b" }}>
-                      Qty: {quantity}
-                    </Text>
-                  ) : null}
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={{ fontSize: 12, fontWeight: "800", color: "#0f172a" }}>{inr(eReq)}</Text>
+                    {eExc > 0 ? (
+                      <Text style={{ fontSize: 9.5, fontWeight: "800", color: "#dc2626" }}>
+                        {inr(eExc)} Excess
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
-              ) : null}
-
-              {remark ? (
-                <Text style={{ fontSize: 11, color: "#334155" }} numberOfLines={2}>
-                  <Text style={{ fontWeight: "700" }}>Purpose: </Text>{remark}
+              );
+            })}
+            {remark && entriesList.length === 1 && !entriesList[0]?.remark && !entriesList[0]?.description ? (
+              <Text style={{ fontSize: 11, color: "#334155" }} numberOfLines={2}>
+                <Text style={{ fontWeight: "700" }}>Purpose: </Text>{remark}
+              </Text>
+            ) : null}
+            {proofsCount > 0 ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <FileText size={11} color="#4f46e5" />
+                <Text style={{ fontSize: 10, fontWeight: "700", color: "#4f46e5" }}>
+                  {proofsCount} Bill Proof{proofsCount > 1 ? "s" : ""} Attached
                 </Text>
-              ) : null}
-
-              {proofsCount > 0 ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
-                  <FileText size={11} color="#4f46e5" />
-                  <Text style={{ fontSize: 10, fontWeight: "700", color: "#4f46e5" }}>
-                    {proofsCount} Bill Proof{proofsCount > 1 ? "s" : ""} Attached
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          )}
+              </View>
+            ) : null}
+          </View>
 
           {isFull && c.fullPayment?.reason ? (
             <View style={{ marginTop: 8, padding: 8, backgroundColor: "#fff7ed", borderRadius: 8, gap: 4 }}>
               <Text style={{ fontSize: 11, color: "#9a3412" }} numberOfLines={2}>
-                <Text style={{ fontWeight: "700" }}>Reason: </Text>{c.fullPayment.reason}
+                <Text style={{ fontWeight: "700" }}>Full Payment Reason: </Text>{c.fullPayment.reason}
               </Text>
               {fpProofsCount > 0 ? (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
@@ -286,14 +470,73 @@ const OtherApprovalsScreen = ({ navigation }) => {
             </View>
           ) : null}
 
-          {decided && ma.remarks ? (
-            <Text style={[styles.reasonText, { marginTop: 6 }]} numberOfLines={2}>
-              <Text style={{ fontWeight: "700" }}>Remark: </Text>{ma.remarks}
-            </Text>
-          ) : null}
-          {decided && ma.decidedAt ? (
-            <Text style={styles.dateText}>Decided on {fmtDate(ma.decidedAt)}</Text>
-          ) : null}
+          {/* Structured Approval Info (1st Approval & 2nd Approval) */}
+          <View style={{ marginTop: 10, padding: 10, backgroundColor: "#f8faff", borderRadius: 10, borderWidth: 1, borderColor: "#e0e7ff", gap: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+              <ShieldCheck size={13} color="#4f46e5" />
+              <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#3730a3", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                Approval Hierarchy & Status
+              </Text>
+            </View>
+
+            {/* 1st Approval: Reporting Manager */}
+            <View style={{ backgroundColor: "#ffffff", borderRadius: 8, padding: 8, borderWidth: 1, borderColor: "#e2e8f0", gap: 3 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#475569" }}>
+                  1st Approval • Reporting Manager
+                </Text>
+                <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: mgrBadge.bg }}>
+                  <Text style={{ fontSize: 9.5, fontWeight: "800", color: mgrBadge.color }}>{mgrBadge.label}</Text>
+                </View>
+              </View>
+              <Text style={{ fontSize: 11.5, fontWeight: "800", color: "#0f172a" }}>
+                {mgrName}{mgrCode}
+              </Text>
+              {mgrRoleSub ? (
+                <Text style={{ fontSize: 10, color: "#64748b" }}>{mgrRoleSub}</Text>
+              ) : null}
+              {ma.decidedAt ? (
+                <Text style={{ fontSize: 10, color: "#64748b", fontWeight: "600" }}>
+                  Decided on {fmtDate(ma.decidedAt)}
+                </Text>
+              ) : null}
+              {ma.remarks ? (
+                <Text style={{ fontSize: 10.5, color: "#334155", marginTop: 2 }} numberOfLines={2}>
+                  <Text style={{ fontWeight: "700" }}>Remark: </Text>{ma.remarks}
+                </Text>
+              ) : null}
+            </View>
+
+            {/* 2nd Approval: CFO / Finance Head (if applicable) */}
+            {hasSecondApproval ? (
+              <View style={{ backgroundColor: "#fffbeb", borderRadius: 8, padding: 8, borderWidth: 1, borderColor: "#fde68a", gap: 3 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                  <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#92400e" }}>
+                    2nd Approval • CFO / Finance Head
+                  </Text>
+                  <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: finBadge.bg }}>
+                    <Text style={{ fontSize: 9.5, fontWeight: "800", color: finBadge.color }}>{finBadge.label}</Text>
+                  </View>
+                </View>
+                <Text style={{ fontSize: 11.5, fontWeight: "800", color: "#0f172a" }}>
+                  {finName}{finCode}
+                </Text>
+                {finRoleSub ? (
+                  <Text style={{ fontSize: 10, color: "#64748b" }}>{finRoleSub}</Text>
+                ) : null}
+                {fa.decidedAt ? (
+                  <Text style={{ fontSize: 10, color: "#64748b", fontWeight: "600" }}>
+                    Decided on {fmtDate(fa.decidedAt)}
+                  </Text>
+                ) : null}
+                {fa.remarks ? (
+                  <Text style={{ fontSize: 10.5, color: "#334155", marginTop: 2 }} numberOfLines={2}>
+                    <Text style={{ fontWeight: "700" }}>Remark: </Text>{fa.remarks}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
 
           {pending ? (
             <View style={styles.actionRow}>
@@ -332,7 +575,7 @@ const OtherApprovalsScreen = ({ navigation }) => {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ExpenseHeader
         title="Other Approvals"
-        subtitle="Full payment & other expense requests"
+        subtitle="Full payment, stock purchase & other expense requests"
         navigation={navigation}
       />
 
@@ -432,11 +675,15 @@ const OtherApprovalsScreen = ({ navigation }) => {
               {decision?.claim?.claimNumber}
               {isReject
                 ? " will be rejected and returned to the employee."
-                : " will be sent to Accounts for payment."}
+                : (decision?.claim?.myApprovalStage === "FINANCE"
+                  ? " (2nd approval) will be sent to Accounts for payment."
+                  : decision?.claim?.requiresSecondApproval
+                    ? " will be approved and sent to the CFO / Finance Head for 2nd approval."
+                    : " will be approved and sent to Accounts for payment.")}
             </Text>
             <TextInput
               style={styles.modalInput}
-              placeholder={isReject ? "Reason for rejection (required)" : "Remark (optional)"}
+              placeholder={isReject ? "Reason for rejection (required)" : "Approval remark (required)"}
               placeholderTextColor="#94a3b8"
               value={remark}
               onChangeText={setRemark}
@@ -523,7 +770,7 @@ const styles = StyleSheet.create({
   },
   cardAccent: { width: 4 },
   cardBody: { flex: 1, padding: 14 },
-  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 },
   kindPill: {
     flexDirection: "row",
     alignItems: "center",
@@ -539,6 +786,7 @@ const styles = StyleSheet.create({
   whoText: { fontSize: 12, color: "#64748b", fontWeight: "600", flex: 1 },
   amountRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     marginTop: 12,
     backgroundColor: "#f8fafc",
     borderRadius: 12,
@@ -546,6 +794,7 @@ const styles = StyleSheet.create({
   },
   amountBox: {
     flex: 1,
+    minWidth: 85,
     alignItems: "center",
     borderRightWidth: 1,
     borderRightColor: "#e2e8f0",

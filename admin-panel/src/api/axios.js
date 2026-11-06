@@ -18,10 +18,39 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    const selectedCompanyId = localStorage.getItem('selectedCompanyId');
-    if (selectedCompanyId) {
-      config.headers['x-company-id'] = selectedCompanyId;
+
+    if (!config.headers['x-company-id']) {
+      let effectiveCompanyId = localStorage.getItem('selectedCompanyId') || '';
+      try {
+        const rawUser = localStorage.getItem('user');
+        if (rawUser && rawUser !== 'undefined' && rawUser !== 'null') {
+          const parsedUser = JSON.parse(rawUser);
+          const role = String(parsedUser?.role || '').trim().toLowerCase().replace(/[-\s]/g, '_');
+          const roleCode = String(parsedUser?.roleCode || '').trim().toUpperCase().replace(/[-\s]/g, '_');
+          const isSuper =
+            parsedUser?.scope === 'GLOBAL' ||
+            role === 'superadmin' ||
+            role === 'super_admin' ||
+            roleCode === 'TCSA1';
+          if (!isSuper) {
+            const userComp =
+              parsedUser?.companyId?._id ||
+              parsedUser?.companyId ||
+              parsedUser?.company?._id ||
+              parsedUser?.company ||
+              '';
+            if (userComp) {
+              effectiveCompanyId = String(userComp);
+            }
+          }
+        }
+      } catch (_) {}
+
+      if (effectiveCompanyId) {
+        config.headers['x-company-id'] = effectiveCompanyId;
+      }
     }
+
     return config;
   },
   (error) => Promise.reject(error)

@@ -98,6 +98,7 @@ exports.uploadProofFile = async (req, res) => {
     const ext = EXT[realType] || (path.extname(baseName) || '.jpg');
     const originalName = path.extname(baseName) ? baseName : `${baseName}${ext}`;
     const isNonImage = !realType.startsWith('image/');
+    const folder = `expense/${req.tenant?.companyId || 'company'}`;
     const result = await uploadToCloudinary(req.file.buffer, folder, {
       originalName,
       ext,

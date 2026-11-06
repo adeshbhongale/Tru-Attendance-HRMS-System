@@ -144,6 +144,37 @@ const ExpensePolicySchema = new mongoose.Schema({
     higherOnly: { enabled: { type: Boolean, default: true }, formula: { type: String, default: 'Higher only' } },
   },
 
+  // Dynamic Reporting Manager / Role Payment Approval Limit Rules (e.g. ₹50 till Team Lead, ₹100 till VP)
+  approvalLimitRules: [{
+    roleName: { type: String, required: true, trim: true },
+    roleKey: { type: String, default: '', trim: true, uppercase: true },
+    levelId: { type: mongoose.Schema.Types.ObjectId, ref: 'Level', default: null },
+    levelNumber: { type: Number, default: null },
+    minAmount: { type: Number, default: 0, min: 0 },
+    maxAmount: { type: Number, default: null, min: 0 },
+    description: { type: String, default: '' },
+    status: { type: String, default: 'active', enum: ['active', 'inactive'] },
+  }],
+
+  // Separate "Pay Limit Set or Not" module configuration (which claim types apply the payment limit rule)
+  payLimitConfig: {
+    enabled: { type: Boolean, default: true },
+    applicableClaimTypes: {
+      type: [String],
+      default: ['OTHER'],
+    },
+  },
+
+  // Dynamic CFO / Finance Head 2nd Approval configuration (which claims require CFO approval)
+  cfoApprovalConfig: {
+    enabled: { type: Boolean, default: true },
+    applyOnFullPayment: { type: Boolean, default: true },
+    applicableClaimTypes: {
+      type: [String],
+      default: ['STOCK_PURCHASE'],
+    },
+  },
+
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   publishedAt: { type: Date, default: null },
   publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

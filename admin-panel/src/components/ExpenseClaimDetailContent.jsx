@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, ExternalLink, FileText } from 'lucide-react';
+import { useState } from 'react';
 
 const EXPENSE_TYPE_LABELS = {
   FOOD: 'Food / Daily Allowance',
@@ -106,8 +106,8 @@ function ProofGrid({ items, accent = 'slate' }) {
     accent === 'purple'
       ? 'border-purple-200 bg-white hover:border-purple-400'
       : accent === 'emerald'
-      ? 'border-emerald-200 bg-white hover:border-emerald-400'
-      : 'border-slate-200 bg-slate-50 hover:border-indigo-400';
+        ? 'border-emerald-200 bg-white hover:border-emerald-400'
+        : 'border-slate-200 bg-slate-50 hover:border-indigo-400';
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1.5">
@@ -269,20 +269,20 @@ export default function ExpenseClaimDetailContent({ claim }) {
       entry.allowedAmount !== undefined
         ? Number(entry.allowedAmount)
         : hasEcItem
-        ? sumAllow
-        : reqAmt;
+          ? sumAllow
+          : reqAmt;
     const excAmt =
       entry.excessAmount !== undefined
         ? Number(entry.excessAmount)
         : hasEcItem
-        ? sumExc
-        : Math.max(0, reqAmt - allowAmt);
+          ? sumExc
+          : Math.max(0, reqAmt - allowAmt);
     const polLim =
       entry.policyLimit !== undefined
         ? Number(entry.policyLimit)
         : hasEcItem && sumLim > 0
-        ? sumLim
-        : allowAmt;
+          ? sumLim
+          : allowAmt;
 
     const item0 = ecItems0[idx] || {};
     return {
@@ -338,15 +338,15 @@ export default function ExpenseClaimDetailContent({ claim }) {
   const fp = claim.fullPayment || {};
   const isFullPayment = Boolean(
     claim.requestFullPayment ||
-      fp.requested ||
-      claim.fullPaymentApproved ||
-      (fp.status && fp.status !== 'NOT_REQUESTED')
+    fp.requested ||
+    claim.fullPaymentApproved ||
+    (fp.status && fp.status !== 'NOT_REQUESTED')
   );
   const fullPaymentProofs = Array.isArray(fp.proofs)
     ? fp.proofs
     : Array.isArray(claim.fullPaymentProofs)
-    ? claim.fullPaymentProofs
-    : [];
+      ? claim.fullPaymentProofs
+      : [];
 
   // Management check (strictly on claimant / submittedBy)
   const subObj = typeof claim.submittedBy === 'object' && claim.submittedBy !== null ? claim.submittedBy : {};
@@ -358,9 +358,9 @@ export default function ExpenseClaimDetailContent({ claim }) {
     : [];
   const isClaimantManagement = Boolean(
     subRole === 'MANAGEMENT' ||
-      subDept === 'MANAGEMENT' ||
-      subResp.includes('MANAGEMENT') ||
-      /\b(DIRECTOR|CEO|CFO|MD|MANAGING DIRECTOR|PROMOTER|PROPRIETOR|PARTNER|PRESIDENT|VICE PRESIDENT)\b/.test(subDesig)
+    subDept === 'MANAGEMENT' ||
+    subResp.includes('MANAGEMENT') ||
+    /\b(DIRECTOR|CEO|CFO|MD|MANAGING DIRECTOR|PROMOTER|PROPRIETOR|PARTNER|PRESIDENT|VICE PRESIDENT)\b/.test(subDesig)
   );
 
   const mgr = claim.managerApproval || {};
@@ -408,38 +408,38 @@ export default function ExpenseClaimDetailContent({ claim }) {
     : ['STOCK_PURCHASE'];
   const isCfoApplicableByRule = Boolean(
     cfoCfgEnabled &&
-      ((isFullPayment && cfoCfgFullPayment) ||
-        claimTypeCodes.some((code) => cfoCfgTypes.includes(code)))
+    ((isFullPayment && cfoCfgFullPayment) ||
+      claimTypeCodes.some((code) => cfoCfgTypes.includes(code)))
   );
 
   const isOtherCode = (v) => ['OTHER', 'OTHER_EXPENSE', 'STOCK_PURCHASE'].includes(String(v || '').trim().toUpperCase());
   const isOtherSub = (v) => ['NORMAL', 'PURCHASE'].includes(String(v || '').trim().toUpperCase());
   const isStockPurchaseClaim = Boolean(
     String(claim.claimType || '').toUpperCase() === 'STOCK_PURCHASE' ||
-      String(claim.expenseType || '').toUpperCase() === 'STOCK_PURCHASE' ||
-      combinedEntries.some(
-        (e) =>
-          String(e?.expenseType || '').toUpperCase() === 'STOCK_PURCHASE' ||
-          String(e?.otherSubType || '').toUpperCase() === 'PURCHASE'
-      )
+    String(claim.expenseType || '').toUpperCase() === 'STOCK_PURCHASE' ||
+    combinedEntries.some(
+      (e) =>
+        String(e?.expenseType || '').toUpperCase() === 'STOCK_PURCHASE' ||
+        String(e?.otherSubType || '').toUpperCase() === 'PURCHASE'
+    )
   );
   const isOtherClaim = Boolean(
     isOtherCode(claim.claimType) ||
-      isOtherCode(claim.expenseType) ||
-      mgr.kind === 'OTHER_EXPENSE' ||
-      mgr.approverRole === 'REPORTING_MANAGER' ||
-      combinedEntries.some((e) => isOtherCode(e?.expenseType) || isOtherSub(e?.otherSubType))
+    isOtherCode(claim.expenseType) ||
+    mgr.kind === 'OTHER_EXPENSE' ||
+    mgr.approverRole === 'REPORTING_MANAGER' ||
+    combinedEntries.some((e) => isOtherCode(e?.expenseType) || isOtherSub(e?.otherSubType))
   );
 
   const showFinanceCard =
     !isClaimantManagement &&
     Boolean(
       isCfoApplicableByRule ||
-        (fin.status && fin.status !== 'NOT_REQUIRED') ||
-        fin.approver ||
-        fin.approverName ||
-        fin.decidedAt ||
-        fin.remarks
+      (fin.status && fin.status !== 'NOT_REQUIRED') ||
+      fin.approver ||
+      fin.approverName ||
+      fin.decidedAt ||
+      fin.remarks
     );
 
   const isMgrExplicitlyNotRequired =
@@ -455,13 +455,13 @@ export default function ExpenseClaimDetailContent({ claim }) {
     !isMgrExplicitlyNotRequired &&
     Boolean(
       isFullPayment ||
-        isCfoApplicableByRule ||
-        (isOtherClaim && mgr.status !== 'NOT_REQUIRED') ||
-        (mgr.status && mgr.status !== 'NOT_REQUIRED') ||
-        mgr.approver ||
-        mgr.approverName ||
-        mgr.decidedAt ||
-        mgr.remarks
+      isCfoApplicableByRule ||
+      (isOtherClaim && mgr.status !== 'NOT_REQUIRED') ||
+      (mgr.status && mgr.status !== 'NOT_REQUIRED') ||
+      mgr.approver ||
+      mgr.approverName ||
+      mgr.decidedAt ||
+      mgr.remarks
     );
 
   // 1st Approval (Reporting Manager) status & details
@@ -484,11 +484,11 @@ export default function ExpenseClaimDetailContent({ claim }) {
     !isMgrRejected &&
     Boolean(
       mgr.status === 'APPROVED' ||
-        fp.status === 'APPROVED' ||
-        fin.status === 'PENDING' ||
-        fin.status === 'APPROVED' ||
-        ['SUBMITTED', 'APPROVED', 'ACCOUNTS_APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(statusUpper) ||
-        isPaid
+      fp.status === 'APPROVED' ||
+      fin.status === 'PENDING' ||
+      fin.status === 'APPROVED' ||
+      ['SUBMITTED', 'APPROVED', 'ACCOUNTS_APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(statusUpper) ||
+      isPaid
     );
   const mgrStatus = isMgrApproved ? 'APPROVED' : isMgrRejected ? 'REJECTED' : 'PENDING';
   const mgrDecidedAt = mgr.decidedAt || fp.decidedAt || null;
@@ -511,19 +511,19 @@ export default function ExpenseClaimDetailContent({ claim }) {
     !isMgrRejected &&
     Boolean(
       fin.status === 'APPROVED' ||
-        (Boolean(fin.decidedAt) &&
-          (['SUBMITTED', 'APPROVED', 'ACCOUNTS_APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(statusUpper) ||
-            isPaid))
+      (Boolean(fin.decidedAt) &&
+        (['SUBMITTED', 'APPROVED', 'ACCOUNTS_APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(statusUpper) ||
+          isPaid))
     );
   const finStatus = isFinApproved
     ? 'APPROVED'
     : isFinRejected
-    ? 'REJECTED'
-    : isMgrRejected
-    ? 'CANCELLED'
-    : fin.status === 'PENDING' || isMgrApproved
-    ? 'PENDING'
-    : 'AWAITING_STEP_1';
+      ? 'REJECTED'
+      : isMgrRejected
+        ? 'CANCELLED'
+        : fin.status === 'PENDING' || isMgrApproved
+          ? 'PENDING'
+          : 'AWAITING_STEP_1';
 
   // Accounts Admin Approval & Payment details
   const accObj = acc.approvedBy && typeof acc.approvedBy === 'object' ? acc.approvedBy : null;
@@ -553,14 +553,14 @@ export default function ExpenseClaimDetailContent({ claim }) {
     Array.isArray(claim.paymentProofs) && claim.paymentProofs.length > 0
       ? claim.paymentProofs
       : Array.isArray(disb.paymentProofs) && disb.paymentProofs.length > 0
-      ? disb.paymentProofs
-      : disb.paymentProof?.url
-      ? [disb.paymentProof]
-      : [];
+        ? disb.paymentProofs
+        : disb.paymentProof?.url
+          ? [disb.paymentProof]
+          : [];
 
   const payable = Number(
     claim.payableAmount ??
-      (isFullPayment && (fp.status === 'APPROVED' || isFinApproved || isClaimantManagement) ? requested : allowed)
+    (isFullPayment && (fp.status === 'APPROVED' || isFinApproved || isClaimantManagement) ? requested : allowed)
   );
 
   // Policy explanation & rules (Section 6)
@@ -590,9 +590,8 @@ export default function ExpenseClaimDetailContent({ claim }) {
       title: 'Claim Submitted',
       badge: 'Submitted',
       tone: 'emerald',
-      desc: `Submitted by ${employeeSlots[0]?.name || 'Employee'}${
-        employeeSlots[0]?.employeeIdCode ? ` (${employeeSlots[0].employeeIdCode})` : ''
-      } on ${formatDateTime(claim.submittedAt || claim.createdAt)} for ${fmtINR(requested)}.`,
+      desc: `Submitted by ${employeeSlots[0]?.name || 'Employee'}${employeeSlots[0]?.employeeIdCode ? ` (${employeeSlots[0].employeeIdCode})` : ''
+        } on ${formatDateTime(claim.submittedAt || claim.createdAt)} for ${fmtINR(requested)}.`,
     });
 
     if (showManagerCard) {
@@ -604,14 +603,12 @@ export default function ExpenseClaimDetailContent({ claim }) {
         badge: isMgrApproved ? 'Approved' : isMgrRejected ? 'Rejected' : 'Pending',
         tone: isMgrApproved ? 'emerald' : isMgrRejected ? 'rose' : 'amber',
         desc: isMgrApproved
-          ? `Approved by ${mWho}${mgrDecidedAt ? ` on ${formatDateTime(mgrDecidedAt)}` : ''}.${
-              mgrRemarks ? ` Remark: "${mgrRemarks}"` : ''
-            }`
+          ? `Approved by ${mWho}${mgrDecidedAt ? ` on ${formatDateTime(mgrDecidedAt)}` : ''}.${mgrRemarks ? ` Remark: "${mgrRemarks}"` : ''
+          }`
           : isMgrRejected
-          ? `Rejected by ${mWho}${mgrDecidedAt ? ` on ${formatDateTime(mgrDecidedAt)}` : ''}.${
-              mgrRemarks ? ` Reason: "${mgrRemarks}"` : ''
+            ? `Rejected by ${mWho}${mgrDecidedAt ? ` on ${formatDateTime(mgrDecidedAt)}` : ''}.${mgrRemarks ? ` Reason: "${mgrRemarks}"` : ''
             }`
-          : `Awaiting 1st approval from ${mWho}.`,
+            : `Awaiting 1st approval from ${mWho}.`,
       });
     }
 
@@ -623,26 +620,24 @@ export default function ExpenseClaimDetailContent({ claim }) {
         badge: isFinApproved
           ? 'Approved'
           : isFinRejected
-          ? 'Rejected'
-          : isMgrRejected
-          ? 'Cancelled'
-          : isMgrApproved
-          ? 'In Review'
-          : 'Waiting',
+            ? 'Rejected'
+            : isMgrRejected
+              ? 'Cancelled'
+              : isMgrApproved
+                ? 'In Review'
+                : 'Waiting',
         tone: isFinApproved ? 'emerald' : isFinRejected || isMgrRejected ? 'rose' : 'amber',
         desc: isFinApproved
-          ? `Approved by ${fWho}${fin.decidedAt ? ` on ${formatDateTime(fin.decidedAt)}` : ''}.${
-              fin.remarks ? ` Remark: "${fin.remarks}"` : ''
-            }`
+          ? `Approved by ${fWho}${fin.decidedAt ? ` on ${formatDateTime(fin.decidedAt)}` : ''}.${fin.remarks ? ` Remark: "${fin.remarks}"` : ''
+          }`
           : isFinRejected
-          ? `Rejected by ${fWho}${fin.decidedAt ? ` on ${formatDateTime(fin.decidedAt)}` : ''}.${
-              fin.remarks ? ` Reason: "${fin.remarks}"` : ''
+            ? `Rejected by ${fWho}${fin.decidedAt ? ` on ${formatDateTime(fin.decidedAt)}` : ''}.${fin.remarks ? ` Reason: "${fin.remarks}"` : ''
             }`
-          : isMgrRejected
-          ? 'Cancelled because 1st Approval (Reporting Manager) was rejected.'
-          : isMgrApproved
-          ? `Forwarded to ${fWho} for 2nd approval.`
-          : 'Will be routed to CFO / Finance Head after 1st Approval.',
+            : isMgrRejected
+              ? 'Cancelled because 1st Approval (Reporting Manager) was rejected.'
+              : isMgrApproved
+                ? `Forwarded to ${fWho} for 2nd approval.`
+                : 'Will be routed to CFO / Finance Head after 1st Approval.',
       });
     }
 
@@ -655,28 +650,26 @@ export default function ExpenseClaimDetailContent({ claim }) {
       badge: isAccountsStep1Approved
         ? 'Approved'
         : isAccountsRejected
-        ? 'Rejected'
-        : isMgrRejected || isFinRejected
-        ? 'Cancelled'
-        : 'Pending',
+          ? 'Rejected'
+          : isMgrRejected || isFinRejected
+            ? 'Cancelled'
+            : 'Pending',
       tone: isAccountsStep1Approved
         ? 'emerald'
         : isAccountsRejected || isMgrRejected || isFinRejected
-        ? 'rose'
-        : 'amber',
+          ? 'rose'
+          : 'amber',
       desc: isAccountsStep1Approved
-        ? `Verified & approved by ${aWho}${accApprovedAt ? ` on ${formatDateTime(accApprovedAt)}` : ''}.${
-            accStep1Remarks ? ` Remark: "${accStep1Remarks}"` : ''
-          }`
+        ? `Verified & approved by ${aWho}${accApprovedAt ? ` on ${formatDateTime(accApprovedAt)}` : ''}.${accStep1Remarks ? ` Remark: "${accStep1Remarks}"` : ''
+        }`
         : isAccountsRejected
-        ? `Rejected by ${rej.rejectedByName || aWho}${
-            rej.rejectedAt ? ` on ${formatDateTime(rej.rejectedAt)}` : ''
+          ? `Rejected by ${rej.rejectedByName || aWho}${rej.rejectedAt ? ` on ${formatDateTime(rej.rejectedAt)}` : ''
           }.${rej.reason ? ` Reason: "${rej.reason}"` : ''}`
-        : isMgrRejected || isFinRejected
-        ? 'Cancelled due to prior approval rejection.'
-        : statusUpper === 'SUBMITTED'
-        ? 'Awaiting Accounts Admin Step 1 verification & approval.'
-        : 'Will be routed to Accounts Admin after prior approvals complete.',
+          : isMgrRejected || isFinRejected
+            ? 'Cancelled due to prior approval rejection.'
+            : statusUpper === 'SUBMITTED'
+              ? 'Awaiting Accounts Admin Step 1 verification & approval.'
+              : 'Will be routed to Accounts Admin after prior approvals complete.',
     });
 
     steps.push({
@@ -685,16 +678,14 @@ export default function ExpenseClaimDetailContent({ claim }) {
       badge: isPaid ? 'Paid' : isRejected ? 'Cancelled' : isAccountsStep1Approved ? 'Awaiting Payment' : 'Pending',
       tone: isPaid ? 'emerald' : isRejected ? 'rose' : 'amber',
       desc: isPaid
-        ? `Disbursed ${fmtINR(paidAmount)} via ${paymentMethod || 'Bank Transfer'}${
-            paymentRef ? ` (UTR/Ref: ${paymentRef})` : ''
-          }${paidAt ? ` on ${formatDateTime(paidAt)}` : ''}${paidByName ? ` by ${paidByName}` : ''}.${
-            paymentRemarks ? ` Remark: "${paymentRemarks}"` : ''
-          }`
+        ? `Disbursed ${fmtINR(paidAmount)} via ${paymentMethod || 'Bank Transfer'}${paymentRef ? ` (UTR/Ref: ${paymentRef})` : ''
+        }${paidAt ? ` on ${formatDateTime(paidAt)}` : ''}${paidByName ? ` by ${paidByName}` : ''}.${paymentRemarks ? ` Remark: "${paymentRemarks}"` : ''
+        }`
         : isRejected
-        ? 'Payment cancelled because the claim was rejected.'
-        : isAccountsStep1Approved
-        ? `Approved for ${fmtINR(payable)} — awaiting disbursement & UTR recording by Accounts Admin.`
-        : 'Payment will be processed after Accounts Admin Step 1 approval.',
+          ? 'Payment cancelled because the claim was rejected.'
+          : isAccountsStep1Approved
+            ? `Approved for ${fmtINR(payable)} — awaiting disbursement & UTR recording by Accounts Admin.`
+            : 'Payment will be processed after Accounts Admin Step 1 approval.',
     });
 
     return steps;
@@ -721,16 +712,16 @@ export default function ExpenseClaimDetailContent({ claim }) {
     const normCode = isPurchase
       ? 'STOCK_PURCHASE'
       : rawCode === 'LOGGING' || rawCode === 'LODGING_EXPENSE'
-      ? 'LODGING'
-      : rawCode === 'FOOD_EXPENSE'
-      ? 'FOOD'
-      : rawCode === 'LOCAL_CONVEYANCE'
-      ? 'CONVEYANCE'
-      : rawCode === 'OTHER_EXPENSE'
-      ? 'OTHER'
-      : CATEGORY_META[rawCode]
-      ? rawCode
-      : 'OTHER';
+        ? 'LODGING'
+        : rawCode === 'FOOD_EXPENSE'
+          ? 'FOOD'
+          : rawCode === 'LOCAL_CONVEYANCE'
+            ? 'CONVEYANCE'
+            : rawCode === 'OTHER_EXPENSE'
+              ? 'OTHER'
+              : CATEGORY_META[rawCode]
+                ? rawCode
+                : 'OTHER';
 
     if (!categoryGroupsMap.has(normCode)) {
       const meta = CATEGORY_META[normCode] || { title: `${normCode} Claim`, icon: '📋' };
@@ -858,18 +849,16 @@ export default function ExpenseClaimDetailContent({ claim }) {
           <DetailRow label="Customer Name" value={claim.trip?.customerName || claim.customerName || '—'} />
           <DetailRow
             label="Destination City"
-            value={`${claim.trip?.destination || claim.destinationCity || '—'}${
-              claim.trip?.destinationClass ? ` (Class ${claim.trip.destinationClass})` : ''
-            }`}
+            value={`${claim.trip?.destination || claim.destinationCity || '—'}${claim.trip?.destinationClass ? ` (Class ${claim.trip.destinationClass})` : ''
+              }`}
           />
           <div className="flex items-center justify-between gap-4 py-1.5 border-b border-slate-100 text-xs">
             <span className="text-slate-500 font-medium">Visit Option</span>
             <span
-              className={`px-2.5 py-0.5 rounded-md font-bold text-[11px] border ${
-                isVisitClaim
+              className={`px-2.5 py-0.5 rounded-md font-bold text-[11px] border ${isVisitClaim
                   ? 'bg-amber-50 text-amber-800 border-amber-300'
                   : 'bg-slate-100 text-slate-700 border-slate-200'
-              }`}
+                }`}
             >
               {isVisitClaim ? '2. Service Call (Service Report Compulsory)' : '1. Normal Travel'}
             </span>
@@ -905,30 +894,29 @@ export default function ExpenseClaimDetailContent({ claim }) {
           </div>
           <div className="flex items-center gap-2">
             <span
-              className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold border ${
-                isPaid
+              className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold border ${isPaid
                   ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
                   : isRejected
-                  ? 'bg-rose-500/20 text-rose-300 border-rose-400/40'
-                  : isAccountsStep1Approved
-                  ? 'bg-blue-500/20 text-blue-200 border-blue-400/40'
-                  : 'bg-amber-500/20 text-amber-300 border-amber-400/40'
-              }`}
+                    ? 'bg-rose-500/20 text-rose-300 border-rose-400/40'
+                    : isAccountsStep1Approved
+                      ? 'bg-blue-500/20 text-blue-200 border-blue-400/40'
+                      : 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                }`}
             >
               {isPaid
                 ? 'Paid'
                 : isRejected
-                ? 'Rejected'
-                : isAccountsStep1Approved
-                ? 'Approved • Payment Pending'
-                : 'Pending'}
+                  ? 'Rejected'
+                  : isAccountsStep1Approved
+                    ? 'Approved • Payment Pending'
+                    : 'Pending'}
             </span>
           </div>
         </div>
 
         {/* Level 2 – Claim Categories Header */}
         <div className="flex items-center justify-between pt-1">
-          <p className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
+          <p className="text-xs font-extrabold text-slate-700 tracking-wider">
             Claim Categories ({categoryGroups.length})
           </p>
           {categoryGroups.length > 0 && (
@@ -1006,22 +994,21 @@ export default function ExpenseClaimDetailContent({ claim }) {
                       const entryTitle = isPurchase
                         ? entry.materialName || entry.description || 'Stock Purchase'
                         : isTravel
-                        ? entry.travelModeName
-                          ? `${entry.travelModeName}${
-                              entry.travelSubTypeName ? ` (${entry.travelSubTypeName})` : ''
+                          ? entry.travelModeName
+                            ? `${entry.travelModeName}${entry.travelSubTypeName ? ` (${entry.travelSubTypeName})` : ''
                             }`
-                          : entry.description || 'Travel Charges'
-                        : isConveyance
-                        ? VEHICLE_LABELS[entry.vehicle] ||
-                          entry.travelModeName ||
-                          entry.description ||
-                          'Local Travel'
-                        : isEntryLodging
-                        ? entry.hotelName ||
-                          (stayType === 'WITH_RELATIVE' ? 'Stay with Relative' : 'Hotel Accommodation')
-                        : isOtherNormal
-                        ? entry.description || 'Other Expense'
-                        : entry.description || typeLabel;
+                            : entry.description || 'Travel Charges'
+                          : isConveyance
+                            ? VEHICLE_LABELS[entry.vehicle] ||
+                            entry.travelModeName ||
+                            entry.description ||
+                            'Local Travel'
+                            : isEntryLodging
+                              ? entry.hotelName ||
+                              (stayType === 'WITH_RELATIVE' ? 'Stay with Relative' : 'Hotel Accommodation')
+                              : isOtherNormal
+                                ? entry.description || 'Other Expense'
+                                : entry.description || typeLabel;
 
                       const entryDateStr = isEntryLodging
                         ? `${formatDate(entry.fromDate || fromDate)} → ${formatDate(entry.toDate || toDate)}`
@@ -1029,9 +1016,8 @@ export default function ExpenseClaimDetailContent({ claim }) {
 
                       const entrySubContext = [
                         claim.trip?.destination
-                          ? `${claim.trip.destination}${
-                              claim.trip.destinationClass ? ` (Class ${claim.trip.destinationClass})` : ''
-                            }`
+                          ? `${claim.trip.destination}${claim.trip.destinationClass ? ` (Class ${claim.trip.destinationClass})` : ''
+                          }`
                           : '',
                         entry.distanceKm ? `${entry.distanceKm} km` : '',
                         entry.description || entry.remark || claim.trip?.purpose || '',
@@ -1102,11 +1088,10 @@ export default function ExpenseClaimDetailContent({ claim }) {
                             </div>
                             <div className="flex items-center gap-2.5 shrink-0">
                               <span
-                                className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold shrink-0 ${
-                                  entryExc > 0
+                                className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold shrink-0 ${entryExc > 0
                                     ? 'bg-rose-100 text-rose-700 border border-rose-300'
                                     : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                }`}
+                                  }`}
                               >
                                 {entryExc > 0 ? `${fmtINR(entryExc)} Excess` : 'Fully Allowed'}
                               </span>
@@ -1134,9 +1119,8 @@ export default function ExpenseClaimDetailContent({ claim }) {
                                 label="Travel Mode"
                                 value={
                                   entry.travelModeName
-                                    ? `${entry.travelModeName}${
-                                        entry.travelSubTypeName ? ` — ${entry.travelSubTypeName}` : ''
-                                      }`
+                                    ? `${entry.travelModeName}${entry.travelSubTypeName ? ` — ${entry.travelSubTypeName}` : ''
+                                    }`
                                     : entry.travelMode || claim.trip?.travelMode || '—'
                                 }
                               />
@@ -1155,8 +1139,8 @@ export default function ExpenseClaimDetailContent({ claim }) {
                                     entry.entitlementStatus === 'ALLOWED'
                                       ? 'Allowed — Within Policy'
                                       : entry.entitlementStatus === 'MAX_LIMIT'
-                                      ? `Max Limit ${fmtINR(entryLim)}`
-                                      : 'Not Allowed — Treated as Excess'
+                                        ? `Max Limit ${fmtINR(entryLim)}`
+                                        : 'Not Allowed — Treated as Excess'
                                   }
                                 />
                               ) : null}
@@ -1186,8 +1170,8 @@ export default function ExpenseClaimDetailContent({ claim }) {
                                 label="Visit Option"
                                 value={
                                   String(entry.visitType || '').toUpperCase() === 'VISIT' ||
-                                  entry.isVisit ||
-                                  isVisitClaim
+                                    entry.isVisit ||
+                                    isVisitClaim
                                     ? '2. Service Call (Service Report Compulsory)'
                                     : '1. Normal Travel'
                                 }
@@ -1195,11 +1179,10 @@ export default function ExpenseClaimDetailContent({ claim }) {
                               {entry.distanceKm ? (
                                 <DetailRow
                                   label="Distance"
-                                  value={`${entry.distanceKm} km${
-                                    entry.startKm !== undefined && entry.endKm !== undefined
+                                  value={`${entry.distanceKm} km${entry.startKm !== undefined && entry.endKm !== undefined
                                       ? ` (Odometer: ${entry.startKm} → ${entry.endKm} km)`
                                       : ''
-                                  }`}
+                                    }`}
                                 />
                               ) : null}
                               {entry.distanceKm && entry.ratePerKm ? (
@@ -1228,21 +1211,21 @@ export default function ExpenseClaimDetailContent({ claim }) {
                           {/* 4-Column Figures Grid (Excess in RED) */}
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                             <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase">Claimed</p>
+                              <p className="text-[10px] font-bold text-slate-400">Claimed</p>
                               <p className="text-xs font-extrabold text-slate-900 mt-0.5">{fmtINR(entryReq)}</p>
                             </div>
                             <div className="rounded-lg bg-indigo-50/60 border border-indigo-100 p-2 text-center">
-                              <p className="text-[10px] font-bold text-indigo-500 uppercase">Policy Limit</p>
+                              <p className="text-[10px] font-bold text-indigo-500">Policy Limit</p>
                               <p className="text-xs font-extrabold text-indigo-700 mt-0.5">
                                 {entryLim > 0 ? fmtINR(entryLim) : 'Actual'}
                               </p>
                             </div>
                             <div className="rounded-lg bg-emerald-50/60 border border-emerald-100 p-2 text-center">
-                              <p className="text-[10px] font-bold text-emerald-600 uppercase">Allowed</p>
+                              <p className="text-[10px] font-bold text-emerald-600">Allowed</p>
                               <p className="text-xs font-extrabold text-emerald-700 mt-0.5">{fmtINR(entryAllow)}</p>
                             </div>
                             <div className="rounded-lg bg-rose-50/70 border border-rose-200 p-2 text-center">
-                              <p className="text-[10px] font-bold text-rose-600 uppercase">Excess</p>
+                              <p className="text-[10px] font-bold text-rose-600">Excess</p>
                               <p className="text-xs font-extrabold text-rose-700 mt-0.5">{fmtINR(entryExc)}</p>
                             </div>
                           </div>
@@ -1321,11 +1304,10 @@ export default function ExpenseClaimDetailContent({ claim }) {
                           </div>
                           <div className="flex items-center gap-2.5">
                             <span
-                              className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold ${
-                                group.foodSummaryCard.excessAmount > 0
+                              className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold ${group.foodSummaryCard.excessAmount > 0
                                   ? 'bg-rose-100 text-rose-700 border border-rose-300'
                                   : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                              }`}
+                                }`}
                             >
                               {group.foodSummaryCard.excessAmount > 0
                                 ? `${fmtINR(group.foodSummaryCard.excessAmount)} Excess`
@@ -1348,25 +1330,25 @@ export default function ExpenseClaimDetailContent({ claim }) {
 
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                           <div className="rounded-lg bg-white border border-slate-200 p-2 text-center">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase">Claimed</p>
+                            <p className="text-[10px] font-bold text-slate-400">Claimed</p>
                             <p className="text-xs font-extrabold text-slate-900 mt-0.5">
                               {fmtINR(group.foodSummaryCard.requestedAmount)}
                             </p>
                           </div>
                           <div className="rounded-lg bg-indigo-50/60 border border-indigo-100 p-2 text-center">
-                            <p className="text-[10px] font-bold text-indigo-500 uppercase">Policy Limit</p>
+                            <p className="text-[10px] font-bold text-indigo-500">Policy Limit</p>
                             <p className="text-xs font-extrabold text-indigo-700 mt-0.5">
                               {fmtINR(group.foodSummaryCard.policyLimit)}
                             </p>
                           </div>
                           <div className="rounded-lg bg-emerald-50/60 border border-emerald-100 p-2 text-center">
-                            <p className="text-[10px] font-bold text-emerald-600 uppercase">Allowed</p>
+                            <p className="text-[10px] font-bold text-emerald-600">Allowed</p>
                             <p className="text-xs font-extrabold text-emerald-700 mt-0.5">
                               {fmtINR(group.foodSummaryCard.allowedAmount)}
                             </p>
                           </div>
                           <div className="rounded-lg bg-rose-50/70 border border-rose-200 p-2 text-center">
-                            <p className="text-[10px] font-bold text-rose-600 uppercase">Excess</p>
+                            <p className="text-[10px] font-bold text-rose-600">Excess</p>
                             <p className="text-xs font-extrabold text-rose-700 mt-0.5">
                               {fmtINR(group.foodSummaryCard.excessAmount)}
                             </p>
@@ -1410,7 +1392,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
         {/* Total Claim Amount Summary Bar */}
         <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3.5 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">Total Claim Amount</p>
+            <p className="text-xs font-extrabold text-slate-900 tracking-wider">Total Claim Amount</p>
             <div className="flex flex-wrap items-center gap-3 mt-1 text-xs">
               <span className="font-bold text-emerald-700">Allowed: {fmtINR(allowed)}</span>
               <span className="font-extrabold text-rose-600">Excess: {fmtINR(excess)}</span>
@@ -1441,8 +1423,8 @@ export default function ExpenseClaimDetailContent({ claim }) {
                 fp.status === 'APPROVED' || isFinApproved
                   ? 'text-emerald-700 font-extrabold'
                   : fp.status === 'REJECTED' || isFinRejected || isMgrRejected
-                  ? 'text-rose-700 font-extrabold'
-                  : 'text-amber-700 font-extrabold'
+                    ? 'text-rose-700 font-extrabold'
+                    : 'text-amber-700 font-extrabold'
               }
             />
           )}
@@ -1466,18 +1448,17 @@ export default function ExpenseClaimDetailContent({ claim }) {
               {isFullPayment
                 ? 'Full Payment'
                 : isStockPurchaseClaim
-                ? 'Stock Purchase'
-                : EXPENSE_TYPE_LABELS[rawClaimType] || 'Other Expense'}
+                  ? 'Stock Purchase'
+                  : EXPENSE_TYPE_LABELS[rawClaimType] || 'Other Expense'}
               )
             </h4>
             <span
-              className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                mgrStatus === 'APPROVED'
+              className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${mgrStatus === 'APPROVED'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : mgrStatus === 'REJECTED'
-                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
             >
               {mgrStatus === 'APPROVED' ? 'Approved' : mgrStatus === 'REJECTED' ? 'Rejected' : 'Pending'}
             </span>
@@ -1504,15 +1485,15 @@ export default function ExpenseClaimDetailContent({ claim }) {
               mgrStatus === 'APPROVED'
                 ? 'APPROVED'
                 : mgrStatus === 'REJECTED'
-                ? 'REJECTED'
-                : 'AWAITING 1ST APPROVAL'
+                  ? 'REJECTED'
+                  : 'AWAITING 1ST APPROVAL'
             }
             valueClass={
               mgrStatus === 'APPROVED'
                 ? 'text-emerald-700 font-extrabold'
                 : mgrStatus === 'REJECTED'
-                ? 'text-rose-700 font-extrabold'
-                : 'text-amber-700 font-extrabold'
+                  ? 'text-rose-700 font-extrabold'
+                  : 'text-amber-700 font-extrabold'
             }
           />
           {mgr.requestedAt ? <DetailRow label="Requested On" value={formatDateTime(mgr.requestedAt)} /> : null}
@@ -1527,23 +1508,22 @@ export default function ExpenseClaimDetailContent({ claim }) {
           <div className="flex items-center justify-between gap-2 mb-2">
             <h4 className="text-sm font-extrabold text-slate-900">2nd Approval: CFO / Finance Head</h4>
             <span
-              className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                finStatus === 'APPROVED'
+              className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${finStatus === 'APPROVED'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : finStatus === 'REJECTED' || finStatus === 'CANCELLED'
-                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
             >
               {finStatus === 'APPROVED'
                 ? 'Approved'
                 : finStatus === 'REJECTED'
-                ? 'Rejected'
-                : finStatus === 'CANCELLED'
-                ? 'Cancelled'
-                : finStatus === 'PENDING'
-                ? 'Pending'
-                : 'After 1st Approval'}
+                  ? 'Rejected'
+                  : finStatus === 'CANCELLED'
+                    ? 'Cancelled'
+                    : finStatus === 'PENDING'
+                      ? 'Pending'
+                      : 'After 1st Approval'}
             </span>
           </div>
 
@@ -1568,19 +1548,19 @@ export default function ExpenseClaimDetailContent({ claim }) {
               finStatus === 'APPROVED'
                 ? 'APPROVED'
                 : finStatus === 'REJECTED'
-                ? 'REJECTED'
-                : finStatus === 'CANCELLED'
-                ? 'CANCELLED (1ST APPROVAL REJECTED)'
-                : finStatus === 'PENDING'
-                ? 'AWAITING 2ND APPROVAL'
-                : 'PENDING 1ST APPROVAL'
+                  ? 'REJECTED'
+                  : finStatus === 'CANCELLED'
+                    ? 'CANCELLED (1ST APPROVAL REJECTED)'
+                    : finStatus === 'PENDING'
+                      ? 'AWAITING 2ND APPROVAL'
+                      : 'PENDING 1ST APPROVAL'
             }
             valueClass={
               finStatus === 'APPROVED'
                 ? 'text-emerald-700 font-extrabold'
                 : finStatus === 'REJECTED' || finStatus === 'CANCELLED'
-                ? 'text-rose-700 font-extrabold'
-                : 'text-amber-700 font-extrabold'
+                  ? 'text-rose-700 font-extrabold'
+                  : 'text-amber-700 font-extrabold'
             }
           />
           {fin.requestedAt ? <DetailRow label="Requested On" value={formatDateTime(fin.requestedAt)} /> : null}
@@ -1595,27 +1575,26 @@ export default function ExpenseClaimDetailContent({ claim }) {
           <div className="flex items-center justify-between gap-2 mb-2">
             <h4 className="text-sm font-extrabold text-slate-900">Accounts Admin Approval & Payment</h4>
             <span
-              className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                isPaid
+              className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${isPaid
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : isAccountsStep1Approved
-                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                  : isRejected
-                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200'
-              }`}
+                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                    : isRejected
+                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
             >
               {isPaid
                 ? 'Paid'
                 : isAccountsStep1Approved
-                ? 'Approved (Payment Pending)'
-                : isAccountsRejected
-                ? 'Rejected'
-                : isRejected
-                ? 'Cancelled'
-                : statusUpper === 'SUBMITTED'
-                ? 'Awaiting Approval'
-                : 'After Prior Approvals'}
+                  ? 'Approved (Payment Pending)'
+                  : isAccountsRejected
+                    ? 'Rejected'
+                    : isRejected
+                      ? 'Cancelled'
+                      : statusUpper === 'SUBMITTED'
+                        ? 'Awaiting Approval'
+                        : 'After Prior Approvals'}
             </span>
           </div>
 
@@ -1625,21 +1604,21 @@ export default function ExpenseClaimDetailContent({ claim }) {
               isPaid
                 ? 'APPROVED & PAID'
                 : isAccountsStep1Approved
-                ? 'APPROVED BY ACCOUNTS (AWAITING PAYMENT)'
-                : isAccountsRejected
-                ? 'REJECTED BY ACCOUNTS'
-                : isRejected
-                ? 'CANCELLED (PRIOR APPROVAL REJECTED)'
-                : statusUpper === 'SUBMITTED'
-                ? 'PENDING ACCOUNTS APPROVAL'
-                : 'AWAITING PRIOR APPROVALS'
+                  ? 'APPROVED BY ACCOUNTS (AWAITING PAYMENT)'
+                  : isAccountsRejected
+                    ? 'REJECTED BY ACCOUNTS'
+                    : isRejected
+                      ? 'CANCELLED (PRIOR APPROVAL REJECTED)'
+                      : statusUpper === 'SUBMITTED'
+                        ? 'PENDING ACCOUNTS APPROVAL'
+                        : 'AWAITING PRIOR APPROVALS'
             }
             valueClass={
               isPaid || isAccountsStep1Approved
                 ? 'text-emerald-700 font-extrabold'
                 : isRejected
-                ? 'text-rose-700 font-extrabold'
-                : 'text-amber-700 font-extrabold'
+                  ? 'text-rose-700 font-extrabold'
+                  : 'text-amber-700 font-extrabold'
             }
           />
 
@@ -1680,15 +1659,15 @@ export default function ExpenseClaimDetailContent({ claim }) {
 
           {(Number(claim.pettyCashSummary?.debitedAmount) > 0 ||
             Number(claim.pettyCashSummary?.creditedAmount) > 0) && (
-            <DetailRow
-              label="Petty Cash Wallet"
-              value={
-                isPaid && Number(claim.pettyCashSummary?.creditedAmount) > 0
-                  ? `Settled (+${fmtINR(claim.pettyCashSummary.creditedAmount)} credited on payment)`
-                  : `Debited ${fmtINR(claim.pettyCashSummary?.debitedAmount || 0)} against advance`
-              }
-            />
-          )}
+              <DetailRow
+                label="Petty Cash Wallet"
+                value={
+                  isPaid && Number(claim.pettyCashSummary?.creditedAmount) > 0
+                    ? `Settled (+${fmtINR(claim.pettyCashSummary.creditedAmount)} credited on payment)`
+                    : `Debited ${fmtINR(claim.pettyCashSummary?.debitedAmount || 0)} against advance`
+                }
+              />
+            )}
 
           {paymentRemarks ? <DetailRow label="Payment Remark (Step 2)" value={paymentRemarks} /> : null}
 
@@ -1711,25 +1690,25 @@ export default function ExpenseClaimDetailContent({ claim }) {
 
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
           <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5 text-center">
-            <p className="text-[10px] font-bold text-slate-500 uppercase">Claimed</p>
+            <p className="text-[10px] font-bold text-slate-500">Claimed</p>
             <p className="text-sm font-extrabold text-slate-900 mt-0.5">{fmtINR(requested)}</p>
           </div>
           <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-2.5 text-center">
-            <p className="text-[10px] font-bold text-indigo-600 uppercase">Policy Limit</p>
+            <p className="text-[10px] font-bold text-indigo-600">Policy Limit</p>
             <p className="text-sm font-extrabold text-indigo-800 mt-0.5">
               {policyLimit > 0 ? fmtINR(policyLimit) : 'Actual'}
             </p>
           </div>
           <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-center">
-            <p className="text-[10px] font-bold text-emerald-600 uppercase">Allowed</p>
+            <p className="text-[10px] font-bold text-emerald-600">Allowed</p>
             <p className="text-sm font-extrabold text-emerald-800 mt-0.5">{fmtINR(allowed)}</p>
           </div>
           <div className="rounded-lg bg-rose-50 border border-rose-200 p-2.5 text-center">
-            <p className="text-[10px] font-bold text-rose-600 uppercase">Excess</p>
+            <p className="text-[10px] font-bold text-rose-600">Excess</p>
             <p className="text-sm font-extrabold text-rose-700 mt-0.5">{fmtINR(excess)}</p>
           </div>
           <div className="rounded-lg bg-blue-50 border border-blue-200 p-2.5 text-center col-span-2 sm:col-span-1">
-            <p className="text-[10px] font-bold text-blue-600 uppercase">Payable</p>
+            <p className="text-[10px] font-bold text-blue-600">Payable</p>
             <p className="text-sm font-extrabold text-blue-800 mt-0.5">{fmtINR(payable)}</p>
           </div>
         </div>
@@ -1771,9 +1750,8 @@ export default function ExpenseClaimDetailContent({ claim }) {
           )}
 
           <div
-            className={`rounded-lg p-2.5 border ${
-              excess > 0 ? 'bg-rose-50/80 border-rose-200' : 'bg-emerald-50/80 border-emerald-200'
-            }`}
+            className={`rounded-lg p-2.5 border ${excess > 0 ? 'bg-rose-50/80 border-rose-200' : 'bg-emerald-50/80 border-emerald-200'
+              }`}
           >
             <p className={`text-xs font-extrabold ${excess > 0 ? 'text-rose-800' : 'text-emerald-900'}`}>
               {excess > 0 ? '⚠️ Excess Amount Identified' : '✅ Within Policy Limit'}
@@ -1782,11 +1760,11 @@ export default function ExpenseClaimDetailContent({ claim }) {
               {parsedExplanation.outcome ||
                 (excess > 0
                   ? `Claimed bill is ${fmtINR(requested)} against policy limit of ${fmtINR(
-                      policyLimit || allowed
-                    )}. ${fmtINR(allowed)} is allowed under policy and ${fmtINR(excess)} is excess.`
+                    policyLimit || allowed
+                  )}. ${fmtINR(allowed)} is allowed under policy and ${fmtINR(excess)} is excess.`
                   : `Total claimed amount of ${fmtINR(requested)} is fully within the policy limit of ${fmtINR(
-                      policyLimit || allowed
-                    )}.`)}
+                    policyLimit || allowed
+                  )}.`)}
             </p>
           </div>
 
@@ -1839,10 +1817,10 @@ export default function ExpenseClaimDetailContent({ claim }) {
               isPaid
                 ? 'PAID'
                 : isAccountsStep1Approved
-                ? 'APPROVED BY ACCOUNTS (PAYMENT PENDING)'
-                : isRejected
-                ? 'REJECTED'
-                : statusUpper
+                  ? 'APPROVED BY ACCOUNTS (PAYMENT PENDING)'
+                  : isRejected
+                    ? 'REJECTED'
+                    : statusUpper
             }
           />
           {showManagerCard && (
@@ -1852,15 +1830,15 @@ export default function ExpenseClaimDetailContent({ claim }) {
                 mgrStatus === 'APPROVED'
                   ? `APPROVED${mgrName ? ` by ${mgrName}` : ''}`
                   : mgrStatus === 'REJECTED'
-                  ? `REJECTED${mgrName ? ` by ${mgrName}` : ''}`
-                  : `PENDING${mgrName ? ` (${mgrName})` : ''}`
+                    ? `REJECTED${mgrName ? ` by ${mgrName}` : ''}`
+                    : `PENDING${mgrName ? ` (${mgrName})` : ''}`
               }
               valueClass={
                 mgrStatus === 'APPROVED'
                   ? 'text-emerald-700 font-bold'
                   : mgrStatus === 'REJECTED'
-                  ? 'text-rose-700 font-bold'
-                  : 'text-amber-700 font-bold'
+                    ? 'text-rose-700 font-bold'
+                    : 'text-amber-700 font-bold'
               }
             />
           )}
@@ -1871,19 +1849,19 @@ export default function ExpenseClaimDetailContent({ claim }) {
                 finStatus === 'APPROVED'
                   ? `APPROVED${finName ? ` by ${finName}` : ''}`
                   : finStatus === 'REJECTED'
-                  ? `REJECTED${finName ? ` by ${finName}` : ''}`
-                  : finStatus === 'CANCELLED'
-                  ? 'CANCELLED'
-                  : finStatus === 'PENDING'
-                  ? `PENDING${finName ? ` (${finName})` : ''}`
-                  : 'AFTER 1ST APPROVAL'
+                    ? `REJECTED${finName ? ` by ${finName}` : ''}`
+                    : finStatus === 'CANCELLED'
+                      ? 'CANCELLED'
+                      : finStatus === 'PENDING'
+                        ? `PENDING${finName ? ` (${finName})` : ''}`
+                        : 'AFTER 1ST APPROVAL'
               }
               valueClass={
                 finStatus === 'APPROVED'
                   ? 'text-emerald-700 font-bold'
                   : finStatus === 'REJECTED' || finStatus === 'CANCELLED'
-                  ? 'text-rose-700 font-bold'
-                  : 'text-amber-700 font-bold'
+                    ? 'text-rose-700 font-bold'
+                    : 'text-amber-700 font-bold'
               }
             />
           )}
@@ -1894,21 +1872,21 @@ export default function ExpenseClaimDetailContent({ claim }) {
                 isPaid
                   ? 'APPROVED & PAID'
                   : isAccountsStep1Approved
-                  ? `APPROVED${accApprovedByName ? ` by ${accApprovedByName}` : ''} (Awaiting Payment)`
-                  : isAccountsRejected
-                  ? 'REJECTED BY ACCOUNTS'
-                  : isRejected
-                  ? 'CANCELLED'
-                  : statusUpper === 'SUBMITTED'
-                  ? 'PENDING ACCOUNTS APPROVAL'
-                  : 'AFTER PRIOR APPROVALS'
+                    ? `APPROVED${accApprovedByName ? ` by ${accApprovedByName}` : ''} (Awaiting Payment)`
+                    : isAccountsRejected
+                      ? 'REJECTED BY ACCOUNTS'
+                      : isRejected
+                        ? 'CANCELLED'
+                        : statusUpper === 'SUBMITTED'
+                          ? 'PENDING ACCOUNTS APPROVAL'
+                          : 'AFTER PRIOR APPROVALS'
               }
               valueClass={
                 isPaid || isAccountsStep1Approved
                   ? 'text-emerald-700 font-bold'
                   : isRejected
-                  ? 'text-rose-700 font-bold'
-                  : 'text-amber-700 font-bold'
+                    ? 'text-rose-700 font-bold'
+                    : 'text-amber-700 font-bold'
               }
             />
           )}
@@ -1926,7 +1904,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
 
         {/* Vertical Stepper: Claim Journey */}
         <div>
-          <p className="text-xs font-extrabold text-slate-700 uppercase tracking-wider mb-3">Claim Journey</p>
+          <p className="text-xs font-extrabold text-slate-700 tracking-wider mb-3">Claim Journey</p>
           <div className="space-y-0">
             {journeySteps.map((step, idx) => {
               const isLast = idx === journeySteps.length - 1;
@@ -1934,14 +1912,14 @@ export default function ExpenseClaimDetailContent({ claim }) {
                 step.tone === 'emerald'
                   ? 'bg-emerald-600 text-white border-emerald-600'
                   : step.tone === 'rose'
-                  ? 'bg-rose-600 text-white border-rose-600'
-                  : 'bg-amber-500 text-white border-amber-500';
+                    ? 'bg-rose-600 text-white border-rose-600'
+                    : 'bg-amber-500 text-white border-amber-500';
               const badgeClass =
                 step.tone === 'emerald'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : step.tone === 'rose'
-                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                  : 'bg-amber-50 text-amber-700 border-amber-200';
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200';
 
               return (
                 <div key={step.num} className="flex gap-3">

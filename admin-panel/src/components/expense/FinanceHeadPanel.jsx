@@ -229,7 +229,7 @@ const FinanceHeadPanel = ({ reqConfig, companyId, onRulesUpdated }) => {
       setModalOpen(false);
       toast.success(
         res?.data?.message ||
-          (fh ? `CFO / Finance Head set to ${fh.name}` : 'CFO / Finance Head removed')
+        (fh ? `CFO / Finance Head set to ${fh.name}` : 'CFO / Finance Head removed')
       );
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Failed to update CFO / Finance Head');
@@ -249,7 +249,7 @@ const FinanceHeadPanel = ({ reqConfig, companyId, onRulesUpdated }) => {
             </div>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200 uppercase">
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200">
                   2nd-Step Approval Authority
                 </span>
                 <span className="text-[11px] font-bold text-slate-400">
@@ -265,18 +265,16 @@ const FinanceHeadPanel = ({ reqConfig, companyId, onRulesUpdated }) => {
                   onClick={canEdit ? handleToggleFullPaymentCfo : undefined}
                   disabled={!canEdit || savingFullPayRule}
                   title={canEdit ? 'Click to toggle Full Payment CFO Approval ON/OFF' : 'Full Payment CFO Approval Rule'}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold border transition-all ${
-                    applyOnFullPayment
-                      ? 'bg-violet-50 text-violet-700 border-violet-200 shadow-2xs'
-                      : 'bg-slate-100 text-slate-500 border-slate-200'
-                  } ${canEdit ? 'cursor-pointer hover:opacity-90' : 'cursor-default'}`}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold border transition-all ${applyOnFullPayment
+                    ? 'bg-violet-50 text-violet-700 border-violet-200 shadow-2xs'
+                    : 'bg-slate-100 text-slate-500 border-slate-200'
+                    } ${canEdit ? 'cursor-pointer hover:opacity-90' : 'cursor-default'}`}
                 >
                   <ShieldCheck size={13} className={applyOnFullPayment ? 'text-violet-600 shrink-0' : 'text-slate-400 shrink-0'} />
                   <span>Full Payment Required CFO Approval</span>
                   <span
-                    className={`ml-0.5 px-1.5 py-0.2 rounded text-[9px] font-extrabold uppercase ${
-                      applyOnFullPayment ? 'bg-violet-600 text-white' : 'bg-slate-300 text-slate-700'
-                    }`}
+                    className={`ml-0.5 px-1.5 py-0.2 rounded text-[9px] font-extrabold ${applyOnFullPayment ? 'bg-violet-600 text-white' : 'bg-slate-300 text-slate-700'
+                      }`}
                   >
                     {savingFullPayRule ? '...' : applyOnFullPayment ? 'ON' : 'OFF'}
                   </span>
@@ -305,7 +303,7 @@ const FinanceHeadPanel = ({ reqConfig, companyId, onRulesUpdated }) => {
                 </div>
                 <div className="text-left">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">
+                    <span className="text-[10px] font-extrabold tracking-wider text-emerald-700">
                       CFO / Finance Head
                     </span>
                     <ShieldCheck size={12} className="text-emerald-600 shrink-0" />
@@ -427,17 +425,15 @@ const FinanceHeadPanel = ({ reqConfig, companyId, onRulesUpdated }) => {
                       <div
                         key={id}
                         onClick={() => setSelectedId(id)}
-                        className={`px-4 py-3 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
-                          isSelected ? 'bg-indigo-50/80' : 'hover:bg-slate-50'
-                        }`}
+                        className={`px-4 py-3 flex items-center justify-between gap-3 cursor-pointer transition-colors ${isSelected ? 'bg-indigo-50/80' : 'hover:bg-slate-50'
+                          }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div
-                            className={`w-8 h-8 rounded-xl flex items-center justify-center font-extrabold text-xs shrink-0 ${
-                              isSelected
-                                ? 'bg-indigo-600 text-white'
-                                : 'bg-slate-100 text-slate-600'
-                            }`}
+                            className={`w-8 h-8 rounded-xl flex items-center justify-center font-extrabold text-xs shrink-0 ${isSelected
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-slate-100 text-slate-600'
+                              }`}
                           >
                             {isSelected ? <Check size={14} /> : String(emp.name || 'E').trim().charAt(0).toUpperCase()}
                           </div>

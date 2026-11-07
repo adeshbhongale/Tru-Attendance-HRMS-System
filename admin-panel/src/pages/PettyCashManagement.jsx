@@ -136,7 +136,7 @@ const StatCard = ({ title, value, sub, icon, tone = 'indigo' }) => {
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400">{title}</p>
+        <p className="text-[11px] font-extrabold tracking-wider text-slate-400">{title}</p>
         <p className={`text-lg md:text-xl font-extrabold tracking-tight truncate ${tone === 'rose' ? 'text-rose-600' : 'text-slate-900'}`}>
           {value}
         </p>
@@ -600,25 +600,23 @@ const PettyCashManagement = () => {
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-                isActive
+              className={`flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${isActive
                   ? 'bg-indigo-600 text-white shadow-sm'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
+                }`}
             >
               {t.icon}
               <span className="truncate">{t.label}</span>
               {t.badge && (
                 <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold leading-none ${
-                    isActive
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold leading-none ${isActive
                       ? 'bg-white/20 text-white'
                       : t.badgeTone === 'amber'
-                      ? 'bg-amber-100 text-amber-700'
-                      : t.badgeTone === 'rose'
-                      ? 'bg-rose-100 text-rose-700'
-                      : 'bg-slate-100 text-slate-600'
-                  }`}
+                        ? 'bg-amber-100 text-amber-700'
+                        : t.badgeTone === 'rose'
+                          ? 'bg-rose-100 text-rose-700'
+                          : 'bg-slate-100 text-slate-600'
+                    }`}
                 >
                   {t.badge}
                 </span>
@@ -668,7 +666,7 @@ const PettyCashManagement = () => {
           <div className="overflow-x-auto rounded-2xl border border-slate-200">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold tracking-wider text-slate-500">
                   <th className="py-3 px-3.5 whitespace-nowrap">Employee</th>
                   <th className="py-3 px-3 whitespace-nowrap">Department</th>
                   <th className="py-3 px-3 text-center whitespace-nowrap">Wallet Status</th>
@@ -703,11 +701,10 @@ const PettyCashManagement = () => {
                       <td className="py-3 px-3 text-center whitespace-nowrap">
                         <button
                           onClick={() => handleToggleEnabled(w)}
-                          className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold cursor-pointer transition-all whitespace-nowrap ${
-                            w.enabled
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold cursor-pointer transition-all whitespace-nowrap ${w.enabled
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
                               : 'bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200'
-                          }`}
+                            }`}
                           title="Click to toggle whether this employee's claims are deducted from petty cash"
                         >
                           {w.enabled ? 'ON (Active)' : 'OFF'}
@@ -816,9 +813,8 @@ const PettyCashManagement = () => {
                 <button
                   key={s}
                   onClick={() => setRequestStatus(s)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${
-                    requestStatus === s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${requestStatus === s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
                 >
                   {s}
                 </button>
@@ -832,7 +828,7 @@ const PettyCashManagement = () => {
           <div className="overflow-x-auto rounded-2xl border border-slate-200">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold tracking-wider text-slate-500">
                   <th className="py-3 px-3.5 whitespace-nowrap">Date</th>
                   <th className="py-3 px-3 whitespace-nowrap">Employee</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Base Limit</th>
@@ -872,13 +868,12 @@ const PettyCashManagement = () => {
                         {r.remarks && <div className="text-[11px] text-indigo-600 font-semibold mt-0.5 break-words">Accounts: {r.remarks}</div>}
                       </td>
                       <td className="py-3 px-3 text-center whitespace-nowrap">
-                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold whitespace-nowrap ${
-                          r.status === 'FULFILLED'
+                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold whitespace-nowrap ${r.status === 'FULFILLED'
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : r.status === 'REJECTED'
-                            ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                            : 'bg-amber-50 text-amber-700 border border-amber-200'
-                        }`}>
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              : 'bg-amber-50 text-amber-700 border border-amber-200'
+                          }`}>
                           {r.status}
                         </span>
                       </td>
@@ -920,9 +915,8 @@ const PettyCashManagement = () => {
                 <button
                   key={s}
                   onClick={() => setReturnRequestStatus(s)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${
-                    returnRequestStatus === s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${returnRequestStatus === s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
                 >
                   {s}
                 </button>
@@ -943,7 +937,7 @@ const PettyCashManagement = () => {
           <div className="overflow-x-auto rounded-2xl border border-slate-200">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold tracking-wider text-slate-500">
                   <th className="py-3 px-3.5 whitespace-nowrap">Date</th>
                   <th className="py-3 px-3 whitespace-nowrap">Employee</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Base Limit</th>
@@ -1016,13 +1010,12 @@ const PettyCashManagement = () => {
                           )}
                         </td>
                         <td className="py-3 px-3 text-center whitespace-nowrap">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold whitespace-nowrap ${
-                            displayStatus === 'APPROVED'
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold whitespace-nowrap ${displayStatus === 'APPROVED'
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                               : displayStatus === 'REJECTED'
-                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                              : 'bg-amber-50 text-amber-700 border border-amber-200'
-                          }`}>
+                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}>
                             {displayStatus}
                           </span>
                         </td>
@@ -1166,7 +1159,7 @@ const PettyCashManagement = () => {
           <div className="overflow-x-auto rounded-2xl border border-slate-200">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold tracking-wider text-slate-500">
                   <th className="py-3 px-3.5 whitespace-nowrap">Date</th>
                   <th className="py-3 px-3 whitespace-nowrap">Employee</th>
                   <th className="py-3 px-3 whitespace-nowrap">Category</th>
@@ -1344,9 +1337,8 @@ const PettyCashManagement = () => {
                     <button
                       key={d}
                       onClick={() => setAdjustModal({ ...adjustModal, direction: d })}
-                      className={`flex-1 py-2 rounded-xl font-extrabold cursor-pointer ${
-                        adjustModal.direction === d ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'
-                      }`}
+                      className={`flex-1 py-2 rounded-xl font-extrabold cursor-pointer ${adjustModal.direction === d ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'
+                        }`}
                     >
                       {d === 'CR' ? 'Credit (+ Balance)' : 'Debit (- Balance)'}
                     </button>
@@ -1389,7 +1381,7 @@ const PettyCashManagement = () => {
                   <span className="font-extrabold text-indigo-700">
                     {fmtINR(
                       (adjustModal.wallet.balance || 0) +
-                        (adjustModal.direction === 'CR' ? Number(adjustModal.amount) : -Number(adjustModal.amount))
+                      (adjustModal.direction === 'CR' ? Number(adjustModal.amount) : -Number(adjustModal.amount))
                     )}
                   </span>
                 </div>
@@ -1466,9 +1458,8 @@ const PettyCashManagement = () => {
               <button
                 disabled={submitting}
                 onClick={submitRequestAction}
-                className={`px-4 py-2 text-white rounded-xl font-extrabold cursor-pointer ${
-                  requestModal.mode === 'reject' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-indigo-600 hover:bg-indigo-700'
-                }`}
+                className={`px-4 py-2 text-white rounded-xl font-extrabold cursor-pointer ${requestModal.mode === 'reject' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-indigo-600 hover:bg-indigo-700'
+                  }`}
               >
                 {submitting ? 'Processing…' : requestModal.mode === 'reject' ? 'Confirm Reject' : 'Approve & Credit'}
               </button>
@@ -1486,8 +1477,8 @@ const PettyCashManagement = () => {
                 {returnModal.mode === 'view'
                   ? 'Petty Cash Return Request Details'
                   : returnModal.mode === 'reject'
-                  ? 'Reject Petty Cash Return Request'
-                  : 'Approve Petty Cash Return Request'}
+                    ? 'Reject Petty Cash Return Request'
+                    : 'Approve Petty Cash Return Request'}
               </h3>
               <button onClick={() => setReturnModal(null)} className="text-slate-400 hover:text-slate-600 cursor-pointer"><X size={18} /></button>
             </div>
@@ -1503,13 +1494,12 @@ const PettyCashManagement = () => {
                 {(() => {
                   const st = returnModal.req.status === 'PROCESSED' ? 'APPROVED' : returnModal.req.status;
                   return (
-                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${
-                      st === 'APPROVED'
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${st === 'APPROVED'
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                         : st === 'REJECTED'
-                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                        : 'bg-amber-50 text-amber-700 border border-amber-200'
-                    }`}>
+                          ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                          : 'bg-amber-50 text-amber-700 border border-amber-200'
+                      }`}>
                       {st}
                     </span>
                   );
@@ -1518,11 +1508,11 @@ const PettyCashManagement = () => {
 
               <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200">
                 <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase">Current Base Limit</div>
+                  <div className="text-[10px] font-bold text-slate-400">Current Base Limit</div>
                   <div className="text-sm font-extrabold text-teal-700">{fmtINR(returnModal.req.walletBaseLimit)}</div>
                 </div>
                 <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase">Current Petty Cash Balance</div>
+                  <div className="text-[10px] font-bold text-slate-400">Current Petty Cash Balance</div>
                   <div className="text-sm font-extrabold text-slate-900">{fmtINR(returnModal.req.walletBalance)}</div>
                 </div>
               </div>
@@ -1642,15 +1632,14 @@ const PettyCashManagement = () => {
                 <button
                   disabled={submitting}
                   onClick={submitReturnRequestAction}
-                  className={`px-4 py-2 text-white rounded-xl font-extrabold cursor-pointer ${
-                    returnModal.mode === 'reject' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'
-                  }`}
+                  className={`px-4 py-2 text-white rounded-xl font-extrabold cursor-pointer ${returnModal.mode === 'reject' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                    }`}
                 >
                   {submitting
                     ? 'Saving…'
                     : returnModal.mode === 'reject'
-                    ? 'Confirm Reject'
-                    : 'Approve Return'}
+                      ? 'Confirm Reject'
+                      : 'Approve Return'}
                 </button>
               )}
             </div>
@@ -1714,7 +1703,7 @@ const PettyCashManagement = () => {
               ) : (
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="border-b border-slate-200 text-[11px] font-extrabold uppercase text-slate-400">
+                    <tr className="border-b border-slate-200 text-[11px] font-extrabold text-slate-400">
                       <th className="py-2 px-2">Date</th>
                       <th className="py-2 px-2">Category</th>
                       <th className="py-2 px-2 text-right">Amount</th>

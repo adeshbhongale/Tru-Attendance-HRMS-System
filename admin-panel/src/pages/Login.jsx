@@ -71,10 +71,8 @@ const Login = () => {
       <div className="w-full max-w-[440px] animate-fade-up">
         <div className="bg-white rounded-[2.5rem] p-10 md:p-14 border border-slate-100 shadow-2xl shadow-slate-200/60">
           <div className="text-center mb-10">
-            <div className="w-20 h-20 bg-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-indigo-100 transform -rotate-3 hover:rotate-0 transition-transform duration-500 overflow-hidden border border-slate-100 p-3">
-              <img src="/favicon.png" alt="Logo" className="w-full h-full object-contain" />
-            </div>
-            <h2 className="text-3xl font-bold text-slate-900 tracking-tight mb-2">TRUCODE ERP</h2>
+            <img src="/gatimaan-logo.png?v=2" alt="Gatimaan Logo" className="w-24 h-24 object-contain mx-auto mb-4" />
+            <h2 className="text-3xl font-bold text-slate-900 tracking-tight mb-2">GATIMAAN</h2>
             <p className="text-slate-400 text-[13px] font-medium">Multi-Tenant Corporate Portal</p>
           </div>
 
@@ -150,7 +148,7 @@ const Login = () => {
 
         <div className="mt-8 text-center">
           <p className="text-slate-400 text-[11px] font-bold tracking-tight opacity-50">
-            &copy; 2026 TRUCODE ERP • SINGLE-TENANT AUTHORIZATION ENGINE
+            &copy; 2026 GATIMAAN • MULTI-TENANT ENTERPRISE PLATFORM
           </p>
         </div>
       </div>

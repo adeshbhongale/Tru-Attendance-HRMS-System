@@ -292,13 +292,11 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         bg-white border border-slate-200 rounded-3xl shadow-xl
       `}>
         <div className="mb-7 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center shadow-lg shadow-indigo-100 overflow-hidden border border-slate-100">
-              <img src="/favicon.png" alt="Logo" className="w-full h-full object-contain" />
-            </div>
+          <div className="flex items-center gap-3.5">
+            <img src="/gatimaan-logo.png?v=2" alt="Gatimaan Logo" className="w-14 h-14 object-contain shrink-0" />
             <div>
-              <h2 className="text-2xl font-bold text-slate-900 tracking-tighter leading-none">Geo-Track</h2>
-              <p className="text-[11px] font-bold text-slate-500 tracking-tight mt-1">HRMS System</p>
+              <h2 className="text-2xl font-bold text-slate-900 tracking-tighter leading-none">Gatimaan</h2>
+              <p className="text-[11px] font-bold text-slate-500 tracking-tight mt-1">Enterprise ERP</p>
             </div>
           </div>
           <button onClick={toggleSidebar} className="lg:hidden p-2.5 text-slate-400 hover:text-slate-900 bg-slate-50 rounded-xl transition-colors">

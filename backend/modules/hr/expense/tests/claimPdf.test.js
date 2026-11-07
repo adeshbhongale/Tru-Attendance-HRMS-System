@@ -308,7 +308,7 @@ test('Strict page count verification: single-entry claim without proofs generate
   assert.equal(pages, 1, `Single-entry claim without proofs must generate exactly 1 page, got ${pages}`);
 
   const text = extractPdfText(buffer);
-  assert.ok(text.includes('This is an official computer-generated voucher issued by Trucode ERP HRMS System. Confidential.'), 'Footer text must be present');
+  assert.ok(text.includes('This is an official computer-generated voucher issued by Gatimaan. Confidential.'), 'Footer text must be present');
   assert.ok(text.includes('Page 1 of 1'), 'Page number must show Page 1 of 1');
 });
 

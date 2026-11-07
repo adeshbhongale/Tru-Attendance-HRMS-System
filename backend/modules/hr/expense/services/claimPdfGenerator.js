@@ -621,7 +621,7 @@ async function generateClaimPdf(claim, res) {
     compress: false,
     info: {
       Title: `Expense Claim - ${claim.claimNumber || claim._id}`,
-      Author: 'Trucode ERP HRMS',
+      Author: 'Gatimaan',
       Subject: 'Expense Reimbursement Claim Voucher',
       CreationDate: new Date(),
     },
@@ -738,7 +738,7 @@ async function generateClaimPdf(claim, res) {
   doc.rect(startX, startY, contentWidth, headerHeight).fill('#0f172a');
 
   // Company Name & Subtitle
-  const companyName = String(claim.companyId?.name || claim.companyName || 'TRUCODE ERP HRMS').toUpperCase();
+  const companyName = String(claim.companyId?.name || claim.companyName || 'GATIMAAN').toUpperCase();
   doc
     .fillColor('#ffffff')
     .fontSize(12)
@@ -2565,7 +2565,7 @@ async function generateClaimPdf(claim, res) {
       .fillColor('#94a3b8')
       .fontSize(7)
       .font('Helvetica')
-      .text('This is an official computer-generated voucher issued by Trucode ERP HRMS System. Confidential.', margin, footerY, { width: contentWidth - 80, lineBreak: false });
+      .text('This is an official computer-generated voucher issued by Gatimaan. Confidential.', margin, footerY, { width: contentWidth - 80, lineBreak: false });
     doc
       .fillColor('#94a3b8')
       .fontSize(7)

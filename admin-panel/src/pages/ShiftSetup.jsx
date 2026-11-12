@@ -9,6 +9,7 @@ import {
   Loader2,
   Plus,
   Save,
+  Timer,
   Trash2,
   X
 } from 'lucide-react';

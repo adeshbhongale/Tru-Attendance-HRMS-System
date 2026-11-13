@@ -263,7 +263,8 @@ const ExpenseManagement = () => {
       const res = await api.get('/admin/console/companies');
       const list = res.data.data || [];
       setCompanies(list);
-      if (list.length > 0 && !selectedCompanyId) {
+      const hasValidSelected = selectedCompanyId && list.some((c) => String(c._id) === String(selectedCompanyId));
+      if (list.length > 0 && !hasValidSelected) {
         setSelectedCompanyId(list[0]._id);
         localStorage.setItem('selectedCompanyId', list[0]._id);
         localStorage.setItem('selectedCompanyName', list[0].name);
@@ -338,16 +339,8 @@ const ExpenseManagement = () => {
 
   const loadEntitlements = async (config) => {
     try {
-      const activePol = policies.find(p => p.status === 'active' && belongsToActiveCompany(p));
-      const reqConfig = {
-        ...config,
-        params: {
-          ...(config?.params || {}),
-          ...(activePol?._id ? { policyId: activePol._id } : {}),
-        }
-      };
       const [entRes, lvlRes, grdRes] = await Promise.all([
-        api.get('/expense/entitlements/all', reqConfig),
+        api.get('/expense/entitlements/all', config),
         api.get('/expense/levels', config).catch(() => ({ data: { data: [], designations: [], employeeDesignations: [] } })),
         api.get('/expense/grades', config).catch(() => ({ data: { data: [] } })),
       ]);
@@ -378,10 +371,13 @@ const ExpenseManagement = () => {
       } else if (tabToLoad === 'travelModes') {
         await Promise.all([loadTravelModes(config), policies.length === 0 ? loadPolicies(config) : Promise.resolve()]);
       } else if (tabToLoad === 'entitlements') {
-        await loadEntitlements(config);
-        loadTravelModes(config); // needed for Travel Entitlement rows (mode + subtypes)
-        if (types.length === 0) loadTypes(config);
-        if (cities.length === 0) loadCities(config);
+        await Promise.all([
+          loadEntitlements(config),
+          loadTravelModes(config),
+          policies.length === 0 ? loadPolicies(config) : Promise.resolve(),
+          types.length === 0 ? loadTypes(config) : Promise.resolve(),
+          cities.length === 0 ? loadCities(config) : Promise.resolve(),
+        ]);
       }
 
       loadedTabsRef.current.add(tabKey);
@@ -390,7 +386,7 @@ const ExpenseManagement = () => {
     } finally {
       setLoading(false);
     }
-  }, [effectiveCompanyId, activeTab, types.length, cities.length, belongsToActiveCompany]);
+  }, [effectiveCompanyId, activeTab, policies.length, types.length, cities.length, belongsToActiveCompany]);
 
   useEffect(() => {
     if (isSuperAdmin) {
@@ -1255,19 +1251,10 @@ const ExpenseManagement = () => {
       if (scopedRows.length === 0) {
         scopedRows = travelRows.filter((e) => Number(e.levelNumber || 0) === 0);
       }
-    } else {
-      scopedRows = travelRows.filter((e) => Number(e.levelNumber || 0) === 0);
-      if (scopedRows.length === 0) {
-        const firstPositiveLevel = distinctLevelNumbers.find((n) => Number(n) > 0);
-        if (firstPositiveLevel) {
-          scopedRows = travelRows.filter((e) => Number(e.levelNumber) === Number(firstPositiveLevel));
-        }
-      }
     }
 
     const selectedModes = {};
     const selected = {};
-    const initialModeCodes = [];
 
     scopedRows.forEach((ent) => {
       const matchedMode = travelModes.find(
@@ -1276,10 +1263,6 @@ const ExpenseManagement = () => {
           (ent.travelModeCode && String(m.code).toUpperCase() === String(ent.travelModeCode).toUpperCase())
       );
       const modeIdStr = matchedMode ? String(matchedMode._id) : ent.travelModeId ? String(ent.travelModeId) : '';
-      const modeCodeStr = String(matchedMode?.code || ent.travelModeCode || '').toUpperCase().trim();
-      if (modeCodeStr && !initialModeCodes.includes(modeCodeStr)) {
-        initialModeCodes.push(modeCodeStr);
-      }
       const maxAmtStr = ent.maxAmount === null || ent.maxAmount === undefined ? '' : String(ent.maxAmount);
       if (modeIdStr) {
         selectedModes[modeIdStr] = { checked: true, maxAmount: maxAmtStr };
@@ -1301,8 +1284,8 @@ const ExpenseManagement = () => {
       });
     });
 
-    return { selectedModes, selected, initialModeCodes };
-  }, [entitlements, travelModes, distinctLevelNumbers]);
+    return { selectedModes, selected };
+  }, [entitlements, travelModes]);
 
   const openTravelEntModal = (ent = null, presetLevel = null) => {
     if (ent && ent._id) {
@@ -1334,20 +1317,17 @@ const ExpenseManagement = () => {
         travelModeId: modeIdStr,
         selectedModes,
         selected,
-        initialModeCodes: matchedMode?.code ? [String(matchedMode.code).toUpperCase()] : [],
         maxAmount: maxAmtStr,
         status: ent.status || 'active',
       });
       setTravelEntModal({ open: true, editing: ent });
     } else {
       const lvl = presetLevel ?? (selectedLevelFilter !== 'ALL' ? selectedLevelFilter : 0);
-      const prefilled = buildTravelSelectionForScope(lvl, 'ALL', '');
       setTravelEntForm({
         ...EMPTY_TRAVEL_ENT_FORM,
         levelNumber: String(lvl),
-        selectedModes: prefilled.selectedModes,
-        selected: prefilled.selected,
-        initialModeCodes: prefilled.initialModeCodes,
+        selectedModes: {},
+        selected: {},
       });
       setTravelEntModal({ open: true, editing: null });
     }
@@ -1396,10 +1376,6 @@ const ExpenseManagement = () => {
       const activePol = policies.find(p => p.status === 'active');
       const editingDoc = travelEntModal.editing;
       let updatedEditingDoc = false;
-      const chosenCodeSet = new Set(chosenModes.map(m => String(m.code || '').toUpperCase()));
-      const removeModeCodes = !editingDoc && Array.isArray(travelEntForm.initialModeCodes)
-        ? travelEntForm.initialModeCodes.filter(c => c && !chosenCodeSet.has(String(c).toUpperCase()))
-        : [];
 
       for (let i = 0; i < chosenModes.length; i++) {
         const mode = chosenModes[i];
@@ -1419,7 +1395,6 @@ const ExpenseManagement = () => {
           companyId: effectiveCompanyId,
           levelNumber: lvlNum,
           targetLevels,
-          ...(i === 0 && removeModeCodes.length > 0 ? { removeModeCodes } : {}),
           gradeCode: travelEntForm.gradeCode || '',
           cityClass: travelEntForm.cityClass || 'ALL',
           travelModeId: mode._id,
@@ -1510,7 +1485,7 @@ const ExpenseManagement = () => {
       .filter(e => {
         if (e.status === 'inactive') return false;
         if (String(e.levelName || '').toLowerCase().includes('super admin')) return false;
-        return (`${e.levelNumber || ''} ${e.levelName || ''} ${e.expenseTypeCode || ''} ${e.cityClass || ''} ${e.amount || ''}`).toLowerCase().includes(q);
+        return (`${e.levelNumber || ''} ${e.levelName || ''} ${e.expenseTypeCode || ''} ${e.travelModeName || ''} ${e.travelModeCode || ''} ${e.cityClass || ''} ${e.amount || ''}`).toLowerCase().includes(q);
       })
       .sort((a, b) => {
         const lvlDiff = (Number(a.levelNumber) || 0) - (Number(b.levelNumber) || 0);
@@ -4198,21 +4173,31 @@ const ExpenseManagement = () => {
         () => setTravelEntModal({ open: false, editing: null }),
         (() => {
           const activeModes = travelModes.filter(m => m.status !== 'inactive');
+          const scopedSaved = Number(travelEntForm.levelNumber) > 0
+            ? buildTravelSelectionForScope(travelEntForm.levelNumber, travelEntForm.cityClass, travelEntForm.gradeCode)
+            : { selectedModes: {}, selected: {} };
+
           const toggleModeCheckbox = (mode, checked) => {
             const mKey = String(mode._id);
             const modeSubs = (mode.subtypes || []).filter(s => s.status !== 'inactive');
             setTravelEntForm(f => {
-              const prevMode = f.selectedModes?.[mKey] || { checked: false, maxAmount: '' };
+              const savedMode = scopedSaved.selectedModes?.[mKey];
+              const prevMode = f.selectedModes?.[mKey] || { checked: false, maxAmount: savedMode?.maxAmount ?? '' };
               const nextModes = { ...(f.selectedModes || {}), [mKey]: { ...prevMode, checked } };
               const nextSelected = { ...(f.selected || {}) };
               if (modeSubs.length > 0) {
                 if (checked) {
                   const anySubChecked = modeSubs.some(s => nextSelected[String(s._id)]?.checked);
                   if (!anySubChecked) {
+                    const hasSavedSubs = modeSubs.some(s => scopedSaved.selected?.[String(s._id)]?.checked);
                     modeSubs.forEach(s => {
                       const sKey = String(s._id);
-                      const prevSub = nextSelected[sKey] || { checked: false, maxAmount: '' };
-                      nextSelected[sKey] = { ...prevSub, checked: true };
+                      const savedSub = scopedSaved.selected?.[sKey];
+                      const prevSub = nextSelected[sKey] || { checked: false, maxAmount: savedSub?.maxAmount ?? '' };
+                      nextSelected[sKey] = {
+                        ...prevSub,
+                        checked: hasSavedSubs ? Boolean(savedSub?.checked) : true,
+                      };
                     });
                   }
                 } else {
@@ -4254,7 +4239,7 @@ const ExpenseManagement = () => {
           const selectedModeCount = activeModes.filter(m => {
             const mKey = String(m._id);
             if (travelEntForm.selectedModes?.[mKey]?.checked) return true;
-            if (String(travelEntForm.travelModeId) === mKey) return true;
+            if (!travelEntForm.selectedModes?.[mKey] && String(travelEntForm.travelModeId) === mKey) return true;
             const subs = (m.subtypes || []).filter(s => s.status !== 'inactive');
             return subs.some(s => travelEntForm.selected?.[String(s._id)]?.checked);
           }).length;
@@ -4266,24 +4251,7 @@ const ExpenseManagement = () => {
                   <label className={labelCls}>Employee Level *</label>
                   <select
                     value={travelEntForm.levelNumber}
-                    onChange={(e) => {
-                      const nextLvl = e.target.value;
-                      if (!travelEntModal.editing) {
-                        const scoped = buildTravelSelectionForScope(nextLvl, travelEntForm.cityClass, travelEntForm.gradeCode);
-                        const hasScoped = Object.keys(scoped.selectedModes || {}).length > 0;
-                        setTravelEntForm((f) => ({
-                          ...f,
-                          levelNumber: nextLvl,
-                          ...(hasScoped ? {
-                            selectedModes: scoped.selectedModes,
-                            selected: scoped.selected,
-                            initialModeCodes: scoped.initialModeCodes,
-                          } : { initialModeCodes: [] }),
-                        }));
-                      } else {
-                        setTravelEntForm({ ...travelEntForm, levelNumber: nextLvl });
-                      }
-                    }}
+                    onChange={(e) => setTravelEntForm((f) => ({ ...f, levelNumber: e.target.value }))}
                     className={inputCls}
                   >
                     <option value="0">All Levels (Apply to each level)</option>
@@ -4299,23 +4267,7 @@ const ExpenseManagement = () => {
                     'tent_grade',
                     travelEntForm.gradeCode ? `Grade ${travelEntForm.gradeCode.toUpperCase()}` : 'All Grades',
                     [{ value: '', label: 'All Grades' }, ...grades.map(g => ({ value: (g.code || g.name || '').toLowerCase(), label: `Grade ${(g.code || g.name || '').toUpperCase()}` }))],
-                    (v) => {
-                      if (!travelEntModal.editing) {
-                        const scoped = buildTravelSelectionForScope(travelEntForm.levelNumber, travelEntForm.cityClass, v);
-                        const hasScoped = Object.keys(scoped.selectedModes || {}).length > 0;
-                        setTravelEntForm((f) => ({
-                          ...f,
-                          gradeCode: v,
-                          ...(hasScoped ? {
-                            selectedModes: scoped.selectedModes,
-                            selected: scoped.selected,
-                            initialModeCodes: scoped.initialModeCodes,
-                          } : { initialModeCodes: [] }),
-                        }));
-                      } else {
-                        setTravelEntForm({ ...travelEntForm, gradeCode: v });
-                      }
-                    }
+                    (v) => setTravelEntForm((f) => ({ ...f, gradeCode: v }))
                   )}
                 </div>
                 <div className="space-y-1 text-left">
@@ -4324,23 +4276,7 @@ const ExpenseManagement = () => {
                     'tent_city',
                     travelEntForm.cityClass === 'ALL' ? 'ALL Cities' : `Class ${travelEntForm.cityClass}`,
                     TRAVEL_CITY_CLASSES.map(v => ({ value: v, label: v === 'ALL' ? 'ALL Cities' : `Class ${v}` })),
-                    (v) => {
-                      if (!travelEntModal.editing) {
-                        const scoped = buildTravelSelectionForScope(travelEntForm.levelNumber, v, travelEntForm.gradeCode);
-                        const hasScoped = Object.keys(scoped.selectedModes || {}).length > 0;
-                        setTravelEntForm((f) => ({
-                          ...f,
-                          cityClass: v,
-                          ...(hasScoped ? {
-                            selectedModes: scoped.selectedModes,
-                            selected: scoped.selected,
-                            initialModeCodes: scoped.initialModeCodes,
-                          } : { initialModeCodes: [] }),
-                        }));
-                      } else {
-                        setTravelEntForm({ ...travelEntForm, cityClass: v });
-                      }
-                    }
+                    (v) => setTravelEntForm((f) => ({ ...f, cityClass: v }))
                   )}
                 </div>
               </div>
@@ -4405,6 +4341,11 @@ const ExpenseManagement = () => {
                             </span>
                             <span className="text-xs font-extrabold text-slate-900">{mode.name}</span>
                             <span className="text-[10px] font-mono font-bold text-slate-400">({mode.code})</span>
+                            {!travelEntModal.editing && scopedSaved.selectedModes?.[mKey]?.checked && (
+                              <span className="px-2 py-0.5 rounded-lg text-[9px] font-extrabold bg-sky-100 text-sky-700 border border-sky-200">
+                                Already added
+                              </span>
+                            )}
                             {modeSubtypes.length > 0 && (
                               <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${checkedSubCount > 0
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -4454,14 +4395,16 @@ const ExpenseManagement = () => {
                                         setTravelEntForm(f => {
                                           const nextSelected = { ...(f.selected || {}), [key]: { ...st, checked: subChecked } };
                                           const anyStillChecked = modeSubtypes.some(s => nextSelected[String(s._id)]?.checked);
+                                          const nextModeChecked = subChecked ? true : anyStillChecked;
                                           return {
                                             ...f,
+                                            travelModeId: !nextModeChecked && String(f.travelModeId) === mKey ? '' : f.travelModeId,
                                             selected: nextSelected,
                                             selectedModes: {
                                               ...(f.selectedModes || {}),
                                               [mKey]: {
                                                 ...(f.selectedModes?.[mKey] || { maxAmount: '' }),
-                                                checked: subChecked ? true : anyStillChecked,
+                                                checked: nextModeChecked,
                                               },
                                             },
                                           };

@@ -880,9 +880,13 @@ async function upsertTravelEntitlementForLevel({
     expenseTypeCode: 'TRAVEL',
     travelModeCode: travelFields.travelModeCode,
   };
-  const existingDocs = await ExpenseEntitlement.find(matchKey).sort({ updatedAt: -1 });
+  const existingDocs = await ExpenseEntitlement.find(matchKey).sort({ status: 1, updatedAt: -1, _id: -1 });
   if (existingDocs.length > 0) {
     const primary = existingDocs[0];
+    if (existingDocs.length > 1) {
+      const extraIds = existingDocs.slice(1).map((d) => d._id);
+      await ExpenseEntitlement.deleteMany({ _id: { $in: extraIds } }).catch(() => {});
+    }
     primary.company = companyId;
     if (policyId) primary.policyId = policyId;
     if (policyVersionId || policyId) primary.policyVersionId = policyVersionId || policyId;
@@ -896,10 +900,17 @@ async function upsertTravelEntitlementForLevel({
     if (expenseTypeRef) primary.expenseTypeRef = expenseTypeRef;
     primary.status = status || 'active';
     Object.assign(primary, travelFields);
-    await primary.save();
-    if (existingDocs.length > 1) {
-      const extraIds = existingDocs.slice(1).map((d) => d._id);
-      await ExpenseEntitlement.deleteMany({ _id: { $in: extraIds } }).catch(() => {});
+    primary.markModified('allowedSubtypes');
+    try {
+      await primary.save();
+    } catch (saveErr) {
+      if (saveErr && (saveErr.code === 11000 || /E11000|uniq_entitlement_key/i.test(String(saveErr.message)))) {
+        await ensureEntitlementIndexes(true);
+        await ExpenseEntitlement.collection.dropIndex('uniq_entitlement_key').catch(() => {});
+        await primary.save();
+      } else {
+        throw saveErr;
+      }
     }
     return primary;
   }
@@ -1111,8 +1122,13 @@ exports.createEntitlement = async (req, res) => {
       || (!isTravelRow && (body.amount === undefined || body.amount === null))) {
       return res.status(400).json({ success: false, message: 'levelNumber, expenseTypeCode, cityClass and amount are required.' });
     }
-    const policy = await getActivePolicy(companyId);
-    const policyId = body.policyId || (policy && policy._id) || null;
+    const policy = (await getActivePolicy(companyId)) || (await ensureExpenseMasters(companyId));
+    let policyId = null;
+    if (body.policyId && mongoose.Types.ObjectId.isValid(String(body.policyId))) {
+      const ownedPol = await ExpensePolicy.findOne({ _id: body.policyId, companyId }).select('_id').lean();
+      if (ownedPol) policyId = ownedPol._id;
+    }
+    if (!policyId && policy) policyId = policy._id;
     const levelNumber = Number(body.levelNumber);
     if (!Number.isInteger(levelNumber) || levelNumber < 0 || (levelNumber === 0 && !isTravelRow)) {
       return res.status(400).json({ success: false, message: 'Invalid level.' });
@@ -1146,22 +1162,6 @@ exports.createEntitlement = async (req, res) => {
         Array.isArray(body.targetLevels) ? body.targetLevels : []
       );
       const levelsToApply = levelNumber === 0 ? allCompanyLevels : [levelNumber];
-
-      if (Array.isArray(body.removeModeCodes) && body.removeModeCodes.length > 0) {
-        const cleanRemoveCodes = body.removeModeCodes
-          .map((c) => String(c || '').trim().toUpperCase())
-          .filter(Boolean);
-        if (cleanRemoveCodes.length > 0) {
-          await ExpenseEntitlement.deleteMany({
-            companyId,
-            levelNumber: { $in: [...levelsToApply, 0] },
-            gradeCode,
-            cityClass,
-            expenseTypeCode: 'TRAVEL',
-            travelModeCode: { $in: cleanRemoveCodes },
-          }).catch(() => {});
-        }
-      }
 
       // Remove any legacy levelNumber: 0 row for this travel mode so no separate "All Levels" section exists
       await ExpenseEntitlement.deleteMany({
@@ -1377,7 +1377,10 @@ exports.updateEntitlement = async (req, res) => {
         if (body.formula !== undefined) existing.formula = body.formula;
         if (body.ruleCode !== undefined) existing.ruleCode = body.ruleCode;
         if (body.status !== undefined) existing.status = body.status;
-        if (travel) Object.assign(existing, travel.fields);
+        if (travel) {
+          Object.assign(existing, travel.fields);
+          existing.markModified('allowedSubtypes');
+        }
         await existing.save();
         await ExpenseEntitlement.findByIdAndDelete(ent._id);
         return res.json({ success: true, data: existing });
@@ -1420,8 +1423,14 @@ exports.updateEntitlement = async (req, res) => {
     if (body.formula !== undefined) ent.formula = body.formula;
     if (body.ruleCode !== undefined) ent.ruleCode = body.ruleCode;
     if (body.status !== undefined) ent.status = body.status;
-    if (body.policyId !== undefined) ent.policyId = body.policyId;
-    if (travel) Object.assign(ent, travel.fields);
+    if (body.policyId && mongoose.Types.ObjectId.isValid(String(body.policyId))) {
+      const ownedPol = await ExpensePolicy.findOne({ _id: body.policyId, companyId }).select('_id').lean();
+      if (ownedPol) ent.policyId = ownedPol._id;
+    }
+    if (travel) {
+      Object.assign(ent, travel.fields);
+      ent.markModified('allowedSubtypes');
+    }
 
     try {
       await ent.save();

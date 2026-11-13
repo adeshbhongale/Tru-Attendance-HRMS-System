@@ -922,6 +922,51 @@ it('Q. Submitting Travel Mode Entitlement with All Levels (levelNumber: 0) conne
   assert.equal(travelEnts.some((e) => Number(e.levelNumber) === 0), false);
 });
 
+it('R. Multiple Travel Mode Entitlements per level persist permanently across startup deduplication, index sync, and master seeding', async () => {
+  const { deduplicateEntitlements, ensureEntitlementIndexes, ensureExpenseMasters } = require('../services/seedExpenseMasters');
+
+  const modesRes = await request(app).get('/api/expense/travel-modes/all').set(as('admin'));
+  assert.equal(modesRes.status, 200);
+  const modes = modesRes.body.data || [];
+  const train = modes.find((m) => m.code === 'TRAIN');
+  const bus = modes.find((m) => m.code === 'BUS');
+  const flight = modes.find((m) => m.code === 'FLIGHT');
+  const taxi = modes.find((m) => m.code === 'TAXI_AUTO');
+  assert.ok(train && bus && flight && taxi, 'Default travel modes exist');
+
+  for (const [m, cap] of [[train, 1800], [bus, 900], [flight, 5500], [taxi, 600]]) {
+    const subs = (m.subtypes || []).map((s) => ({ subtypeId: s._id, maxAmount: cap }));
+    // eslint-disable-next-line no-await-in-loop
+    const res = await request(app)
+      .post('/api/expense/entitlements')
+      .set(as('admin'))
+      .send({
+        expenseTypeCode: 'TRAVEL',
+        levelNumber: 2,
+        gradeCode: '',
+        cityClass: 'ALL',
+        travelModeId: m._id,
+        allowedSubtypes: subs,
+        maxAmount: subs.length ? null : cap,
+        status: 'active',
+      });
+    assert.equal(res.status, 201);
+  }
+
+  // Simulate server restart / wake-up migrations that previously wiped multiple TRAVEL rows per level
+  await deduplicateEntitlements();
+  await ensureEntitlementIndexes(true);
+  await ensureExpenseMasters(ids.company);
+
+  const entListRes = await request(app).get('/api/expense/entitlements/all').set(as('admin'));
+  assert.equal(entListRes.status, 200);
+  const lvl2TravelCodes = (entListRes.body.data || [])
+    .filter((e) => e.expenseTypeCode === 'TRAVEL' && Number(e.levelNumber) === 2)
+    .map((e) => e.travelModeCode)
+    .sort();
+  assert.deepEqual(lvl2TravelCodes, ['BUS', 'FLIGHT', 'TAXI_AUTO', 'TRAIN']);
+});
+
 
 
 

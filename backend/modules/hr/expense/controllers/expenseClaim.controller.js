@@ -84,15 +84,21 @@ async function withFoodLock(req, companyId, input, enabled, fn) {
   return withEmployeeLocks({ companyId, employeeIds: ids, scope: 'FOOD' }, fn);
 }
 
-/** Active Level Entitlement rows for TRAVEL under a policy (with company-wide fallback). */
+/** Active Level Entitlement rows for TRAVEL under a policy (with company-wide fallback across policy versions). */
 async function loadTravelEntitlements(companyId, policyId) {
-  let rows = policyId
-    ? await ExpenseEntitlement.find({ companyId, policyId, expenseTypeCode: 'TRAVEL', status: 'active' }).lean()
-    : [];
-  if (!rows.length) {
-    rows = await ExpenseEntitlement.find({ companyId, expenseTypeCode: 'TRAVEL', status: 'active' }).lean();
+  const allRows = await ExpenseEntitlement.find({ companyId, expenseTypeCode: 'TRAVEL', status: 'active' })
+    .sort({ updatedAt: -1 })
+    .lean();
+  if (!policyId || allRows.length <= 1) return allRows;
+  const byKey = new Map();
+  for (const r of allRows) {
+    const k = `${r.levelNumber ?? ''}|${r.gradeCode || ''}|${r.cityClass || 'ALL'}|${r.travelModeCode || r.travelModeId || ''}`;
+    const prev = byKey.get(k);
+    if (!prev || (String(r.policyId || '') === String(policyId) && String(prev.policyId || '') !== String(policyId))) {
+      byKey.set(k, r);
+    }
   }
-  return rows;
+  return Array.from(byKey.values());
 }
 
 /**

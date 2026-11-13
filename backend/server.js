@@ -22,33 +22,13 @@ connectDB().then(async () => {
   trackingCache.startFlushIntervals();
   console.log('[Server] Tracking cache initialized.');
 
-  // Safe deduplication migration: clean older duplicate ExpenseEntitlements so unique index creates safely
+  // Safe deduplication & v2 index migration (preserves per-mode TRAVEL Level Entitlements)
   try {
-    const ExpenseEntitlement = require('./modules/hr/expense/models/ExpenseEntitlement');
-    const duplicates = await ExpenseEntitlement.aggregate([
-      {
-        $group: {
-          _id: {
-            companyId: "$companyId",
-            policyId: "$policyId",
-            levelNumber: "$levelNumber",
-            gradeCode: "$gradeCode",
-            cityClass: "$cityClass",
-            expenseTypeCode: "$expenseTypeCode"
-          },
-          ids: { $push: "$_id" },
-          count: { $sum: 1 }
-        }
-      },
-      { $match: { count: { $gt: 1 } } }
-    ]);
-
-    for (const group of duplicates) {
-      const [keepId, ...deleteIds] = group.ids.reverse();
-      await ExpenseEntitlement.deleteMany({ _id: { $in: deleteIds } });
-    }
-    if (duplicates.length > 0) {
-      console.log(`[DB Migration] Cleaned up ${duplicates.length} duplicate entitlement groups.`);
+    const { deduplicateEntitlements, ensureEntitlementIndexes } = require('./modules/hr/expense/services/seedExpenseMasters');
+    const { groups } = await deduplicateEntitlements();
+    await ensureEntitlementIndexes(true);
+    if (groups > 0) {
+      console.log(`[DB Migration] Cleaned up ${groups} duplicate entitlement groups.`);
     }
   } catch (cleanErr) {
     console.warn('[DB Migration] Notice during entitlement deduplication:', cleanErr.message);

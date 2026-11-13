@@ -314,6 +314,46 @@ async function upgradeTravelModes(companyId) {
   }
 }
 
+// Safe v2 deduplication: includes travelModeCode so multiple TRAVEL modes per level are never deleted.
+async function deduplicateEntitlements() {
+  const duplicates = await ExpenseEntitlement.aggregate([
+    { $sort: { status: 1, updatedAt: -1, _id: -1 } },
+    {
+      $group: {
+        _id: {
+          companyId: '$companyId',
+          policyId: { $cond: [{ $eq: ['$expenseTypeCode', 'TRAVEL'] }, null, '$policyId'] },
+          levelNumber: '$levelNumber',
+          gradeCode: { $ifNull: ['$gradeCode', ''] },
+          cityClass: { $ifNull: ['$cityClass', 'ALL'] },
+          expenseTypeCode: '$expenseTypeCode',
+          travelModeCode: {
+            $cond: [
+              { $ne: [{ $ifNull: ['$travelModeCode', ''] }, ''] },
+              '$travelModeCode',
+              { $toString: { $ifNull: ['$travelModeId', ''] } },
+            ],
+          },
+        },
+        ids: { $push: '$_id' },
+        count: { $sum: 1 },
+      },
+    },
+    { $match: { count: { $gt: 1 } } },
+  ]);
+
+  let deleted = 0;
+  for (const group of duplicates) {
+    const [, ...deleteIds] = group.ids;
+    if (deleteIds.length > 0) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await ExpenseEntitlement.deleteMany({ _id: { $in: deleteIds } });
+      deleted += res.deletedCount || 0;
+    }
+  }
+  return { groups: duplicates.length, deleted };
+}
+
 // Level Entitlements v2 index adds travelModeCode; drop the legacy unique key once per process.
 let entitlementIndexesChecked = false;
 async function ensureEntitlementIndexes(force = false) {
@@ -329,6 +369,7 @@ async function ensureEntitlementIndexes(force = false) {
       }
     }
     await ExpenseEntitlement.collection.dropIndex('uniq_entitlement_key').catch(() => {});
+    await deduplicateEntitlements().catch(() => {});
     await ExpenseEntitlement.syncIndexes().catch(() => {});
     entitlementIndexesChecked = true;
   } catch (err) {
@@ -554,4 +595,4 @@ async function ensureExpenseMasters(companyId) {
   return policyDoc;
 }
 
-module.exports = { ensureExpenseMasters, upgradeTravelModes, ensureEntitlementIndexes, migrateOtherPurchaseClaims, SOURCE_ENTITLEMENT_ROWS, CITY_CLASSES, CONVEYANCE_RATES, DEFAULT_TRAVEL_MODES };
+module.exports = { ensureExpenseMasters, upgradeTravelModes, ensureEntitlementIndexes, deduplicateEntitlements, migrateOtherPurchaseClaims, SOURCE_ENTITLEMENT_ROWS, CITY_CLASSES, CONVEYANCE_RATES, DEFAULT_TRAVEL_MODES };

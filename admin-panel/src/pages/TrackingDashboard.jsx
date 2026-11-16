@@ -131,25 +131,28 @@ const TrackingDashboard = () => {
     setSelectedDate(newDateStr);
   };
 
-  const fetchTrackingData = useCallback(async () => {
+  const fetchTrackingData = useCallback(async (signal) => {
     if (!selectedDate) return;
     try {
       setLoading(true);
-      const res = await api.get(`/reports/tracking?date=${selectedDate}`);
-      if (res.data?.success && res.data?.data) {
+      const res = await api.get(`/reports/tracking?date=${selectedDate}`, signal ? { signal } : undefined);
+      if (!signal?.aborted && res.data?.success && res.data?.data) {
         setData(res.data.data);
       }
     } catch (err) {
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || signal?.aborted) return;
       console.error('Failed to load tracking data:', err);
       const msg = err?.response?.data?.message || 'Failed to load tracking data';
       toast.error(msg);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [selectedDate]);
 
   useEffect(() => {
-    fetchTrackingData();
+    const controller = new AbortController();
+    fetchTrackingData(controller.signal);
+    return () => controller.abort();
   }, [fetchTrackingData]);
 
   useEffect(() => {

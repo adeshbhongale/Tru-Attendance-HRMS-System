@@ -87,6 +87,10 @@ exports.pendingQueue = async (req, res) => {
       'financeApproval.status': { $nin: ['PENDING', 'REJECTED'] },
     };
     if (companyId && companyId !== 'ALL') filter.companyId = companyId;
+    if (req.query.countOnly === 'true') {
+      const count = await ExpenseClaim.countDocuments(filter);
+      return res.json({ success: true, count });
+    }
     const claims = await ExpenseClaim.find(filter).populate(POPULATE_QUEUE).sort({ submittedAt: 1, createdAt: 1 }).lean();
     res.json({ success: true, data: claims.map((c) => withPermissions(req, c)) });
   } catch (err) {

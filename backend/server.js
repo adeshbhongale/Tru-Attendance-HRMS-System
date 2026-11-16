@@ -72,6 +72,10 @@ app.use((req, res, next) => {
   next();
 });
 
+// Gzip compression for JSON payloads
+const compression = require('compression');
+app.use(compression());
+
 // Body parser
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -135,20 +139,6 @@ app.use('/api/employees', require('./routes/employees'));
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/leaves', require('./routes/leaves'));
 app.use('/api/leave/admin', require('./routes/leaveAdmin'));
-app.use('/api/shifts', require('./routes/shifts'));
-app.use('/api/reports', require('./routes/reports'));
-app.use('/api/settings', require('./routes/settings'));
-app.use('/api/ai', require('./routes/ai'));
-app.use('/api/departments', require('./routes/departments'));
-app.use('/api/designations', require('./routes/designations'));
-app.use('/api/holidays', require('./routes/holidays'));
-app.use('/api/leave-types', require('./routes/leaveTypes'));
-app.use('/api/notifications', require('./routes/notifications'));
-app.use('/api/customers', require('./routes/customers'));
-app.use('/api/vendors', require('./routes/vendors'));
-app.use('/api/products', require('./routes/products'));
-app.use('/api/attendance', require('./routes/attendance'));
-app.use('/api/leaves', require('./routes/leaves'));
 app.use('/api/shifts', require('./routes/shifts'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/settings', require('./routes/settings'));

@@ -1009,13 +1009,19 @@ async function writeTrackingLog(userId, points, distanceKm, companyId = null) {
     const avgSpeed = points.reduce((acc, p) => acc + (p.speed || 0), 0) / points.length;
     const maxSpeed = Math.max(...points.map(p => p.speed || 0));
     
-    const rawPath = points.map(p => p.location?.coordinates || [p.rawLongitude || p.longitude, p.rawLatitude || p.latitude]);
+    const round6 = (n) => Math.round(Number(n) * 1e6) / 1e6;
+    const rawPath = points
+      .map(p => p.location?.coordinates || [p.rawLongitude ?? p.longitude, p.rawLatitude ?? p.latitude])
+      .filter(p => p && p[0] != null && p[1] != null)
+      .map(p => [round6(p[0]), round6(p[1])]);
     const snappedPath = points
       .map(p => [
-        p.snappedLongitude || p.rawLongitude || p.location?.coordinates[0] || p.longitude,
-        p.snappedLatitude || p.rawLatitude || p.location?.coordinates[1] || p.latitude
+        p.snappedLongitude ?? p.rawLongitude ?? p.location?.coordinates?.[0] ?? p.longitude,
+        p.snappedLatitude ?? p.rawLatitude ?? p.location?.coordinates?.[1] ?? p.latitude
       ])
-      .filter(p => p[0] != null && p[1] != null);
+      .filter(p => p[0] != null && p[1] != null)
+      .map(p => [round6(p[0]), round6(p[1])]);
+    const bestPath = snappedPath.length > 0 ? snappedPath : rawPath;
 
     // BUFFER: Push to cache buffer instead of immediate save
     cache.trackingLogBuffer.push({
@@ -1023,16 +1029,16 @@ async function writeTrackingLog(userId, points, distanceKm, companyId = null) {
       userId,
       startTime,
       endTime,
-      startLocation: points[0].location || { type: 'Point', coordinates: rawPath[0] },
-      endLocation: points[points.length - 1].location || { type: 'Point', coordinates: rawPath[rawPath.length - 1] },
+      startLocation: points[0].location || { type: 'Point', coordinates: bestPath[0] },
+      endLocation: points[points.length - 1].location || { type: 'Point', coordinates: bestPath[bestPath.length - 1] },
       distance: parseFloat(distanceKm.toFixed(3)),
       rawDistance: parseFloat(distanceKm.toFixed(3)),
       avgSpeed: parseFloat(avgSpeed.toFixed(2)),
       maxSpeed: parseFloat(maxSpeed.toFixed(2)),
       movementStatus: detectMovementState(avgSpeed),
-      path: rawPath,
+      path: snappedPath.length > 0 ? undefined : rawPath,
       snappedPath: snappedPath.length > 0 ? snappedPath : undefined,
-      avgAccuracy: points.reduce((acc, p) => acc + (p.accuracy || 0), 0) / points.length
+      avgAccuracy: Math.round(points.reduce((acc, p) => acc + (p.accuracy || 0), 0) / points.length)
     });
   } catch (err) {
     console.error('[EnterpriseTracking] TrackingLog buffer error:', err.message);

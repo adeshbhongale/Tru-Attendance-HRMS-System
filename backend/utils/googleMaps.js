@@ -3,6 +3,8 @@ const { calculateDistance } = require('./geofence');
 
 // In-memory cache for road route distance (~1.1km grid precision: 2 decimal places)
 const roadDistanceCache = new Map();
+const inFlightRoadDistance = new Map();
+let googleMatrixCooldownUntil = 0;
 
 exports.getGoogleRoadDistance = async (lat1, lng1, lat2, lng2) => {
   if (lat1 == null || lng1 == null || lat2 == null || lng2 == null || isNaN(lat1) || isNaN(lng1) || isNaN(lat2) || isNaN(lng2)) {
@@ -14,56 +16,78 @@ exports.getGoogleRoadDistance = async (lat1, lng1, lat2, lng2) => {
   const numLng2 = Number(lng2);
 
   const cacheKey = `${numLat1.toFixed(2)},${numLng1.toFixed(2)}->${numLat2.toFixed(2)},${numLng2.toFixed(2)}`;
-  if (roadDistanceCache.has(cacheKey)) {
-    return roadDistanceCache.get(cacheKey);
+  const cachedEntry = roadDistanceCache.get(cacheKey);
+  if (cachedEntry != null) {
+    if (typeof cachedEntry === 'number') return cachedEntry;
+    if (cachedEntry.expiresAt > Date.now()) return cachedEntry.km;
+    roadDistanceCache.delete(cacheKey);
   }
 
-  // 1. Primary: Google Maps Distance Matrix API (when key & billing enabled)
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-  if (apiKey) {
+  if (inFlightRoadDistance.has(cacheKey)) {
+    return inFlightRoadDistance.get(cacheKey);
+  }
+
+  const lookupPromise = (async () => {
+    // 1. Primary: Google Maps Distance Matrix API (skip during cooldown if key/billing rejected)
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (apiKey && Date.now() > googleMatrixCooldownUntil) {
+      try {
+        const response = await axios.get(
+          `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${numLat1},${numLng1}&destinations=${numLat2},${numLng2}&key=${apiKey}`,
+          { timeout: 2500 }
+        );
+        const status = response.data?.status;
+        const element = response.data?.rows?.[0]?.elements?.[0];
+        if (status === 'OK' && element?.status === 'OK' && element.distance?.value != null) {
+          const km = element.distance.value / 1000;
+          roadDistanceCache.set(cacheKey, km);
+          return km;
+        }
+        if (status === 'REQUEST_DENIED' || status === 'OVER_QUERY_LIMIT' || status === 'OVER_DAILY_LIMIT') {
+          googleMatrixCooldownUntil = Date.now() + 10 * 60 * 1000;
+        }
+      } catch (err) {
+        // Fall through to OSRM road route fallback
+      }
+    }
+
+    // 2. Fallback: OSRM Driving Route API (fast timeout so dashboard requests never stall)
     try {
-      const response = await axios.get(
-        `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${numLat1},${numLng1}&destinations=${numLat2},${numLng2}&key=${apiKey}`,
-        { timeout: 6000 }
-      );
-      const element = response.data?.rows?.[0]?.elements?.[0];
-      if (response.data?.status === 'OK' && element?.status === 'OK' && element.distance?.value != null) {
-        const km = element.distance.value / 1000;
+      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${numLng1},${numLat1};${numLng2},${numLat2}?overview=false`;
+      const osrmRes = await axios.get(osrmUrl, { timeout: 2500 });
+      const routeDistMeters = osrmRes.data?.routes?.[0]?.distance;
+      if (typeof routeDistMeters === 'number' && routeDistMeters > 0) {
+        const km = routeDistMeters / 1000;
         roadDistanceCache.set(cacheKey, km);
         return km;
       }
-    } catch (err) {
-      // Fall through to OSRM road route fallback
+    } catch (osrmErr) {
+      // Cache temporary fallback for 5 min so concurrent/repeated requests don't re-timeout
+      const straightKm = calculateDistance(numLat1, numLng1, numLat2, numLng2) / 1000;
+      roadDistanceCache.set(cacheKey, { km: straightKm, expiresAt: Date.now() + 5 * 60 * 1000 });
+      return straightKm;
     }
-  }
 
-  // 2. Fallback: OSRM Driving Route API (actual highway/road route distance)
+    return null;
+  })();
+
+  inFlightRoadDistance.set(cacheKey, lookupPromise);
   try {
-    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${numLng1},${numLat1};${numLng2},${numLat2}?overview=false`;
-    const osrmRes = await axios.get(osrmUrl, { timeout: 6000 });
-    const routeDistMeters = osrmRes.data?.routes?.[0]?.distance;
-    if (typeof routeDistMeters === 'number' && routeDistMeters > 0) {
-      const km = routeDistMeters / 1000;
-      roadDistanceCache.set(cacheKey, km);
-      return km;
-    }
-  } catch (osrmErr) {
-    console.warn('Road route distance lookup failed, falling back to straight-line:', osrmErr.message);
+    return await lookupPromise;
+  } finally {
+    inFlightRoadDistance.delete(cacheKey);
   }
-
-  return null;
 };
 
 /**
  * Resolves the distance in meters from an employee's assigned workingPlace using road route distance
- * when straight-line distance is >= 80 km (so local/in-city checks require 0 external API calls).
+ * ONLY in the 80 km - 150 km gray zone (>= 150 km straight-line is already guaranteed >= 150 km by road).
  */
 exports.resolveOutstationDistanceMeters = async (empLat, empLng, wpLat, wpLng) => {
   if (empLat == null || empLng == null || wpLat == null || wpLng == null || isNaN(empLat) || isNaN(empLng) || isNaN(wpLat) || isNaN(wpLng)) {
     return 0;
   }
   const straightMeters = calculateDistance(Number(empLat), Number(empLng), Number(wpLat), Number(wpLng));
-  // Road distance cannot reach 150 km if straight-line is under 80 km
   if (straightMeters < 80000) {
     return straightMeters;
   }
@@ -81,7 +105,8 @@ exports.getCachedOutstationDistanceMeters = (empLat, empLng, wpLat, wpLng) => {
   const straightMeters = calculateDistance(Number(empLat), Number(empLng), Number(wpLat), Number(wpLng));
   if (straightMeters < 80000) return straightMeters;
   const cacheKey = `${Number(wpLat).toFixed(2)},${Number(wpLng).toFixed(2)}->${Number(empLat).toFixed(2)},${Number(empLng).toFixed(2)}`;
-  const cachedRoadKm = roadDistanceCache.get(cacheKey);
+  const cachedEntry = roadDistanceCache.get(cacheKey);
+  const cachedRoadKm = typeof cachedEntry === 'number' ? cachedEntry : (cachedEntry?.expiresAt > Date.now() ? cachedEntry.km : null);
   if (typeof cachedRoadKm === 'number' && cachedRoadKm > 0) {
     return Math.max(straightMeters, Math.round(cachedRoadKm * 1000));
   }

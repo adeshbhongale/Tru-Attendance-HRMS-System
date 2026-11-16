@@ -103,14 +103,17 @@ const AppContent = () => {
 
   useEffect(() => {
     if (!isAuthenticated || !isSuperAdmin) return;
+    const controller = new AbortController();
     const fetchCompanies = async () => {
       try {
-        const res = await api.get('/admin/console/companies');
-        const list = res.data.data || [];
-        setCompanies(list);
+        const res = await api.get('/admin/console/companies', { signal: controller.signal });
+        if (!controller.signal.aborted) {
+          setCompanies(res.data.data || []);
+        }
       } catch (_) { }
     };
     fetchCompanies();
+    return () => controller.abort();
   }, [isAuthenticated, isSuperAdmin]);
 
   const handleSelectCompany = (comp) => {

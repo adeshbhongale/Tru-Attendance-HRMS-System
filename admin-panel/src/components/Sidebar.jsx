@@ -27,7 +27,7 @@ import {
   Wallet,
   X
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import api, { IMAGE_BASE_URL } from '../api/axios';
@@ -45,6 +45,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   const location = useLocation();
   const { user, unreadCount } = useSelector((state) => state.auth);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
+  const lastBadgeFetchAtRef = useRef(0);
 
   const userRole = (user?.role || '').trim().toLowerCase().replace(/[-\s]/g, '_');
   const userRoleCode = (user?.roleCode || '').trim().toUpperCase().replace(/[-\s]/g, '_');
@@ -55,89 +56,9 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   const isStoreAdmin = userRole === 'store_admin' || userRoleCode === 'STORE_ADMIN';
   const isAccountAdmin = userRole === 'account_admin' || userRole === 'accounts_admin' || userRoleCode === 'ACCOUNT_ADMIN' || userRoleCode === 'ACCOUNTS_ADMIN';
 
+  // Real-time listeners (stay mounted once per user session, not torn down on route change)
   useEffect(() => {
     if (!user?._id) return;
-
-    const fetchUnreadCount = async () => {
-      if (isAccountAdmin || isStoreAdmin) return;
-      try {
-        const res = await api.get('/notifications/employee/unread-count');
-        if (res.data.success) {
-          dispatch(setUnreadCount(res.data.count));
-        }
-      } catch (err) {
-        console.error('Failed to fetch unread count:', err);
-      }
-    };
-
-    const fetchPendingApprovalsCount = async () => {
-      try {
-        const promises = [];
-        let count = 0;
-
-        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) {
-          promises.push(
-            api.get('/expense/accounts/pending').then((res) => {
-              const data = res.data.data || res.data || [];
-              count += Array.isArray(data) ? data.length : 0;
-            }).catch(() => { })
-          );
-        }
-
-        if (isSuperAdmin || isCompanyAdmin || isStoreAdmin) {
-          promises.push(
-            api.get('/material/transactions?status=submitted').then((res) => {
-              const data = res.data.transactions || res.data.data || res.data || [];
-              count += Array.isArray(data) ? data.length : 0;
-            }).catch(() => { })
-          );
-        }
-
-        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) {
-          promises.push(
-            api.get('/visits', { params: { status: 'pending', countOnly: true } }).then((res) => {
-              if (typeof res.data?.count === 'number') {
-                count += res.data.count;
-              } else {
-                const data = res.data.data || res.data || [];
-                const pendingVisits = Array.isArray(data)
-                  ? data.filter((v) => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
-                  : [];
-                count += pendingVisits.length;
-              }
-            }).catch(() => { })
-          );
-        }
-
-        // Material conversion / close requests (DC FOC, Invoice, DC Internal)
-        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin || isStoreAdmin) {
-          promises.push(
-            api.get('/barcodes/close-requests/pending')
-              .catch(() => api.get('/material/barcodes/close-requests/pending'))
-              .then((res) => {
-                const data = res?.data?.requests || res?.data?.data || res?.data || [];
-                const list = Array.isArray(data) ? data : [];
-                if (isSuperAdmin || isCompanyAdmin) {
-                  count += list.length;
-                } else if (isAccountAdmin) {
-                  count += list.filter((c) => c.status === 'pending_accounts_approval').length;
-                } else if (isStoreAdmin) {
-                  count += list.filter((c) => c.status === 'pending_store_acceptance' || (c.status === 'pending' && c.documentType === 'DC Internal')).length;
-                }
-              })
-              .catch(() => { })
-          );
-        }
-
-        await Promise.all(promises);
-        setPendingApprovalsCount(count);
-      } catch (err) {
-        console.error('Failed to fetch pending approvals count in sidebar:', err);
-      }
-    };
-
-    fetchUnreadCount();
-    fetchPendingApprovalsCount();
 
     const handleBadgeUpdate = (data) => {
       if (typeof data.unreadCount === 'number') {
@@ -160,7 +81,112 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       socket.off(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
       window.removeEventListener('pendingApprovalsCountUpdated', handlePendingApprovalsUpdate);
     };
-  }, [user?._id, isSuperAdmin, isCompanyAdmin, isHRAdmin, isStoreAdmin, isAccountAdmin, location.pathname]);
+  }, [user?._id, dispatch]);
+
+  useEffect(() => {
+    if (!user?._id) return;
+    // Throttle route-change badge polling to once per 30s (real-time events still update instantly)
+    if (Date.now() - lastBadgeFetchAtRef.current < 30000) return;
+
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    const fetchUnreadCount = async () => {
+      if (isAccountAdmin || isStoreAdmin) return;
+      try {
+        const res = await api.get('/notifications/employee/unread-count', { signal });
+        if (!signal.aborted && res.data.success) {
+          dispatch(setUnreadCount(res.data.count));
+        }
+      } catch (err) {
+        if (err?.code !== 'ERR_CANCELED' && err?.name !== 'CanceledError') {
+          console.error('Failed to fetch unread count:', err);
+        }
+      }
+    };
+
+    const fetchPendingApprovalsCount = async () => {
+      try {
+        const promises = [];
+        let count = 0;
+
+        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) {
+          promises.push(
+            api.get('/expense/accounts/pending', { params: { countOnly: true }, signal }).then((res) => {
+              if (typeof res.data?.count === 'number') {
+                count += res.data.count;
+              } else {
+                const data = res.data.data || res.data || [];
+                count += Array.isArray(data) ? data.length : 0;
+              }
+            }).catch(() => { })
+          );
+        }
+
+        if (isSuperAdmin || isCompanyAdmin || isStoreAdmin) {
+          promises.push(
+            api.get('/material/transactions?status=submitted', { signal }).then((res) => {
+              const data = res.data.transactions || res.data.data || res.data || [];
+              count += Array.isArray(data) ? data.length : 0;
+            }).catch(() => { })
+          );
+        }
+
+        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) {
+          promises.push(
+            api.get('/visits', { params: { status: 'pending', countOnly: true }, signal }).then((res) => {
+              if (typeof res.data?.count === 'number') {
+                count += res.data.count;
+              } else {
+                const data = res.data.data || res.data || [];
+                const pendingVisits = Array.isArray(data)
+                  ? data.filter((v) => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
+                  : [];
+                count += pendingVisits.length;
+              }
+            }).catch(() => { })
+          );
+        }
+
+        // Material conversion / close requests (DC FOC, Invoice, DC Internal)
+        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin || isStoreAdmin) {
+          promises.push(
+            api.get('/barcodes/close-requests/pending', { signal })
+              .catch((err) => (signal.aborted ? Promise.reject(err) : api.get('/material/barcodes/close-requests/pending', { signal })))
+              .then((res) => {
+                const data = res?.data?.requests || res?.data?.data || res?.data || [];
+                const list = Array.isArray(data) ? data : [];
+                if (isSuperAdmin || isCompanyAdmin) {
+                  count += list.length;
+                } else if (isAccountAdmin) {
+                  count += list.filter((c) => c.status === 'pending_accounts_approval').length;
+                } else if (isStoreAdmin) {
+                  count += list.filter((c) => c.status === 'pending_store_acceptance' || (c.status === 'pending' && c.documentType === 'DC Internal')).length;
+                }
+              })
+              .catch(() => { })
+          );
+        }
+
+        await Promise.all(promises);
+        if (!signal.aborted) {
+          lastBadgeFetchAtRef.current = Date.now();
+          setPendingApprovalsCount(count);
+        }
+      } catch (err) {
+        if (!signal.aborted) {
+          console.error('Failed to fetch pending approvals count in sidebar:', err);
+        }
+      }
+    };
+
+    fetchUnreadCount();
+    fetchPendingApprovalsCount();
+
+    return () => {
+      controller.abort();
+    };
+  }, [user?._id, isSuperAdmin, isCompanyAdmin, isHRAdmin, isStoreAdmin, isAccountAdmin, location.pathname, dispatch]);
 
   const SETUP_PATHS = ['/admin-console', '/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/leave-policies', '/holidays', '/customers', '/vendors', '/products', '/materials', '/material-activity-log', '/store-configuration', '/expense-management', '/role-permissions', '/notifications'];
   const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname.startsWith(p)), [location.pathname]);

@@ -608,52 +608,66 @@ exports.getAdminEmployeeStats = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // GET /api/reports/tracking
 // ─────────────────────────────────────────────────────────────
+const inFlightTrackingStats = new Map();
+const lastStaleUserCleanupByCompany = new Map();
+
 exports.getTrackingStats = async (req, res) => {
   try {
     const targetDate = (req.query.date ? parseUTCDate(req.query.date) : null) || todayUTC();
     const companyId = req.tenant?.companyId || req.user?.companyId || req.user?.company || req.headers['x-company-id'] || null;
     const companyFilter = companyId ? { companyId } : {};
+    const dedupKey = `${companyId || 'ALL'}:${targetDate.toISOString().split('T')[0]}`;
 
-    // Auto-cleanup stale online users safely
-    try {
-      const nowTime = Date.now();
-      const poorSignalCutoff = new Date(nowTime - 120000); // 2 minutes
-      const offlineCutoff = new Date(nowTime - 300000); // 5 minutes
+    if (inFlightTrackingStats.has(dedupKey)) {
+      const sharedPayload = await inFlightTrackingStats.get(dedupKey);
+      return res.json(sharedPayload);
+    }
 
-      // 1) Mark users who haven't updated in 5 minutes as 'offline'
-      const staleOfflineUsers = await LiveEmployeeStatus.find({
-        ...companyFilter,
-        currentStatus: { $ne: 'offline' },
-        lastUpdate: { $lt: offlineCutoff }
-      });
-      if (staleOfflineUsers.length > 0) {
-        const offlineUserIds = staleOfflineUsers.map(u => u.userId).filter(Boolean);
-        if (offlineUserIds.length > 0) {
-          await User.updateMany({ ...companyFilter, _id: { $in: offlineUserIds } }, { isOnline: false });
-          await LiveEmployeeStatus.updateMany(
-            { ...companyFilter, userId: { $in: offlineUserIds } },
-            { $set: { currentStatus: 'offline', trackingStatus: 'offline', signalQuality: 'lost' } }
-          );
+    const computePromise = (async () => {
+    // Auto-cleanup stale online users safely (throttled to once per 60s per company)
+    const cleanupKey = String(companyId || 'ALL');
+    if (Date.now() - (lastStaleUserCleanupByCompany.get(cleanupKey) || 0) > 60000) {
+      lastStaleUserCleanupByCompany.set(cleanupKey, Date.now());
+      try {
+        const nowTime = Date.now();
+        const poorSignalCutoff = new Date(nowTime - 120000); // 2 minutes
+        const offlineCutoff = new Date(nowTime - 300000); // 5 minutes
+
+        const staleOfflineUsers = await LiveEmployeeStatus.find({
+          ...companyFilter,
+          currentStatus: { $ne: 'offline' },
+          lastUpdate: { $lt: offlineCutoff }
+        }).select('userId').lean();
+        if (staleOfflineUsers.length > 0) {
+          const offlineUserIds = staleOfflineUsers.map(u => u.userId).filter(Boolean);
+          if (offlineUserIds.length > 0) {
+            await Promise.all([
+              User.updateMany({ ...companyFilter, _id: { $in: offlineUserIds } }, { isOnline: false }),
+              LiveEmployeeStatus.updateMany(
+                { ...companyFilter, userId: { $in: offlineUserIds } },
+                { $set: { currentStatus: 'offline', trackingStatus: 'offline', signalQuality: 'lost' } }
+              )
+            ]);
+          }
         }
-      }
 
-      // 2) Mark users who haven't updated in 2 minutes (but less than 5 minutes) as 'poor signal'
-      const stalePoorSignalUsers = await LiveEmployeeStatus.find({
-        ...companyFilter,
-        currentStatus: { $ne: 'poor signal' },
-        lastUpdate: { $gte: offlineCutoff, $lt: poorSignalCutoff }
-      });
-      if (stalePoorSignalUsers.length > 0) {
-        const poorSignalUserIds = stalePoorSignalUsers.map(u => u.userId).filter(Boolean);
-        if (poorSignalUserIds.length > 0) {
-          await LiveEmployeeStatus.updateMany(
-            { ...companyFilter, userId: { $in: poorSignalUserIds } },
-            { $set: { currentStatus: 'poor signal', signalQuality: 'weak' } }
-          );
+        const stalePoorSignalUsers = await LiveEmployeeStatus.find({
+          ...companyFilter,
+          currentStatus: { $ne: 'poor signal' },
+          lastUpdate: { $gte: offlineCutoff, $lt: poorSignalCutoff }
+        }).select('userId').lean();
+        if (stalePoorSignalUsers.length > 0) {
+          const poorSignalUserIds = stalePoorSignalUsers.map(u => u.userId).filter(Boolean);
+          if (poorSignalUserIds.length > 0) {
+            await LiveEmployeeStatus.updateMany(
+              { ...companyFilter, userId: { $in: poorSignalUserIds } },
+              { $set: { currentStatus: 'poor signal', signalQuality: 'weak' } }
+            );
+          }
         }
+      } catch (cleanupErr) {
+        console.warn('Warning: Stale user cleanup in getTrackingStats failed:', cleanupErr.message);
       }
-    } catch (cleanupErr) {
-      console.warn('Warning: Stale user cleanup in getTrackingStats failed:', cleanupErr.message);
     }
 
     const DailyRouteSummary = require('../models/DailyRouteSummary');
@@ -661,7 +675,7 @@ exports.getTrackingStats = async (req, res) => {
     const targetDateStartIST = getStartOfDayIST(targetDate);
     const targetDateEndIST = getEndOfDayIST(targetDate);
 
-    const [allEmployeesRaw, attendanceRaw, onLeaveUsers, settings, liveStatuses, allLocations, mobileConfig, dailyRouteSummaries, rawPointsForDate] = await Promise.all([
+    const [allEmployeesRaw, attendanceRaw, onLeaveUsers, settings, liveStatuses, allLocations, mobileConfig, dailyRouteSummaries] = await Promise.all([
       User.find({
         ...companyFilter,
         status: { $in: ['ACTIVE', 'active'] },
@@ -683,16 +697,13 @@ exports.getTrackingStats = async (req, res) => {
         startDate: { $lte: targetDate },
         endDate: { $gte: targetDate }
       }).distinct('user'),
-      CompanySetting.findOne(companyFilter),
-      LiveEmployeeStatus.find(companyFilter),
-      Location.find(companyFilter),
-      MobileAppConfig.findOne(companyFilter),
-      DailyRouteSummary.find({ ...companyFilter, date: { $gte: targetDateStartIST, $lte: targetDateEndIST } }),
-      RawTrackingPoint.find({
-        ...companyFilter,
-        timestamp: { $gte: targetDateStartIST, $lte: targetDateEndIST },
-        status: { $ne: 'suspicious' }
-      }).select('userId rawLatitude rawLongitude snappedLatitude snappedLongitude location timestamp status isSuspicious speed').sort('timestamp').lean()
+      CompanySetting.findOne(companyFilter).lean(),
+      LiveEmployeeStatus.find(companyFilter).lean(),
+      Location.find(companyFilter).lean(),
+      MobileAppConfig.findOne(companyFilter).lean(),
+      DailyRouteSummary.find({ ...companyFilter, date: { $gte: targetDateStartIST, $lte: targetDateEndIST } })
+        .select('userId firstCheckIn lastCheckOut totalDistance workingHours route')
+        .lean()
     ]);
 
     const attendance = (attendanceRaw || []).map(a => {
@@ -710,6 +721,22 @@ exports.getTrackingStats = async (req, res) => {
         .map(a => a.user?._id?.toString())
         .filter(Boolean)
     );
+
+    const summarizedUserIds = new Set(
+      (dailyRouteSummaries || [])
+        .filter(ds => ds?.userId && ds.totalDistance > 0 && ds.route?.length >= 2)
+        .map(ds => ds.userId.toString())
+    );
+    const usersNeedingRawPoints = [...presentUserIds].filter(id => !summarizedUserIds.has(id));
+
+    const rawPointsForDate = usersNeedingRawPoints.length > 0
+      ? await RawTrackingPoint.find({
+          ...companyFilter,
+          userId: { $in: usersNeedingRawPoints },
+          timestamp: { $gte: targetDateStartIST, $lte: targetDateEndIST },
+          status: { $ne: 'suspicious' }
+        }).select('userId rawLatitude rawLongitude location.coordinates timestamp speed').sort('timestamp').lean()
+      : [];
     const absentUserIds = new Set(
       attendance
         .filter(a => a.status === 'Absent')
@@ -852,30 +879,32 @@ exports.getTrackingStats = async (req, res) => {
     });
 
     const { resolveOutstationDistanceMeters, getCachedOutstationDistanceMeters } = require('../utils/googleMaps');
-    await Promise.all((allEmployees || []).map(async (u) => {
-      if (!u || !u._id) return;
-      const uIdStr = u._id.toString();
-      const attRec = attendanceByUser.get(uIdStr);
-      const liveRec = (liveStatuses || []).find(s => s && s.userId && s.userId.toString() === uIdStr);
-      const liveTimeMs = liveRec?.lastUpdate ? new Date(liveRec.lastUpdate).getTime() : 0;
-      const punchInTimeMs = attRec?.punchIn?.time ? new Date(attRec.punchIn.time).getTime() : 0;
-      const isLiveValidToday = isToday && liveTimeMs >= targetDateStartIST.getTime() && liveTimeMs >= punchInTimeMs;
-      const lat = isToday
-        ? ((isLiveValidToday ? liveRec?.lastLocation?.coordinates?.[1] : null) ?? attRec?.lastTrackedLocation?.latitude ?? attRec?.punchIn?.location?.latitude ?? attRec?.punchOut?.location?.latitude)
-        : (attRec?.punchOut?.location?.latitude ?? attRec?.lastTrackedLocation?.latitude ?? attRec?.punchIn?.location?.latitude);
-      const lng = isToday
-        ? ((isLiveValidToday ? liveRec?.lastLocation?.coordinates?.[0] : null) ?? attRec?.lastTrackedLocation?.longitude ?? attRec?.punchIn?.location?.longitude ?? attRec?.punchOut?.location?.longitude)
-        : (attRec?.punchOut?.location?.longitude ?? attRec?.lastTrackedLocation?.longitude ?? attRec?.punchIn?.location?.longitude);
-      let wp = null;
-      if (u.workingPlace) {
-        wp = (typeof u.workingPlace === 'object' && u.workingPlace.latitude != null)
-          ? u.workingPlace
-          : (allLocations || []).find(l => l._id?.toString() === (u.workingPlace._id || u.workingPlace).toString() || l.name === u.workingPlace);
-      }
-      if (lat != null && lng != null && wp && wp.latitude != null && wp.longitude != null) {
-        await resolveOutstationDistanceMeters(Number(lat), Number(lng), Number(wp.latitude), Number(wp.longitude));
-      }
-    }));
+    if (isToday) {
+      const outstationTasks = (allEmployees || []).map(async (u) => {
+        if (!u || !u._id) return;
+        const uIdStr = u._id.toString();
+        const attRec = attendanceByUser.get(uIdStr);
+        const liveRec = (liveStatuses || []).find(s => s && s.userId && s.userId.toString() === uIdStr);
+        const liveTimeMs = liveRec?.lastUpdate ? new Date(liveRec.lastUpdate).getTime() : 0;
+        const punchInTimeMs = attRec?.punchIn?.time ? new Date(attRec.punchIn.time).getTime() : 0;
+        const isLiveValidToday = liveTimeMs >= targetDateStartIST.getTime() && liveTimeMs >= punchInTimeMs;
+        const lat = (isLiveValidToday ? liveRec?.lastLocation?.coordinates?.[1] : null) ?? attRec?.lastTrackedLocation?.latitude ?? attRec?.punchIn?.location?.latitude ?? attRec?.punchOut?.location?.latitude;
+        const lng = (isLiveValidToday ? liveRec?.lastLocation?.coordinates?.[0] : null) ?? attRec?.lastTrackedLocation?.longitude ?? attRec?.punchIn?.location?.longitude ?? attRec?.punchOut?.location?.longitude;
+        let wp = null;
+        if (u.workingPlace) {
+          wp = (typeof u.workingPlace === 'object' && u.workingPlace.latitude != null)
+            ? u.workingPlace
+            : (allLocations || []).find(l => l._id?.toString() === (u.workingPlace._id || u.workingPlace).toString() || l.name === u.workingPlace);
+        }
+        if (lat != null && lng != null && wp && wp.latitude != null && wp.longitude != null) {
+          await resolveOutstationDistanceMeters(Number(lat), Number(lng), Number(wp.latitude), Number(wp.longitude));
+        }
+      });
+      await Promise.race([
+        Promise.all(outstationTasks),
+        new Promise((resolve) => setTimeout(resolve, 2500))
+      ]);
+    }
 
     const employeesData = (allEmployees || [])
       .filter(user => {
@@ -1159,7 +1188,7 @@ exports.getTrackingStats = async (req, res) => {
         return (a.user?.name || '').localeCompare(b.user?.name || '');
       });
 
-    res.json({
+    return {
       success: true,
       data: {
         stats: {
@@ -1176,7 +1205,16 @@ exports.getTrackingStats = async (req, res) => {
         locations: allLocations || [],
         weeklyOffs: settings?.weeklyOffs || ['Sunday']
       }
-    });
+    };
+    })();
+
+    inFlightTrackingStats.set(dedupKey, computePromise);
+    try {
+      const payload = await computePromise;
+      res.json(payload);
+    } finally {
+      inFlightTrackingStats.delete(dedupKey);
+    }
   } catch (err) {
     console.error('Error in getTrackingStats:', err);
     res.status(500).json({ success: false, message: err.message });

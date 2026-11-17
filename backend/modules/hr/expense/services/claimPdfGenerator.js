@@ -1246,6 +1246,29 @@ async function generateClaimPdf(claim, res) {
         excess,
       };
     });
+
+    // Progressive remaining Policy Limit across multiple Food entries in the same claim
+    const pdfFoodRows = tableRows.filter((r) => ['FOOD', 'FOOD_DA', 'FOOD_EXPENSE'].includes(r.type));
+    if (pdfFoodRows.length > 0) {
+      const baseFoodLim = Math.max(0, ...pdfFoodRows.map((r) => Number(r.policyLimit) || 0));
+      const fSumObj = claim.foodSummary || {};
+      const initialFoodLim =
+        Number(fSumObj.priorConsumed) > 0 && fSumObj.remainingBefore !== undefined && fSumObj.remainingBefore !== null
+          ? Math.max(0, Number(fSumObj.remainingBefore) || 0)
+          : baseFoodLim;
+
+      if (baseFoodLim > 0 || (fSumObj.remainingBefore !== undefined && fSumObj.remainingBefore !== null)) {
+        let remainingFoodPool = initialFoodLim;
+        pdfFoodRows.forEach((fr) => {
+          fr.policyLimit = Math.round(remainingFoodPool * 100) / 100;
+          const usedAllow = Math.max(0, Number(fr.allowed) || 0);
+          remainingFoodPool = Math.max(
+            0,
+            Math.round((remainingFoodPool - Math.min(remainingFoodPool, usedAllow)) * 100) / 100
+          );
+        });
+      }
+    }
   } else if (ecList.length > 0) {
     ecList.forEach((ec, ecIdx) => {
       const eName = ec.employee?.name || `Employee #${ecIdx + 1}`;

@@ -93,6 +93,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     companyId = null,
     webOnly = false,
     skipPush = false,
+    data = null,
   } = notificationData;
 
   const effectiveCompanyId = companyId || null;
@@ -185,7 +186,8 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     return notification;
   }
 
-  if (isAuto && type !== 'tracing notification' && autoType) {
+  const isLeaveTransactional = ['Leave requested', 'Leave approved', 'Leave rejected'].includes(trimmedAutoType);
+  if (isAuto && type !== 'tracing notification' && autoType && !isLeaveTransactional) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date();
@@ -227,6 +229,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
       type: type,
       autoType: autoType || null,
       isRead: false,
+      metadata: data || null,
     });
 
     // B. Push notification token list (Skip mobile push if webOnly or skipPush)
@@ -257,9 +260,18 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
 
   // 4. Dispatch FCM push notifications
   if (tokensToSend.length > 0) {
+    const extraStrings = data && typeof data === 'object'
+      ? Object.fromEntries(
+          Object.entries(data)
+            .filter(([, v]) => v !== undefined && v !== null)
+            .map(([k, v]) => [k, typeof v === 'string' ? v : String(v)])
+        )
+      : {};
     const fcmResult = await firebaseService.sendMulticast(tokensToSend, title, description, {
       notificationId: notification._id.toString(),
-      type: type,
+      type: String(type || ''),
+      ...(trimmedAutoType ? { autoType: trimmedAutoType } : {}),
+      ...extraStrings,
     });
 
     if (fcmResult.success && fcmResult.responses) {
@@ -327,6 +339,8 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
         title,
         body: description,
         type,
+        autoType: trimmedAutoType,
+        metadata: data || null,
         notificationId: notification._id
       });
     });

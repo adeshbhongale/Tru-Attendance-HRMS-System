@@ -440,8 +440,8 @@ test('drafts skip required-field errors but keep format errors', () => {
   assert.deepEqual(codes(draft), ['AMOUNT_NEGATIVE']);
 });
 
-test('type defaults: Food one per day, Travel/Conveyance/Other/StockPurchase have no same-date limit, Lodging is a lodging type', () => {
-  assert.equal(types.FOOD.sameDateLimit, 1);
+test('type defaults: Food/Travel/Conveyance/Other/StockPurchase have no same-date limit, Lodging is a lodging type', () => {
+  assert.equal(types.FOOD.sameDateLimit, 0);
   assert.equal(types.TRAVEL.sameDateLimit, 0);
   assert.equal(types.CONVEYANCE.sameDateLimit, 0);
   assert.equal(types.OTHER.sameDateLimit, 0);
@@ -449,7 +449,7 @@ test('type defaults: Food one per day, Travel/Conveyance/Other/StockPurchase hav
   assert.equal(types.LODGING.claimMode, 'LODGING');
   assert.equal(rules.resolveTypeConfig({ code: 'OTHER', sameDateLimit: 2 }).sameDateLimit, 0);
   assert.equal(rules.resolveTypeConfig({ code: 'STOCK_PURCHASE', sameDateLimit: 2 }).sameDateLimit, 0);
-  assert.equal(rules.resolveTypeConfig({ code: 'FOOD', sameDateLimit: 2 }).sameDateLimit, 2);
+  assert.equal(rules.resolveTypeConfig({ code: 'FOOD', sameDateLimit: 2 }).sameDateLimit, 0);
 });
 
 test('Other, Stock Purchase, and Local Conveyance directly show all payment is allowed with no limit caps', async () => {
@@ -2977,6 +2977,95 @@ test('Reporting Manager Resolution: escalates to above Reporting Manager when di
     User.distinct = origDistinct;
     Level.find = origLevelFind;
   }
+});
+
+test('Normal claim 2-day past limit allows previous 2 days only; Lodging claim allows any past date', () => {
+  // TODAY is 2026-10-08 -> allowed normal dates: 2026-10-06, 2026-10-07, 2026-10-08
+  assert.deepEqual(validate(normalBody({ claimDate: '2026-10-08' }), { maxPastDaysNormal: 2 }), []);
+  assert.deepEqual(validate(normalBody({ claimDate: '2026-10-06' }), { maxPastDaysNormal: 2 }), []);
+  const tooOldNormal = validate(normalBody({ claimDate: '2026-10-05' }), { maxPastDaysNormal: 2 });
+  assert.ok(codes(tooOldNormal).includes('PAST_DATE_LIMIT_EXCEEDED'));
+
+  // Lodging form is never restricted by the 2-day past limit
+  assert.deepEqual(validate(lodgingBody({ fromDate: '2026-01-10', toDate: '2026-01-13' }), { maxPastDaysNormal: 2 }), []);
+});
+
+test('Shared daily Food entitlement across separate same-day claims: 3 engineers (₹1500 combined) claim ₹300, then 1 engineer claims ₹100 separately', async () => {
+  const EMP3 = '64b000000000000000000003';
+  const emp1 = { _id: EMP1, name: 'Eng 1', levelRef: { levelNumber: 8, name: 'L8' } };
+  const emp2 = { _id: EMP2, name: 'Eng 2', levelRef: { levelNumber: 8, name: 'L8' } };
+  const emp3 = { _id: EMP3, name: 'Eng 3', levelRef: { levelNumber: 8, name: 'L8' } };
+  const foodEnts = [{ levelNumber: 8, cityClass: 'A', expenseTypeCode: 'FOOD', amount: 500, gradeCode: '' }];
+
+  // Claim 1: 3 engineers claim ₹300 together (combined limit ₹1500) -> all ₹300 allowed (₹100 each)
+  const claim1Input = rules.normalizeInput(normalBody({
+    claimDate: '2026-10-08',
+    numberOfEmployees: 3,
+    employeeIds: [EMP1, EMP2, EMP3],
+    expenseType: 'FOOD',
+    requestedAmount: 300,
+    entries: [{ expenseType: 'FOOD', requestedAmount: 300, remark: 'Team lunch', receipts: [receipt('f1.jpg')] }],
+  }));
+  const calc1 = await rules.calculateAmounts({
+    input: claim1Input,
+    typeConfig: types.FOOD,
+    employees: [emp1, emp2, emp3],
+    policy: {},
+    entitlements: foodEnts,
+    destinationClass: 'A',
+    actor: EMP1,
+  });
+  assert.equal(calc1.grandAllowed, 300);
+  assert.equal(calc1.grandExcess, 0);
+  assert.deepEqual(calc1.employeeClaims.map((ec) => ec.allowedTotal), [100, 100, 100]);
+
+  // Claim 2: Eng 1 submits a separate ₹100 Food claim on the same day -> ₹400 remaining, all ₹100 allowed
+  const claim2Input = rules.normalizeInput(normalBody({
+    claimDate: '2026-10-08',
+    numberOfEmployees: 1,
+    employeeIds: [EMP1],
+    expenseType: 'FOOD',
+    requestedAmount: 100,
+    entries: [{ expenseType: 'FOOD', requestedAmount: 100, remark: 'Evening tea/snacks', receipts: [receipt('f2.jpg')] }],
+  }));
+  const calc2 = await rules.calculateAmounts({
+    input: claim2Input,
+    typeConfig: types.FOOD,
+    employees: [emp1],
+    policy: {},
+    entitlements: foodEnts,
+    destinationClass: 'A',
+    actor: EMP1,
+    foodContext: { normalPrior: { [EMP1]: 100 } },
+  });
+  assert.equal(calc2.grandAllowed, 100);
+  assert.equal(calc2.grandExcess, 0);
+  assert.equal(calc2.foodSummary.entitlement, 500);
+  assert.equal(calc2.foodSummary.priorConsumed, 100);
+  assert.equal(calc2.foodSummary.remainingBefore, 400);
+  assert.equal(calc2.foodSummary.remainingAfter, 300);
+
+  // If Eng 1 instead claims ₹450 on Claim 2 -> ₹400 allowed, ₹50 excess
+  const claim2OverInput = rules.normalizeInput(normalBody({
+    claimDate: '2026-10-08',
+    numberOfEmployees: 1,
+    employeeIds: [EMP1],
+    expenseType: 'FOOD',
+    requestedAmount: 450,
+    entries: [{ expenseType: 'FOOD', requestedAmount: 450, remark: 'Dinner bill', receipts: [receipt('f3.jpg')] }],
+  }));
+  const calc2Over = await rules.calculateAmounts({
+    input: claim2OverInput,
+    typeConfig: types.FOOD,
+    employees: [emp1],
+    policy: {},
+    entitlements: foodEnts,
+    destinationClass: 'A',
+    actor: EMP1,
+    foodContext: { normalPrior: { [EMP1]: 100 } },
+  });
+  assert.equal(calc2Over.grandAllowed, 400);
+  assert.equal(calc2Over.grandExcess, 50);
 });
 
 }

@@ -17,6 +17,14 @@ const { getISTDateComponents } = require('../utils/timezone');
 exports.getPolicies = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || null;
+    const leaveTypes = await LeaveType.find(companyId ? { companyId } : {}).select('_id name code maxAdvanceDays').lean();
+    const casualTypeIds = leaveTypes.filter((lt) => policyService.isCasualLeaveType(lt)).map((lt) => lt._id);
+    if (casualTypeIds.length > 0) {
+      await LeavePolicy.updateMany(
+        { leaveTypeRef: { $in: casualTypeIds }, maxAdvanceDays: null },
+        { $set: { maxAdvanceDays: 7 } }
+      );
+    }
     const policies = await LeavePolicy.find(companyId ? { companyId } : {}).lean();
     const rules = await policyService.rulesForPolicies(policies.map((p) => p._id));
 
@@ -36,17 +44,18 @@ exports.getPolicies = async (req, res, next) => {
 // @access  Private/Admin
 exports.createPolicy = async (req, res, next) => {
   try {
-    const { leaveTypeRef, periodType, carryForward, maxCarryForward, prorateNewJoiner, name, allowedDays } = req.body;
+    const { leaveTypeRef, periodType, carryForward, maxCarryForward, prorateNewJoiner, name, allowedDays, maxAdvanceDays } = req.body;
 
     if (!leaveTypeRef) {
       return res.status(400).json({ success: false, message: 'leaveTypeRef is required' });
     }
 
-    let companyId = req.tenant?.companyId || req.companyId || req.body.companyId;
-    if (!companyId) {
-      const lt = await LeaveType.findById(leaveTypeRef);
-      if (lt) companyId = lt.companyId;
-    }
+    const lt = await LeaveType.findById(leaveTypeRef);
+    let companyId = req.tenant?.companyId || req.companyId || req.body.companyId || lt?.companyId;
+
+    const parsedMaxAdvance = (maxAdvanceDays !== undefined && maxAdvanceDays !== null && maxAdvanceDays !== '')
+      ? Math.max(0, Number(maxAdvanceDays) || 0)
+      : undefined;
 
     let existing = await LeavePolicy.findOne({ companyId, leaveTypeRef });
     if (existing) {
@@ -56,14 +65,21 @@ exports.createPolicy = async (req, res, next) => {
       if (prorateNewJoiner !== undefined) existing.prorateNewJoiner = prorateNewJoiner;
       if (name !== undefined) existing.name = name;
       if (allowedDays !== undefined) existing.allowedDays = Array.isArray(allowedDays) ? allowedDays : [];
+      if (parsedMaxAdvance !== undefined) existing.maxAdvanceDays = parsedMaxAdvance;
       await existing.save();
-      if (allowedDays !== undefined) {
-        await LeaveType.findByIdAndUpdate(leaveTypeRef, { allowedDays: existing.allowedDays });
+      if (allowedDays !== undefined || parsedMaxAdvance !== undefined) {
+        await LeaveType.findByIdAndUpdate(leaveTypeRef, {
+          ...(allowedDays !== undefined ? { allowedDays: existing.allowedDays } : {}),
+          ...(parsedMaxAdvance !== undefined ? { maxAdvanceDays: existing.maxAdvanceDays } : {}),
+        });
       }
       return res.status(200).json({ success: true, data: existing });
     }
 
     const cleanAllowedDays = Array.isArray(allowedDays) ? allowedDays : [];
+    const initialMaxAdvance = parsedMaxAdvance !== undefined
+      ? parsedMaxAdvance
+      : policyService.resolveMaxAdvanceDays(lt, null, null);
     const policy = await LeavePolicy.create({
       companyId,
       leaveTypeRef,
@@ -73,10 +89,12 @@ exports.createPolicy = async (req, res, next) => {
       maxCarryForward: maxCarryForward || 0,
       prorateNewJoiner: prorateNewJoiner !== undefined ? prorateNewJoiner : true,
       allowedDays: cleanAllowedDays,
+      maxAdvanceDays: initialMaxAdvance,
     });
-    if (allowedDays !== undefined) {
-      await LeaveType.findByIdAndUpdate(leaveTypeRef, { allowedDays: cleanAllowedDays });
-    }
+    await LeaveType.findByIdAndUpdate(leaveTypeRef, {
+      ...(allowedDays !== undefined ? { allowedDays: cleanAllowedDays } : {}),
+      maxAdvanceDays: initialMaxAdvance,
+    });
 
     res.status(201).json({ success: true, data: policy });
   } catch (err) {
@@ -90,7 +108,7 @@ exports.createPolicy = async (req, res, next) => {
 exports.updatePolicy = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || req.companyId || null;
-    const { periodType, carryForward, maxCarryForward, prorateNewJoiner, name, status, allowedDays } = req.body;
+    const { periodType, carryForward, maxCarryForward, prorateNewJoiner, name, status, allowedDays, maxAdvanceDays } = req.body;
 
     const policy = await LeavePolicy.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
@@ -102,6 +120,10 @@ exports.updatePolicy = async (req, res, next) => {
     if (name !== undefined) policy.name = name;
     if (status !== undefined) policy.status = status;
     if (allowedDays !== undefined) policy.allowedDays = Array.isArray(allowedDays) ? allowedDays : [];
+    const hasMaxAdvanceUpdate = maxAdvanceDays !== undefined && maxAdvanceDays !== null && maxAdvanceDays !== '';
+    if (hasMaxAdvanceUpdate) {
+      policy.maxAdvanceDays = Math.max(0, Number(maxAdvanceDays) || 0);
+    }
     if (req.body.sequenceOrder !== undefined && req.body.sequenceOrder !== '') {
       policy.sequenceOrder = Math.max(1, Number(req.body.sequenceOrder));
     }
@@ -111,11 +133,19 @@ exports.updatePolicy = async (req, res, next) => {
       const { syncCompanyLeaveSequence } = require('./leaveTypes');
       await syncCompanyLeaveSequence(policy.companyId || companyId, policy.leaveTypeRef, Number(req.body.sequenceOrder));
     }
-    if (allowedDays !== undefined && policy.leaveTypeRef) {
-      await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, { allowedDays: policy.allowedDays });
+    if ((allowedDays !== undefined || hasMaxAdvanceUpdate) && policy.leaveTypeRef) {
+      await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, {
+        ...(allowedDays !== undefined ? { allowedDays: policy.allowedDays } : {}),
+        ...(hasMaxAdvanceUpdate ? { maxAdvanceDays: policy.maxAdvanceDays } : {}),
+      });
       await LeavePolicyRule.updateMany(
         { policyId: policy._id, scopeType: 'company' },
-        { $set: { allowedDays: policy.allowedDays } }
+        {
+          $set: {
+            ...(allowedDays !== undefined ? { allowedDays: policy.allowedDays } : {}),
+            ...(hasMaxAdvanceUpdate ? { maxAdvanceDays: policy.maxAdvanceDays } : {}),
+          }
+        }
       );
     }
     res.status(200).json({ success: true, data: policy });
@@ -147,7 +177,7 @@ exports.deletePolicy = async (req, res, next) => {
 exports.addRule = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || req.companyId || null;
-    const { scopeType, scopeRef, scopeCode, days, hasLimit, allowedDays } = req.body;
+    const { scopeType, scopeRef, scopeCode, days, hasLimit, allowedDays, maxAdvanceDays } = req.body;
 
     const policy = await LeavePolicy.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
@@ -159,6 +189,9 @@ exports.addRule = async (req, res, next) => {
     const effectiveCompanyId = policy.companyId || companyId;
     const isRuleLimited = hasLimit !== false;
     const cleanAllowedDays = Array.isArray(allowedDays) ? allowedDays : (Array.isArray(policy.allowedDays) ? policy.allowedDays : []);
+    const cleanMaxAdvanceDays = (maxAdvanceDays !== undefined && maxAdvanceDays !== null && maxAdvanceDays !== '')
+      ? Math.max(0, Number(maxAdvanceDays) || 0)
+      : null;
 
     const rule = await LeavePolicyRule.create({
       companyId: effectiveCompanyId,
@@ -169,13 +202,18 @@ exports.addRule = async (req, res, next) => {
       hasLimit: isRuleLimited,
       days: isRuleLimited ? Number(days || 0) : 0,
       allowedDays: cleanAllowedDays,
+      maxAdvanceDays: cleanMaxAdvanceDays,
     });
 
-    if (scopeType === 'company' && allowedDays !== undefined) {
-      policy.allowedDays = cleanAllowedDays;
+    if (scopeType === 'company' && (allowedDays !== undefined || cleanMaxAdvanceDays !== null)) {
+      if (allowedDays !== undefined) policy.allowedDays = cleanAllowedDays;
+      if (cleanMaxAdvanceDays !== null) policy.maxAdvanceDays = cleanMaxAdvanceDays;
       await policy.save();
       if (policy.leaveTypeRef) {
-        await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, { allowedDays: cleanAllowedDays });
+        await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, {
+          ...(allowedDays !== undefined ? { allowedDays: cleanAllowedDays } : {}),
+          ...(cleanMaxAdvanceDays !== null ? { maxAdvanceDays: cleanMaxAdvanceDays } : {}),
+        });
       }
     }
 
@@ -194,7 +232,7 @@ exports.addRule = async (req, res, next) => {
 exports.updateRule = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || null;
-    const { scopeType, scopeRef, scopeCode, days, hasLimit, allowedDays } = req.body;
+    const { scopeType, scopeRef, scopeCode, days, hasLimit, allowedDays, maxAdvanceDays } = req.body;
 
     const rule = await LeavePolicyRule.findOne({
       _id: req.params.ruleId,
@@ -209,16 +247,24 @@ exports.updateRule = async (req, res, next) => {
     if (hasLimit !== undefined) rule.hasLimit = hasLimit !== false;
     if (days !== undefined) rule.days = rule.hasLimit === false ? 0 : Number(days);
     if (allowedDays !== undefined) rule.allowedDays = Array.isArray(allowedDays) ? allowedDays : [];
+    const hasRuleAdvance = maxAdvanceDays !== undefined;
+    if (hasRuleAdvance) {
+      rule.maxAdvanceDays = (maxAdvanceDays === null || maxAdvanceDays === '') ? null : Math.max(0, Number(maxAdvanceDays) || 0);
+    }
 
     await rule.save();
 
-    if (rule.scopeType === 'company' && allowedDays !== undefined) {
+    if (rule.scopeType === 'company' && (allowedDays !== undefined || (hasRuleAdvance && rule.maxAdvanceDays !== null))) {
       const policy = await LeavePolicy.findById(req.params.id);
       if (policy) {
-        policy.allowedDays = rule.allowedDays;
+        if (allowedDays !== undefined) policy.allowedDays = rule.allowedDays;
+        if (hasRuleAdvance && rule.maxAdvanceDays !== null) policy.maxAdvanceDays = rule.maxAdvanceDays;
         await policy.save();
         if (policy.leaveTypeRef) {
-          await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, { allowedDays: rule.allowedDays });
+          await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, {
+            ...(allowedDays !== undefined ? { allowedDays: rule.allowedDays } : {}),
+            ...(hasRuleAdvance && rule.maxAdvanceDays !== null ? { maxAdvanceDays: rule.maxAdvanceDays } : {}),
+          });
         }
       }
     }

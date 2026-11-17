@@ -475,16 +475,16 @@ async function ensureExpenseMasters(companyId) {
 
   const typesData = [
     { code: 'LODGING', name: 'Lodging', category: 'LODGING', calculationMethod: 'ENTITLEMENT_CAP', proofRequired: false, selfAttestationAllowed: true, order: 1, claimMode: 'LODGING', sameDateLimit: 0, allowOverlap: false, payLimitEnabled: false, cfoApprovalRequired: false },
-    { code: 'FOOD', name: 'Food', category: 'FOOD', calculationMethod: 'RULE_BASED', proofRequired: false, selfAttestationAllowed: true, order: 2, claimMode: 'NORMAL', sameDateLimit: 1, payLimitEnabled: false, cfoApprovalRequired: false },
+    { code: 'FOOD', name: 'Food', category: 'FOOD', calculationMethod: 'RULE_BASED', proofRequired: false, selfAttestationAllowed: true, order: 2, claimMode: 'NORMAL', sameDateLimit: 0, payLimitEnabled: false, cfoApprovalRequired: false },
     { code: 'CONVEYANCE', name: 'Local Conveyance', category: 'CONVEYANCE', calculationMethod: 'KM_RATE', proofRequired: false, selfAttestationAllowed: true, order: 3, claimMode: 'NORMAL', sameDateLimit: 0, payLimitEnabled: false, cfoApprovalRequired: false },
     { code: 'TRAVEL', name: 'Travel', category: 'TRAVEL', calculationMethod: 'ACTUAL', proofRequired: false, selfAttestationAllowed: false, order: 4, claimMode: 'NORMAL', sameDateLimit: 0, payLimitEnabled: false, cfoApprovalRequired: false },
     { code: 'OTHER', name: 'Other Official Expense', category: 'OTHER', calculationMethod: 'ACTUAL', proofRequired: false, selfAttestationAllowed: true, order: 5, claimMode: 'NORMAL', sameDateLimit: 0, payLimitEnabled: true, cfoApprovalRequired: false },
     { code: 'STOCK_PURCHASE', name: 'Stock Purchase', category: 'STOCK_PURCHASE', calculationMethod: 'ACTUAL', proofRequired: false, selfAttestationAllowed: true, order: 6, claimMode: 'NORMAL', sameDateLimit: 0, payLimitEnabled: false, cfoApprovalRequired: true },
   ];
 
-  // Ensure existing TRAVEL, CONVEYANCE, OTHER, and STOCK_PURCHASE types do not enforce sameDateLimit > 0
+  // Ensure existing FOOD, TRAVEL, CONVEYANCE, OTHER, and STOCK_PURCHASE types do not enforce sameDateLimit > 0
   await ExpenseType.updateMany(
-    { companyId, code: { $in: ['TRAVEL', 'CONVEYANCE', 'OTHER', 'STOCK_PURCHASE'] }, sameDateLimit: { $gt: 0 } },
+    { companyId, code: { $in: ['FOOD', 'TRAVEL', 'CONVEYANCE', 'OTHER', 'STOCK_PURCHASE'] }, sameDateLimit: { $gt: 0 } },
     { $set: { sameDateLimit: 0 } }
   );
 

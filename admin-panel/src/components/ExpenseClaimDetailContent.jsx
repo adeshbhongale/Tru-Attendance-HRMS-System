@@ -296,6 +296,35 @@ export default function ExpenseClaimDetailContent({ claim }) {
     };
   });
 
+  // Progressive remaining Policy Limit across multiple Food entries in the same claim:
+  // Entry 1 shows full available Food policy limit (e.g. ₹500), then deducts Entry 1's allowed amount
+  // (e.g. 500 - 290 = ₹210 for Entry 2, then 210 - 210 = ₹0 for Entry 3, ₹0 for Entry 4, etc.).
+  const isFoodCode = (v) => ['FOOD', 'FOOD_DA', 'FOOD_EXPENSE'].includes(String(v || '').trim().toUpperCase());
+  const foodEntriesInClaim = combinedEntries.filter((e) =>
+    isFoodCode(e.expenseType || claim.expenseType || claim.claimType)
+  );
+  if (foodEntriesInClaim.length > 0) {
+    const baseFoodLim = Math.max(0, ...foodEntriesInClaim.map((e) => Number(e.policyLimit) || 0));
+    const fSumObj = claim.foodSummary || {};
+    const initialFoodLim =
+      Number(fSumObj.priorConsumed) > 0 && fSumObj.remainingBefore !== undefined && fSumObj.remainingBefore !== null
+        ? Math.max(0, Number(fSumObj.remainingBefore) || 0)
+        : baseFoodLim;
+
+    if (baseFoodLim > 0 || (fSumObj.remainingBefore !== undefined && fSumObj.remainingBefore !== null)) {
+      let remainingFoodPool = initialFoodLim;
+      foodEntriesInClaim.forEach((fe) => {
+        fe.displayPolicyLimit = Math.round(remainingFoodPool * 100) / 100;
+        fe.hasDisplayPolicyLimit = true;
+        const usedAllow = Math.max(0, Number(fe.standardAllowedAmount ?? fe.allowedAmount ?? 0));
+        remainingFoodPool = Math.max(
+          0,
+          Math.round((remainingFoodPool - Math.min(remainingFoodPool, usedAllow)) * 100) / 100
+        );
+      });
+    }
+  }
+
   // Shared Food Allowance summary for Lodging claims
   const rawFoodEntries = Array.isArray(claim.foodEntries) ? claim.foodEntries : [];
   let foodSummary = null;
@@ -1028,7 +1057,10 @@ export default function ExpenseClaimDetailContent({ claim }) {
                       const entryReq = Number(entry.requestedAmount) || 0;
                       const entryAllow = Number(entry.allowedAmount ?? entryReq) || 0;
                       const entryExc = Number(entry.excessAmount ?? Math.max(0, entryReq - entryAllow)) || 0;
-                      const entryLim = Number(entry.policyLimit ?? entryAllow) || 0;
+                      const hasDisplayLimit = entry.hasDisplayPolicyLimit === true;
+                      const entryLim = hasDisplayLimit
+                        ? Number(entry.displayPolicyLimit ?? 0)
+                        : (Number(entry.policyLimit ?? entryAllow) || 0);
 
                       const entryReceipts = Array.isArray(entry.receipts) ? entry.receipts : [];
                       const vehiclePhotos = Array.isArray(entry.numberPlatePhotos) ? entry.numberPlatePhotos : [];
@@ -1217,7 +1249,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
                             <div className="rounded-lg bg-indigo-50/60 border border-indigo-100 p-2 text-center">
                               <p className="text-[10px] font-bold text-indigo-500">Policy Limit</p>
                               <p className="text-xs font-extrabold text-indigo-700 mt-0.5">
-                                {entryLim > 0 ? fmtINR(entryLim) : 'Actual'}
+                                {hasDisplayLimit || entryLim > 0 ? fmtINR(entryLim) : 'Actual'}
                               </p>
                             </div>
                             <div className="rounded-lg bg-emerald-50/60 border border-emerald-100 p-2 text-center">

@@ -964,8 +964,8 @@ describe("13.5 Level Entitlements, Excess Calculation & Tamper Protection", () =
         claimDate: rules.parseDateOnly("2026-10-29"),
       };
 
-      // TRAVEL, CONVEYANCE, and OTHER must NEVER be blocked by same-date already-claimed checks
-      for (const nonDateLimited of ["TRAVEL", "CONVEYANCE", "OTHER"]) {
+      // FOOD, TRAVEL, CONVEYANCE, and OTHER must NEVER be blocked by same-date already-claimed checks
+      for (const nonDateLimited of ["FOOD", "TRAVEL", "CONVEYANCE", "OTHER"]) {
         const cfg = rules.resolveTypeConfig({ code: nonDateLimited, name: nonDateLimited, category: nonDateLimited, sameDateLimit: 1 });
         assert.equal(cfg.sameDateLimit, 0);
         const res = await rules.evaluateBusinessRules({
@@ -978,17 +978,6 @@ describe("13.5 Level Entitlements, Excess Calculation & Tamper Protection", () =
         });
         assert.deepEqual(res.errors, []);
       }
-
-      // FOOD must still enforce same-date already-claimed check
-      const foodRes = await rules.evaluateBusinessRules({
-        companyId: EMP1,
-        input: dateInput,
-        typeConfig: types.FOOD,
-        employees: [empL1],
-        policyConfig,
-        actor: EMP1,
-      });
-      assert.ok(foodRes.errors.some((e) => e.code === "DUPLICATE_FOOD"));
 
       // LODGING must still enforce night-overlap check
       const lodgingRes = await rules.evaluateBusinessRules({

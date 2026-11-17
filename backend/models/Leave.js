@@ -83,6 +83,20 @@ const LeaveSchema = new mongoose.Schema({
     default: false,
   },
   adminNote: String,
+  rejectionReason: String,
+  actionedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
+  actionedByName: {
+    type: String,
+    default: null,
+  },
+  actionedAt: {
+    type: Date,
+    default: null,
+  },
   appliedOn: {
     type: Date,
     default: Date.now,

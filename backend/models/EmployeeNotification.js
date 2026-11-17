@@ -35,6 +35,10 @@ const EmployeeNotificationSchema = new mongoose.Schema({
   readAt: {
     type: Date,
     default: null,
+  },
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
   }
 }, {
   timestamps: true,

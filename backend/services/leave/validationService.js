@@ -115,6 +115,7 @@ exports.quotaRow = async (
     periodStart: period.start,
     periodEnd: period.end,
     allowedDays: (policy?.allowedDays && policy.allowedDays.length > 0) ? policy.allowedDays : (lt.allowedDays || []),
+    maxAdvanceDays: policyService.resolveMaxAdvanceDays(lt, policy, null),
     used: cleanUsed,
     pending: cleanPending,
     balance: cleanBalance,

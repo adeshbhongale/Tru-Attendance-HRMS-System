@@ -49,6 +49,11 @@ const LeavePolicyRuleSchema = new mongoose.Schema({
     type: [String],
     default: [],
   },
+  maxAdvanceDays: {
+    type: Number,
+    min: 0,
+    default: null,
+  },
 }, {
   timestamps: true,
 });

@@ -294,7 +294,7 @@ const triggerEmployeeAbsent = async (employeeId, dateStr, io = null) => {
 /**
  * 5. Leave Request Created (Notify Approver / Manager) 📋
  */
-const triggerLeaveRequested = async (approverId, employeeName = 'Staff', leaveType = 'Leave', io = null, companyId = null) => {
+const triggerLeaveRequested = async (approverId, employeeName = 'Staff', leaveType = 'Leave', io = null, companyId = null, leaveId = null) => {
   try {
     return await notificationService.createAndSendNotification({
       title: 'New Leave Request 📋',
@@ -306,7 +306,11 @@ const triggerLeaveRequested = async (approverId, employeeName = 'Staff', leaveTy
       targetRole: approverId ? null : 'admin',
       employees: approverId ? [approverId] : [],
       companyId,
-      isAuto: true
+      isAuto: true,
+      data: {
+        screen: 'LeaveApprovals',
+        ...(leaveId ? { leaveId: String(leaveId) } : {})
+      }
     }, io);
   } catch (error) {
     handleAutoNotifError('triggerLeaveRequested', error);
@@ -316,7 +320,7 @@ const triggerLeaveRequested = async (approverId, employeeName = 'Staff', leaveTy
 /**
  * 6. Leave Request Approved! 🎉
  */
-const triggerLeaveApproved = async (employeeId, leaveType = 'Leave', io = null) => {
+const triggerLeaveApproved = async (employeeId, leaveType = 'Leave', io = null, leaveId = null) => {
   try {
     const employee = await User.findById(employeeId);
     if (!employee) return null;
@@ -332,7 +336,11 @@ const triggerLeaveApproved = async (employeeId, leaveType = 'Leave', io = null) 
       targetType: 'All Employees',
       employees: [employeeId],
       companyId,
-      isAuto: true
+      isAuto: true,
+      data: {
+        screen: 'Leave',
+        ...(leaveId ? { leaveId: String(leaveId) } : {})
+      }
     }, io);
   } catch (error) {
     handleAutoNotifError('triggerLeaveApproved', error);
@@ -342,7 +350,7 @@ const triggerLeaveApproved = async (employeeId, leaveType = 'Leave', io = null) 
 /**
  * Leave Request Rejected ❌
  */
-const triggerLeaveRejected = async (employeeId, leaveType = 'Leave', reason = '', io = null) => {
+const triggerLeaveRejected = async (employeeId, leaveType = 'Leave', reason = '', io = null, leaveId = null) => {
   try {
     const employee = await User.findById(employeeId);
     if (!employee) return null;
@@ -358,7 +366,11 @@ const triggerLeaveRejected = async (employeeId, leaveType = 'Leave', reason = ''
       targetType: 'All Employees',
       employees: [employeeId],
       companyId,
-      isAuto: true
+      isAuto: true,
+      data: {
+        screen: 'Leave',
+        ...(leaveId ? { leaveId: String(leaveId) } : {})
+      }
     }, io);
   } catch (error) {
     handleAutoNotifError('triggerLeaveRejected', error);

@@ -62,8 +62,39 @@ const validateAllowedDaysForRange = (startDate, endDate, allowedDays, leaveName)
   return null;
 };
 
-const _unused_end = [
-];
+const getEffectiveMaxAdvanceDays = async (user, companyId, lt) => {
+  if (!lt) return 0;
+  const policy = lt._id ? await policyService.policyForType(companyId, lt._id) : null;
+  let matchedRule = null;
+  if (policy && user) {
+    const rules = await policyService.rulesForPolicies([policy._id]);
+    matchedRule = policyService.resolveRule(user, rules);
+  }
+  return policyService.resolveMaxAdvanceDays(lt, policy, matchedRule);
+};
+
+const validateAdvanceDaysForRange = (startDate, endDate, maxAdvanceDays, leaveName, now = new Date()) => {
+  const limitDays = Number(maxAdvanceDays);
+  if (!limitDays || limitDays <= 0) return null;
+
+  const todayUTC = parseDateUTC(now);
+  const maxUTC = new Date(todayUTC);
+  maxUTC.setUTCDate(maxUTC.getUTCDate() + (limitDays - 1));
+
+  const sUTC = parseDateUTC(startDate);
+  const eUTC = parseDateUTC(endDate || startDate);
+  if (isNaN(sUTC.getTime()) || isNaN(eUTC.getTime())) return null;
+
+  const maxDateStr = maxUTC.toISOString().slice(0, 10);
+  if (sUTC.getTime() > maxUTC.getTime() || eUTC.getTime() > maxUTC.getTime()) {
+    const offending = sUTC.getTime() > maxUTC.getTime() ? sUTC : eUTC;
+    const dayName = DAY_NAMES[offending.getUTCDay()];
+    return `${leaveName || 'This leave'} can only be applied within ${limitDays} day(s) from today (up to ${maxDateStr}). Selected date (${offending.toISOString().slice(0, 10)}, ${dayName}) exceeds the policy limit.`;
+  }
+  return null;
+};
+
+exports.validateAdvanceDaysForRange = validateAdvanceDaysForRange;
 
 // @desc    Apply for leave
 // @route   POST /api/leaves
@@ -124,6 +155,16 @@ exports.applyLeave = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: dayRuleError,
+      });
+    }
+
+    // Policy Rule: Max Advance Application Days check
+    const effectiveMaxAdvanceDays = await getEffectiveMaxAdvanceDays(req.user, companyId, lt);
+    const advanceRuleError = validateAdvanceDaysForRange(startDate, actualEndDate, effectiveMaxAdvanceDays, lt.name);
+    if (advanceRuleError) {
+      return res.status(400).json({
+        success: false,
+        message: advanceRuleError,
       });
     }
 
@@ -213,7 +254,8 @@ exports.applyLeave = async (req, res, next) => {
         `${req.user.name || 'Staff'}`,
         `${lt.name} (${duration})`,
         io,
-        req.tenant?.companyId || req.user?.companyId || null
+        req.tenant?.companyId || req.user?.companyId || null,
+        leave._id
       );
     } catch (e) {
       console.error('[Leave Request Alert] Failed to send manager notification:', e.message);
@@ -254,7 +296,11 @@ exports.getMyLeaves = async (req, res, next) => {
       }
     }
 
-    const leaves = await Leave.find(query).sort('-createdAt').lean();
+    const leaves = await Leave.find(query)
+      .populate('actionedBy', 'name fullName role roleCode designation')
+      .populate('approverId', 'name fullName designation')
+      .sort('-createdAt')
+      .lean();
     const rawQuotas = await leaveBalanceService.getEmployeeQuotas(userId, companyId);
     const quotas = (rawQuotas || []).filter(q => !q.ineligible);
     const userDoc = await User.findById(userId)
@@ -299,7 +345,13 @@ exports.getAllLeaves = async (req, res, next) => {
     }
 
     const allLeaves = await Leave.find(filter)
-      .populate('user', 'name email department profileImage designation employeeIdCode phone role roleCode departmentAdminType adminType')
+      .populate({
+        path: 'user',
+        select: 'name email department profileImage designation employeeIdCode phone role roleCode departmentAdminType adminType reportsTo',
+        populate: { path: 'reportsTo', select: 'name fullName' },
+      })
+      .populate('actionedBy', 'name fullName role roleCode designation')
+      .populate('approverId', 'name fullName designation')
       .sort('-createdAt')
       .lean();
 
@@ -409,10 +461,11 @@ exports.updateLeaveStatus = async (req, res, next) => {
     }
 
     const oldStatus = leave.status;
-    const { status, adminNote } = req.body;
+    const { status } = req.body;
+    const noteText = String(req.body.reason ?? req.body.rejectionReason ?? req.body.adminNote ?? '').trim();
 
     // Only allow approve/reject/cancel transitions; enforce that the acting
-    // user is the employee's reporting manager (or an admin/superadmin).
+    // user is the employee's reporting manager (or Super/Company/HR Admin).
     const allowedTransitions = {
       Pending: ['Approved', 'Rejected', 'Cancelled'],
     };
@@ -422,12 +475,19 @@ exports.updateLeaveStatus = async (req, res, next) => {
     if (oldStatus === 'Pending' && !allowedTransitions.Pending.includes(status)) {
       return res.status(400).json({ success: false, message: `Cannot change status to ${status}` });
     }
+    if (status === 'Rejected' && !noteText) {
+      return res.status(400).json({ success: false, message: 'Please provide a reason for rejection' });
+    }
 
+    const effectiveCompanyId = leave.companyId || companyId;
     if (['Approved', 'Rejected'].includes(status)) {
       await approvalService.assertApprover(leave, req.user);
+      leave.actionedBy = req.user._id || req.user.id;
+      leave.actionedByName = req.user.fullName || req.user.name || 'Admin';
+      leave.actionedAt = new Date();
     }
     if (status === 'Approved' && oldStatus !== 'Approved') {
-      const posted = await approvalService.recordTransition(leave, 'Approved', companyId);
+      const posted = await approvalService.recordTransition(leave, 'Approved', effectiveCompanyId);
       if (posted) leave.ledgerPosted = true;
       const days = leave.duration === 'Half Day' ? 0.5 : (leave.durationDays || (Math.ceil((new Date(leave.endDate) - new Date(leave.startDate)) / (1000 * 60 * 60 * 24)) + 1));
       const targetUser = await User.findById(leave.user);
@@ -437,11 +497,14 @@ exports.updateLeaveStatus = async (req, res, next) => {
       }
     }
     if (status === 'Cancel' || status === 'Cancelled') {
-      await approvalService.recordTransition(leave, 'Cancelled', companyId);
+      await approvalService.recordTransition(leave, 'Cancelled', effectiveCompanyId);
     }
 
     if (status) leave.status = status;
-    if (adminNote) leave.adminNote = adminNote;
+    if (noteText) {
+      leave.adminNote = noteText;
+      if (status === 'Rejected') leave.rejectionReason = noteText;
+    }
 
     await leave.save();
 
@@ -449,14 +512,14 @@ exports.updateLeaveStatus = async (req, res, next) => {
     // used balance; keep auto-cancel of overbooked pending leaves as a guard.
     if (req.body.status === 'Approved' && oldStatus !== 'Approved') {
       try {
-        const lt = await leaveBalanceService.resolveLeaveType(companyId, leave.leaveType);
+        const lt = await leaveBalanceService.resolveLeaveType(effectiveCompanyId, leave.leaveType);
         if (lt) {
-          const check = await leaveBalanceService.canApplyForLeave(leave.user, companyId, lt, 0, new Date(leave.startDate));
+          const check = await leaveBalanceService.canApplyForLeave(leave.user, effectiveCompanyId, lt, 0, new Date(leave.startDate));
           if (!check.allowed && check.used > check.limit) {
             const period = check.period;
             await Leave.updateMany({
               user: leave.user,
-              ...(companyId ? { companyId } : {}),
+              ...(effectiveCompanyId ? { companyId: effectiveCompanyId } : {}),
               leaveType: lt.name,
               status: 'Pending',
               startDate: { $gte: period.start, $lte: period.end },
@@ -482,9 +545,9 @@ exports.updateLeaveStatus = async (req, res, next) => {
       const autoNotif = require('../services/autoNotificationService');
       const io = req.app.get('io');
       if (status === 'Approved') {
-        autoNotif.triggerLeaveApproved(leave.user, leave.leaveType, io);
+        autoNotif.triggerLeaveApproved(leave.user, leave.leaveType, io, leave._id);
       } else if (status === 'Rejected') {
-        autoNotif.triggerLeaveRejected(leave.user, leave.leaveType, rejectionReason || '', io);
+        autoNotif.triggerLeaveRejected(leave.user, leave.leaveType, noteText || '', io, leave._id);
       }
     } catch (e) {
       console.error('Leave status update notification hook failed:', e);
@@ -504,9 +567,7 @@ exports.getMyApprovals = async (req, res, next) => {
       ...(companyId ? { companyId } : {}),
     };
 
-    const userRole = (req.user.role || '').toLowerCase();
-    const userRoleCode = (req.user.roleCode || '').toUpperCase();
-    const isGlobalOrCompanyAdmin = userRole === 'superadmin' || userRole === 'company_admin' || userRoleCode === 'TCSA1' || userRoleCode === 'TCCA1';
+    const isGlobalOrCompanyAdmin = approvalService.isPrivilegedLeaveAdmin(req.user);
 
     const User = require('../models/User');
     const myDirectReports = await User.find({ reportsTo: req.user.id }).select('_id').lean();
@@ -605,6 +666,8 @@ exports.getMyApprovals = async (req, res, next) => {
 
     const approvals = await Leave.find(filters)
       .populate('user', 'name email department designation profileImage reportsTo')
+      .populate('actionedBy', 'name fullName role roleCode designation')
+      .populate('approverId', 'name fullName designation')
       .sort('-createdAt')
       .lean();
 
@@ -619,9 +682,9 @@ exports.getMyApprovals = async (req, res, next) => {
   }
 };
 
-// @desc    Approve a leave request (reporting manager)
+// @desc    Approve a leave request (reporting manager or Super/Company/HR admin)
 // @route   PATCH /api/leaves/approvals/:id/approve
-// @access  Private (reporting manager)
+// @access  Private (reporting manager or admin)
 exports.approveLeave = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
@@ -630,11 +693,16 @@ exports.approveLeave = async (req, res, next) => {
     if (leave.status !== 'Pending') return res.status(400).json({ success: false, message: 'Leave is not pending' });
 
     await approvalService.assertApprover(leave, req.user);
-    const posted = await approvalService.recordTransition(leave, 'Approved', companyId);
+    const effectiveCompanyId = leave.companyId || companyId;
+    const posted = await approvalService.recordTransition(leave, 'Approved', effectiveCompanyId);
     if (posted) leave.ledgerPosted = true;
 
+    const noteText = String(req.body.reason ?? req.body.adminNote ?? '').trim();
     leave.status = 'Approved';
-    if (req.body.adminNote) leave.adminNote = req.body.adminNote;
+    leave.actionedBy = req.user._id || req.user.id;
+    leave.actionedByName = req.user.fullName || req.user.name || 'Admin';
+    leave.actionedAt = new Date();
+    if (noteText) leave.adminNote = noteText;
     await leave.save();
 
     // Deduct employee leave balance
@@ -646,14 +714,20 @@ exports.approveLeave = async (req, res, next) => {
     }
 
     res.status(200).json({ success: true, data: leave });
+
+    try {
+      const autoNotif = require('../services/autoNotificationService');
+      const io = req.app.get('io');
+      autoNotif.triggerLeaveApproved(leave.user, leave.leaveType, io, leave._id);
+    } catch (_) {}
   } catch (err) {
     res.status(err.statusCode || 400).json({ success: false, message: err.message });
   }
 };
 
-// @desc    Reject a leave request (reporting manager)
+// @desc    Reject a leave request (reporting manager or Super/Company/HR admin)
 // @route   PATCH /api/leaves/approvals/:id/reject
-// @access  Private (reporting manager)
+// @access  Private (reporting manager or admin)
 exports.rejectLeave = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
@@ -661,13 +735,28 @@ exports.rejectLeave = async (req, res, next) => {
     if (!leave) return res.status(404).json({ success: false, message: 'Leave not found' });
     if (leave.status !== 'Pending') return res.status(400).json({ success: false, message: 'Leave is not pending' });
 
+    const noteText = String(req.body.reason ?? req.body.rejectionReason ?? req.body.adminNote ?? '').trim();
+    if (!noteText) {
+      return res.status(400).json({ success: false, message: 'Please provide a reason for rejection' });
+    }
+
     await approvalService.assertApprover(leave, req.user);
 
     leave.status = 'Rejected';
-    if (req.body.adminNote) leave.adminNote = req.body.adminNote;
+    leave.adminNote = noteText;
+    leave.rejectionReason = noteText;
+    leave.actionedBy = req.user._id || req.user.id;
+    leave.actionedByName = req.user.fullName || req.user.name || 'Admin';
+    leave.actionedAt = new Date();
     await leave.save();
 
     res.status(200).json({ success: true, data: leave });
+
+    try {
+      const autoNotif = require('../services/autoNotificationService');
+      const io = req.app.get('io');
+      autoNotif.triggerLeaveRejected(leave.user, leave.leaveType, noteText, io, leave._id);
+    } catch (_) {}
   } catch (err) {
     res.status(err.statusCode || 400).json({ success: false, message: err.message });
   }
@@ -782,6 +871,14 @@ exports.updateLeave = async (req, res, next) => {
         return res.status(400).json({
           success: false,
           message: dayRuleError,
+        });
+      }
+      const effectiveMaxAdvanceDays = await getEffectiveMaxAdvanceDays(req.user, companyId, ltForUpdate);
+      const advanceRuleError = validateAdvanceDaysForRange(calcStart, calcEnd, effectiveMaxAdvanceDays, ltForUpdate.name);
+      if (advanceRuleError) {
+        return res.status(400).json({
+          success: false,
+          message: advanceRuleError,
         });
       }
     }

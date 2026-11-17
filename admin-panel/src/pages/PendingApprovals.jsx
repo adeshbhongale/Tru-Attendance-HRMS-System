@@ -20,6 +20,8 @@ import {
   Loader2,
   Mail,
   MapPin,
+  Maximize2,
+  Minimize2,
   Package,
   Phone,
   Plane,
@@ -524,6 +526,11 @@ const PendingApprovals = () => {
 
   // Detail Modal State
   const [detailItem, setDetailItem] = useState(null);
+  const [isDetailFullScreen, setIsDetailFullScreen] = useState(false);
+
+  useEffect(() => {
+    if (!detailItem) setIsDetailFullScreen(false);
+  }, [detailItem]);
 
   useEffect(() => {
     const isExp =
@@ -2468,12 +2475,12 @@ const PendingApprovals = () => {
       {typeof document !== 'undefined' && createPortal(
         <AnimatePresence>
           {detailItem && (
-            <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
+            <div className={`fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm ${isDetailFullScreen ? 'p-0' : 'p-4'} overflow-y-auto`}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 15 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 15 }}
-                className="bg-white w-full max-w-2xl sm:max-w-3xl lg:max-w-4xl rounded-[2.5rem] shadow-2xl overflow-hidden my-auto border border-slate-100 flex flex-col max-h-[90vh]"
+                className={`bg-white shadow-2xl overflow-hidden border border-slate-100 flex flex-col transition-all duration-200 ${isDetailFullScreen ? 'w-screen h-screen max-w-none max-h-none rounded-none my-0' : 'w-full max-w-2xl sm:max-w-3xl lg:max-w-4xl rounded-[2.5rem] my-auto max-h-[90vh]'}`}
               >
                 {/* Modal Header */}
                 <div className="p-6 md:p-8 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white relative flex-shrink-0">
@@ -2494,6 +2501,19 @@ const PendingApprovals = () => {
                         <span>Download PDF</span>
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => setIsDetailFullScreen((prev) => !prev)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all active:scale-95 cursor-pointer border border-white/10"
+                      title={isDetailFullScreen ? 'Exit Full Screen' : 'Full Screen'}
+                    >
+                      {isDetailFullScreen ? (
+                        <Minimize2 size={14} className="text-white" />
+                      ) : (
+                        <Maximize2 size={14} className="text-white" />
+                      )}
+                      <span className="hidden sm:inline">{isDetailFullScreen ? 'Exit Full Screen' : 'Full Screen'}</span>
+                    </button>
                     <button
                       onClick={() => setDetailItem(null)}
                       className="p-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all active:scale-95"

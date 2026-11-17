@@ -144,6 +144,26 @@ exports.prorateDays = (entitlement, period, joiningDate) => {
   return Math.round(entitlement * fraction * 2) / 2;
 };
 
+exports.isCasualLeaveType = (lt) => {
+  if (!lt) return false;
+  const code = String(lt.code || '').trim().toUpperCase();
+  const name = String(lt.name || '').trim().toLowerCase();
+  return code === 'CL' || name === 'casual leave' || name === 'casual';
+};
+
+exports.resolveMaxAdvanceDays = (lt, policy, resolved) => {
+  if (resolved && typeof resolved.maxAdvanceDays === 'number' && !Number.isNaN(resolved.maxAdvanceDays)) {
+    return Math.max(0, resolved.maxAdvanceDays);
+  }
+  if (policy && typeof policy.maxAdvanceDays === 'number' && !Number.isNaN(policy.maxAdvanceDays)) {
+    return Math.max(0, policy.maxAdvanceDays);
+  }
+  if (lt && typeof lt.maxAdvanceDays === 'number' && !Number.isNaN(lt.maxAdvanceDays)) {
+    return Math.max(0, lt.maxAdvanceDays);
+  }
+  return exports.isCasualLeaveType(lt) ? 7 : 0;
+};
+
 // Effective entitlement days for a user for a leave type in the current period.
 exports.effectiveEntitlement = async (
   user,
@@ -161,6 +181,9 @@ exports.effectiveEntitlement = async (
       const effectiveAllowedDays = (Array.isArray(rule.allowedDays) && rule.allowedDays.length > 0)
         ? rule.allowedDays
         : (Array.isArray(policy.allowedDays) && policy.allowedDays.length > 0 ? policy.allowedDays : []);
+      const effectiveMaxAdvanceDays = (typeof rule.maxAdvanceDays === 'number' && !Number.isNaN(rule.maxAdvanceDays))
+        ? Math.max(0, rule.maxAdvanceDays)
+        : ((typeof policy.maxAdvanceDays === 'number' && !Number.isNaN(policy.maxAdvanceDays)) ? Math.max(0, policy.maxAdvanceDays) : null);
       if (policy.prorateNewJoiner && user.joiningDate) {
         const joinedC = getISTDateComponents(new Date(user.joiningDate));
         const inPeriod =
@@ -173,6 +196,7 @@ exports.effectiveEntitlement = async (
             policyId: policy._id?.toString() || policy._id,
             scopeType: rule.scopeType,
             allowedDays: effectiveAllowedDays,
+            maxAdvanceDays: effectiveMaxAdvanceDays,
           };
         }
       }
@@ -182,6 +206,7 @@ exports.effectiveEntitlement = async (
         policyId: policy._id?.toString() || policy._id,
         scopeType: rule.scopeType,
         allowedDays: effectiveAllowedDays,
+        maxAdvanceDays: effectiveMaxAdvanceDays,
       };
     }
   }

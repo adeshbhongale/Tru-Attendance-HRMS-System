@@ -29,6 +29,19 @@ const SCOPE_TYPES = [
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
+const isCasualType = (lt) => {
+  if (!lt) return false;
+  const code = String(lt.code || '').trim().toUpperCase();
+  const name = String(lt.name || '').trim().toLowerCase();
+  return code === 'CL' || name === 'casual leave' || name === 'casual';
+};
+
+const resolveMaxAdvance = (lt, pol) => {
+  if (pol && typeof pol.maxAdvanceDays === 'number') return pol.maxAdvanceDays;
+  if (lt && typeof lt.maxAdvanceDays === 'number') return lt.maxAdvanceDays;
+  return isCasualType(lt) ? 7 : 0;
+};
+
 const LeaveTypes = () => {
   const [leaveTypes, setLeaveTypes] = useState([]);
   const [policies, setPolicies] = useState([]);
@@ -73,6 +86,7 @@ const LeaveTypes = () => {
     limitType: 'Yearly',
     allowedDurations: ['Full Day', 'Half Day', 'Multiple Days'],
     allowedDays: [],
+    maxAdvanceDays: 0,
     status: 'active'
   });
 
@@ -82,6 +96,7 @@ const LeaveTypes = () => {
     carryForward: false,
     maxCarryForward: 0,
     allowedDays: [],
+    maxAdvanceDays: 0,
     sequenceOrder: 1
   });
 
@@ -155,6 +170,7 @@ const LeaveTypes = () => {
       const effectiveAllowedDays = (existingPol?.allowedDays && existingPol.allowedDays.length > 0)
         ? existingPol.allowedDays.filter(d => d && d !== 'All')
         : (Array.isArray(type.allowedDays) ? type.allowedDays.filter(d => d && d !== 'All') : []);
+      const effectiveMaxAdvance = resolveMaxAdvance(type, existingPol);
       const effectiveSeq = Number(type.sequenceOrder || existingPol?.sequenceOrder || 1);
 
       setFormData({
@@ -166,6 +182,7 @@ const LeaveTypes = () => {
         limitType: type.limitType || 'Yearly',
         allowedDurations: type.allowedDurations && type.allowedDurations.length > 0 ? type.allowedDurations : ['Full Day', 'Half Day', 'Multiple Days'],
         allowedDays: effectiveAllowedDays,
+        maxAdvanceDays: effectiveMaxAdvance,
         status: type.status || 'active'
       });
 
@@ -175,6 +192,7 @@ const LeaveTypes = () => {
           carryForward: !!existingPol.carryForward,
           maxCarryForward: existingPol.maxCarryForward || 0,
           allowedDays: effectiveAllowedDays,
+          maxAdvanceDays: effectiveMaxAdvance,
           sequenceOrder: effectiveSeq
         });
       } else {
@@ -183,6 +201,7 @@ const LeaveTypes = () => {
           carryForward: false,
           maxCarryForward: 0,
           allowedDays: effectiveAllowedDays,
+          maxAdvanceDays: effectiveMaxAdvance,
           sequenceOrder: effectiveSeq
         });
       }
@@ -199,6 +218,7 @@ const LeaveTypes = () => {
         limitType: 'Yearly',
         allowedDurations: ['Full Day', 'Half Day', 'Multiple Days'],
         allowedDays: [],
+        maxAdvanceDays: 0,
         status: 'active'
       });
       setPolicyFormData({
@@ -206,6 +226,7 @@ const LeaveTypes = () => {
         carryForward: false,
         maxCarryForward: 0,
         allowedDays: [],
+        maxAdvanceDays: 0,
         sequenceOrder: nextSeq
       });
       setActiveTab('type');
@@ -235,11 +256,13 @@ const LeaveTypes = () => {
       let createdPolicy = null;
 
       const cleanAllowedDays = (formData.allowedDays || []).filter(d => d && d !== 'All');
+      const cleanMaxAdvanceDays = Math.max(0, Number(formData.maxAdvanceDays ?? policyFormData.maxAdvanceDays) || 0);
       const seqNum = Math.max(1, Number(formData.sequenceOrder) || 1);
       const payload = {
         ...formData,
         sequenceOrder: seqNum,
         allowedDays: cleanAllowedDays,
+        maxAdvanceDays: cleanMaxAdvanceDays,
         limit: formData.hasLimit ? Number(formData.limit) : 0,
         periodType: policyFormData.periodType,
         carryForward: policyFormData.carryForward,
@@ -258,7 +281,7 @@ const LeaveTypes = () => {
         toast.success('Leave type created!');
       }
 
-      // Sync policy settings including Carry Forward, Allowed Days & Sequence
+      // Sync policy settings including Carry Forward, Allowed Days, Advance Limit & Sequence
       if (savedType) {
         let existingPol = createdPolicy || policyByType(savedType._id);
         if (existingPol) {
@@ -267,6 +290,7 @@ const LeaveTypes = () => {
             carryForward: policyFormData.carryForward,
             maxCarryForward: Number(policyFormData.maxCarryForward) || 0,
             allowedDays: cleanAllowedDays,
+            maxAdvanceDays: cleanMaxAdvanceDays,
             sequenceOrder: seqNum,
             name: `${savedType.name} Policy`
           });
@@ -279,6 +303,7 @@ const LeaveTypes = () => {
               carryForward: policyFormData.carryForward,
               maxCarryForward: Number(policyFormData.maxCarryForward) || 0,
               allowedDays: cleanAllowedDays,
+              maxAdvanceDays: cleanMaxAdvanceDays,
               sequenceOrder: seqNum
             });
           } catch (_) {
@@ -310,6 +335,7 @@ const LeaveTypes = () => {
     try {
       setSaving(true);
       const cleanAllowedDays = (policyFormData.allowedDays || []).filter(d => d && d !== 'All');
+      const cleanMaxAdvanceDays = Math.max(0, Number(policyFormData.maxAdvanceDays ?? formData.maxAdvanceDays) || 0);
       const seqNum = Math.max(1, Number(policyFormData.sequenceOrder || formData.sequenceOrder) || 1);
       await Promise.all([
         api.put(`/leave/admin/policies/${existingPol._id}`, {
@@ -317,10 +343,12 @@ const LeaveTypes = () => {
           carryForward: policyFormData.carryForward,
           maxCarryForward: Number(policyFormData.maxCarryForward) || 0,
           allowedDays: cleanAllowedDays,
+          maxAdvanceDays: cleanMaxAdvanceDays,
           sequenceOrder: seqNum,
         }),
         api.put(`/leave-types/${editingType._id}`, {
           allowedDays: cleanAllowedDays,
+          maxAdvanceDays: cleanMaxAdvanceDays,
           sequenceOrder: seqNum,
         }),
       ]);
@@ -766,14 +794,21 @@ const LeaveTypes = () => {
                           {(() => {
                             const ad = (pol?.allowedDays?.length ? pol.allowedDays : lt.allowedDays) || [];
                             const validAd = ad.filter(d => d && d !== 'All');
-                            if (validAd.length > 0 && validAd.length < 7) {
-                              return (
-                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-200">
-                                  Only: {validAd.join(', ')}
-                                </span>
-                              );
-                            }
-                            return null;
+                            const maxAdv = resolveMaxAdvance(lt, pol);
+                            return (
+                              <>
+                                {validAd.length > 0 && validAd.length < 7 && (
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-200">
+                                    Only: {validAd.join(', ')}
+                                  </span>
+                                )}
+                                {maxAdv > 0 && (
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    Max {maxAdv}d Advance
+                                  </span>
+                                )}
+                              </>
+                            );
                           })()}
                         </div>
                       </td>
@@ -903,7 +938,12 @@ const LeaveTypes = () => {
                         required
                         placeholder="e.g. Casual Leave"
                         value={formData.name}
-                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        onChange={(e) => {
+                          const nextName = e.target.value;
+                          const nextAdvance = !editingType && formData.maxAdvanceDays === 0 && isCasualType({ name: nextName, code: formData.code }) ? 7 : formData.maxAdvanceDays;
+                          setFormData({ ...formData, name: nextName, maxAdvanceDays: nextAdvance });
+                          setPolicyFormData(prev => ({ ...prev, maxAdvanceDays: nextAdvance }));
+                        }}
                         className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
                       />
                     </div>
@@ -915,7 +955,12 @@ const LeaveTypes = () => {
                         required
                         placeholder="e.g. CL"
                         value={formData.code}
-                        onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
+                        onChange={(e) => {
+                          const nextCode = e.target.value.toUpperCase();
+                          const nextAdvance = !editingType && formData.maxAdvanceDays === 0 && isCasualType({ name: formData.name, code: nextCode }) ? 7 : formData.maxAdvanceDays;
+                          setFormData({ ...formData, code: nextCode, maxAdvanceDays: nextAdvance });
+                          setPolicyFormData(prev => ({ ...prev, maxAdvanceDays: nextAdvance }));
+                        }}
                         className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
                       />
                     </div>
@@ -1125,6 +1170,56 @@ const LeaveTypes = () => {
                     </div>
                   </div>
 
+                  {/* Policy Rule: Max Advance Application Days */}
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-left space-y-2.5">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 tracking-wider block">
+                          Policy Rule: Max Advance Application Days
+                        </label>
+                        <p className="text-[11px] text-slate-500 font-medium m-0">
+                          Restrict how many days ahead from today an employee can apply (e.g. 7 days max for Casual Leave).
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFormData(prev => ({ ...prev, maxAdvanceDays: 0 }));
+                            setPolicyFormData(prev => ({ ...prev, maxAdvanceDays: 0 }));
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${!(formData.maxAdvanceDays > 0) ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                        >
+                          No Limit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const val = formData.maxAdvanceDays > 0 ? formData.maxAdvanceDays : 7;
+                            setFormData(prev => ({ ...prev, maxAdvanceDays: val }));
+                            setPolicyFormData(prev => ({ ...prev, maxAdvanceDays: val }));
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${formData.maxAdvanceDays > 0 ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                        >
+                          Max Days
+                        </button>
+                        {formData.maxAdvanceDays > 0 && (
+                          <input
+                            type="number"
+                            min="1"
+                            value={formData.maxAdvanceDays}
+                            onChange={(e) => {
+                              const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                              setFormData(prev => ({ ...prev, maxAdvanceDays: val }));
+                              setPolicyFormData(prev => ({ ...prev, maxAdvanceDays: val }));
+                            }}
+                            className="w-20 bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-extrabold text-center text-indigo-600 outline-none focus:border-indigo-400"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="pt-4 flex gap-3">
                     <button
                       type="button"
@@ -1224,6 +1319,54 @@ const LeaveTypes = () => {
                                 </button>
                               );
                             })}
+                          </div>
+                        </div>
+
+                        {/* Max Advance Application Days Rule in Tab 2 */}
+                        <div className="bg-white p-3.5 rounded-xl border border-slate-200 flex items-center justify-between flex-wrap gap-3">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 tracking-wider block">
+                              Max Advance Application Days Rule
+                            </label>
+                            <p className="text-[11px] text-slate-400 font-medium m-0">
+                              Limit how far ahead from today employees can apply (e.g. 7 days max blocks next Saturday until after current Saturday).
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPolicyFormData(prev => ({ ...prev, maxAdvanceDays: 0 }));
+                                setFormData(prev => ({ ...prev, maxAdvanceDays: 0 }));
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${!(policyFormData.maxAdvanceDays > 0) ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                            >
+                              No Limit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const val = policyFormData.maxAdvanceDays > 0 ? policyFormData.maxAdvanceDays : 7;
+                                setPolicyFormData(prev => ({ ...prev, maxAdvanceDays: val }));
+                                setFormData(prev => ({ ...prev, maxAdvanceDays: val }));
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${policyFormData.maxAdvanceDays > 0 ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                            >
+                              Max Days
+                            </button>
+                            {policyFormData.maxAdvanceDays > 0 && (
+                              <input
+                                type="number"
+                                min="1"
+                                value={policyFormData.maxAdvanceDays}
+                                onChange={(e) => {
+                                  const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                                  setPolicyFormData(prev => ({ ...prev, maxAdvanceDays: val }));
+                                  setFormData(prev => ({ ...prev, maxAdvanceDays: val }));
+                                }}
+                                className="w-20 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-extrabold text-center text-indigo-600 outline-none focus:border-indigo-400"
+                              />
+                            )}
                           </div>
                         </div>
 

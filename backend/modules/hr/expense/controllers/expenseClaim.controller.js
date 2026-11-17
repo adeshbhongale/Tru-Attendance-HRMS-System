@@ -143,7 +143,7 @@ async function buildFoodRows({ companyId, employees, dates, destinationClass, ba
  * Validate + calculate a claim payload. Never writes to the database.
  * Returns { errors, warnings, data, policy, policyConfig }.
  */
-async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) {
+async function evaluateClaim(req, input, { submit, companyId, excludeClaimId, existingClaimDate = null }) {
   const actor = access.userId(req);
   if (actor) {
     input.employeeIds = (input.employeeIds || []).map((id) => (id === 'self' || id === 'me' ? String(actor) : String(id)));
@@ -222,7 +222,21 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
     }
   }
 
-  const errors = rules.validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig, isDraft: !submit, isManagement: isMgmt, user: effectiveActorUser });
+  const parsedExistingDate = existingClaimDate ? rules.parseDateOnly(existingClaimDate) : null;
+  const skipNormalPastLimit = Boolean(
+    parsedExistingDate &&
+    input.claimDate &&
+    input.claimDate.getTime() === parsedExistingDate.getTime()
+  );
+  const errors = rules.validateClaimInput(input, {
+    policyConfig,
+    typeConfig,
+    foodTypeConfig,
+    isDraft: !submit,
+    isManagement: isMgmt,
+    user: effectiveActorUser,
+    maxPastDaysNormal: skipNormalPastLimit ? null : 2,
+  });
   errors.push(...(submit ? travelErrors : travelErrors.filter((e) => !e.required)));
 
   // Stay with relative needs a valid configured percentage (never silently defaulted here)
@@ -397,6 +411,33 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   const amounts = await rules.calculateAmounts({
     input, typeConfig, employees, policy, entitlements, destinationClass, actor, allTypes: types, foodContext, travelEntitlements,
   });
+  // Full payment is only applicable when the claim has an excess amount (> 0)
+  if ((amounts.grandExcess || 0) <= 0 && base.fullPayment?.requested) {
+    base.fullPayment = {
+      requested: false,
+      reason: '',
+      proofs: [],
+      status: 'NOT_REQUESTED',
+      approvedAmount: 0,
+    };
+    input.fullPayment = { requested: false, reason: '' };
+    if (!isMgmt && base.managerApproval?.kind === 'FULL_PAYMENT') {
+      const fallbackKind = rules.approvalKindFor(
+        { ...input, fullPayment: { requested: false, reason: '' } },
+        { policy, policyConfig, types, user: effectiveActorUser, directLimit: directAccountLimit }
+      );
+      base.managerApproval = {
+        kind: fallbackKind,
+        approver: fallbackKind !== 'NONE' && approver ? approver._id : null,
+        approverName: fallbackKind !== 'NONE' && approver ? approver.name || '' : '',
+        approverRole: fallbackKind === 'OTHER_EXPENSE' ? 'REPORTING_MANAGER' : '',
+        status: 'NOT_REQUIRED',
+        requestedAt: null,
+        decidedAt: null,
+        remarks: '',
+      };
+    }
+  }
   // Stay with relative: the claimed lodging amount is the calculated entitlement
   const isRelativeStay = input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE';
   const lodgingRequested = amounts.lodgingSummary ? amounts.lodgingSummary.requested : amounts.grandRequested;
@@ -1061,12 +1102,17 @@ exports.previewClaim = async (req, res) => {
     const companyId = await companyFor(req);
     const input = rules.normalizeInput(req.body);
     const excludeClaimId = mongoose.Types.ObjectId.isValid(req.body.claimId) ? req.body.claimId : undefined;
+    let existingClaimDate = null;
+    if (excludeClaimId) {
+      const existingDoc = await ExpenseClaim.findById(excludeClaimId).select('claimDate').lean();
+      if (existingDoc?.claimDate) existingClaimDate = existingDoc.claimDate;
+    }
 
     // First calculate amounts & policy entitlements with submit: false so draft claims and claims with pending receipts can preview calculation
-    const calcResult = await evaluateClaim(req, input, { submit: false, companyId, excludeClaimId });
+    const calcResult = await evaluateClaim(req, input, { submit: false, companyId, excludeClaimId, existingClaimDate });
 
     // Also evaluate full submission requirements to detect any submission-blocking errors
-    const submitResult = await evaluateClaim(req, input, { submit: true, companyId, excludeClaimId });
+    const submitResult = await evaluateClaim(req, input, { submit: true, companyId, excludeClaimId, existingClaimDate });
 
     const errors = (submitResult.errors && submitResult.errors.length)
       ? submitResult.errors
@@ -1314,7 +1360,7 @@ exports.updateClaim = async (req, res) => {
     const wasRejected = access.businessStatus(claim) === 'REJECTED';
     const submit = req.body.submit === true || req.body.submit === 'true' || wasAlreadySubmitted;
     const outcome = await withFoodLock(req, companyId, input, submit, async () => {
-      const result = await evaluateClaim(req, input, { submit, companyId, excludeClaimId: claim._id });
+      const result = await evaluateClaim(req, input, { submit, companyId, excludeClaimId: claim._id, existingClaimDate: claim.claimDate || null });
       if (result.errors.length) return { result };
 
       const before = access.snapshot(claim);

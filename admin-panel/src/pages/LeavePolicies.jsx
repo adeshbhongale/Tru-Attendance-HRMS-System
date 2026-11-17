@@ -26,6 +26,19 @@ const SCOPE_TYPES = [
 ];
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+const isCasualType = (lt) => {
+  if (!lt) return false;
+  const code = String(lt.code || '').trim().toUpperCase();
+  const name = String(lt.name || '').trim().toLowerCase();
+  return code === 'CL' || name === 'casual leave' || name === 'casual';
+};
+
+const resolveMaxAdvance = (lt, pol) => {
+  if (pol && typeof pol.maxAdvanceDays === 'number') return pol.maxAdvanceDays;
+  if (lt && typeof lt.maxAdvanceDays === 'number') return lt.maxAdvanceDays;
+  return isCasualType(lt) ? 7 : 0;
+};
 const _lp_end = [
 ];
 
@@ -99,6 +112,7 @@ const LeavePolicies = () => {
 
   const handleOpenModal = (policy = null) => {
     if (policy) {
+      const lt = typeById(policy.leaveTypeRef);
       setEditingPolicy(policy);
       setFormData({
         leaveTypeRef: policy.leaveTypeRef,
@@ -107,6 +121,7 @@ const LeavePolicies = () => {
         maxCarryForward: policy.maxCarryForward || 0,
         prorateNewJoiner: policy.prorateNewJoiner !== undefined ? policy.prorateNewJoiner : true,
         allowedDays: Array.isArray(policy.allowedDays) ? policy.allowedDays : [],
+        maxAdvanceDays: resolveMaxAdvance(lt, policy),
         sequenceOrder: policy.sequenceOrder || 1,
         name: policy.name || '',
       });
@@ -118,6 +133,8 @@ const LeavePolicies = () => {
         carryForward: false,
         maxCarryForward: 0,
         prorateNewJoiner: true,
+        allowedDays: [],
+        maxAdvanceDays: 0,
         name: '',
       });
     }
@@ -464,7 +481,14 @@ const LeavePolicies = () => {
                               {leaveTypes.map((t) => (
                                 <div
                                   key={t._id}
-                                  onClick={() => { setFormData({ ...formData, leaveTypeRef: t._id }); setParamDropdowns({ ...paramDropdowns, leaveType: false }); }}
+                                  onClick={() => {
+                                    setFormData({
+                                      ...formData,
+                                      leaveTypeRef: t._id,
+                                      maxAdvanceDays: !editingPolicy ? resolveMaxAdvance(t, null) : formData.maxAdvanceDays,
+                                    });
+                                    setParamDropdowns({ ...paramDropdowns, leaveType: false });
+                                  }}
                                   className={`flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer transition-all ${formData.leaveTypeRef === t._id ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-slate-50 text-slate-700'}`}
                                 >
                                   <span className="text-sm font-bold">{t.name} <span className="text-slate-400 font-bold text-xs ml-1">{t.code}</span></span>
@@ -614,6 +638,40 @@ const LeavePolicies = () => {
                           </button>
                         );
                       })}
+                    </div>
+                  </div>
+
+                  <div className="p-5 rounded-2xl border border-slate-100 bg-slate-50/50 space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-800">Max Advance Application Days</p>
+                        <p className="text-[11px] font-bold text-slate-500">Limit how many days ahead from today employees can apply (e.g. 7 days max)</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, maxAdvanceDays: 0 })}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${!(formData.maxAdvanceDays > 0) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'}`}
+                        >
+                          No Limit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, maxAdvanceDays: formData.maxAdvanceDays > 0 ? formData.maxAdvanceDays : 7 })}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${formData.maxAdvanceDays > 0 ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-200'}`}
+                        >
+                          Max Days
+                        </button>
+                        {formData.maxAdvanceDays > 0 && (
+                          <input
+                            type="number"
+                            min="1"
+                            value={formData.maxAdvanceDays}
+                            onChange={(e) => setFormData({ ...formData, maxAdvanceDays: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                            className="w-20 bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-extrabold text-center text-indigo-600 outline-none focus:border-indigo-400"
+                          />
+                        )}
+                      </div>
                     </div>
                   </div>
 

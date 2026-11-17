@@ -326,15 +326,15 @@ function resolveTypeConfig(type, fallbackCode = '') {
   const rawCode = String(type?.code || fallbackCode || '').toUpperCase();
   const code = rawCode;
   const pick = (v, d) => (v === undefined || v === null ? d : v);
-  // Same-date / date-based duplicate submission limits apply only to FOOD and LODGING,
-  // never to TRAVEL, CONVEYANCE (Local Conveyance), or OTHER claim types.
-  const isDateLimitedType = code === 'FOOD' || code === 'LODGING' || type?.category === 'FOOD' || type?.category === 'LODGING';
+  // Same-date duplicate submission limits are disabled for NORMAL claim types (FOOD uses shared
+  // daily remaining entitlement across multiple claims; TRAVEL, CONVEYANCE, OTHER, STOCK_PURCHASE have no date limit).
+  const isDateLimitedType = code === 'LODGING' || type?.category === 'LODGING';
   return {
     code,
     name: type?.name || (code === 'FOOD' ? 'Food' : code === 'TRAVEL' ? 'Travel' : code === 'LODGING' ? 'Lodging' : code === 'CONVEYANCE' ? 'Local Conveyance' : code === 'STOCK_PURCHASE' ? 'Stock Purchase' : code),
     category: type?.category || code,
     claimMode: pick(type?.claimMode, code === 'LODGING' || type?.category === 'LODGING' ? 'LODGING' : 'NORMAL'),
-    sameDateLimit: isDateLimitedType ? Number(pick(type?.sameDateLimit, code === 'FOOD' ? 1 : 0)) : 0,
+    sameDateLimit: isDateLimitedType ? Number(pick(type?.sameDateLimit, 0)) : 0,
     allowOverlap: !!pick(type?.allowOverlap, false),
     maxClaimAmount: Number(pick(type?.maxClaimAmount, 0)),
     requiresOutstation: !!pick(type?.requiresOutstation, false),
@@ -691,7 +691,7 @@ const isValidFileUrl = (url) => /^https?:\/\/\S+$/i.test(url) || /^\/uploads\/\S
  * Field-level validation. Returns [{ field, code, message, required? }].
  * `required` errors are skipped for drafts so a half-filled form can be saved.
  */
-function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = null, today = todayDateOnly(), isDraft = false, user = null, isManagement = false }) {
+function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = null, today = todayDateOnly(), isDraft = false, user = null, isManagement = false, maxPastDaysNormal = null }) {
   const errors = [];
   const add = (field, code, message, required = false) => errors.push({ field, code, message, required });
   const { claimRules, receiptRules, fullPaymentRules } = policyConfig;
@@ -707,6 +707,8 @@ function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = 
       else add('claimDate', 'CLAIM_DATE_REQUIRED', 'Please select the claim date.', true);
     } else if (!claimRules.allowFutureDates && input.claimDate > today) {
       add('claimDate', 'FUTURE_DATE', 'Claim date cannot be in the future.');
+    } else if (Number.isInteger(maxPastDaysNormal) && maxPastDaysNormal >= 0 && input.claimDate < addDays(today, -maxPastDaysNormal)) {
+      add('claimDate', 'PAST_DATE_LIMIT_EXCEEDED', `For a normal claim, you can only select a date within the previous ${maxPastDaysNormal} days.`);
     }
   }
   if (input.claimMode === 'LODGING') {
@@ -1124,11 +1126,11 @@ async function evaluateBusinessRules({ companyId, input, typeConfig, employees, 
 
   for (const emp of employees) {
     const who = singleEmp ? '' : ` for ${empLabel(emp)}`;
-    const isFoodOrLodging = code === 'FOOD' || code === 'LODGING' || typeConfig.category === 'FOOD' || typeConfig.category === 'LODGING';
+    const isLodgingType = code === 'LODGING' || typeConfig.category === 'LODGING';
 
-    // Date-based already-claimed submission check applies ONLY to Food and Lodging claims,
-    // never to Travel, Local Conveyance, or Other claim types.
-    if (isNormal && isFoodOrLodging && typeConfig.sameDateLimit > 0) {
+    // Normal claims (including FOOD) allow multiple submissions on the same date; FOOD is capped by
+    // each employee's remaining daily food entitlement via getFoodConsumption().
+    if (isNormal && isLodgingType && typeConfig.sameDateLimit > 0) {
       const count = await ExpenseClaim.countDocuments({
         ...base,
         $or: [
@@ -1154,7 +1156,7 @@ async function evaluateBusinessRules({ companyId, input, typeConfig, employees, 
 
     // Lodging overlap is about nights: a same-day (0-night, food-only) claim never overlaps a stay,
     // and checkout day = next check-in day is not an overlap.
-    if (!isNormal && isFoodOrLodging && !typeConfig.allowOverlap && nightsBetween(start, end) > 0) {
+    if (!isNormal && isLodgingType && !typeConfig.allowOverlap && nightsBetween(start, end) > 0) {
       const existing = await ExpenseClaim.findOne({
         ...base,
         claimMode: 'LODGING',
@@ -2041,6 +2043,46 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       employeeClaims[0].items[0].plainExplanation = plainExplanation;
     }
 
+    let normalFoodSummary;
+    if ((typeCounts.FOOD || 0) > 0) {
+      const foodEntTotal = round2(ordered.reduce((s, emp) => {
+        const ln = getEmployeeLevelNumber(emp);
+        const gc = getEmployeeGradeCode(emp);
+        const ent = findEntitlement(entitlements, ln, gc, destinationClass, 'FOOD');
+        return s + ((ent && ent.amount > 0) ? ent.amount : 0);
+      }, 0));
+      const foodPriorTotal = round2(otherClaimsFood.reduce((s, v) => s + v, 0));
+      const foodRemBefore = Math.max(0, round2(foodEntTotal - foodPriorTotal));
+      const foodReqTotal = round2(
+        input.entries
+          .filter((e) => String(e.expenseType || '').toUpperCase() === 'FOOD')
+          .reduce((s, e) => s + (Number(e.requestedAmount) || 0), 0)
+      );
+      const foodAllowTotal = round2(
+        employeeClaims.reduce(
+          (s, ec) =>
+            s +
+            (ec.items || [])
+              .filter((it) => it.expenseType === 'FOOD')
+              .reduce((is, it) => is + (Number(it.allowedAmount) || 0), 0),
+          0
+        )
+      );
+      const foodExcTotal = round2(Math.max(0, foodReqTotal - foodAllowTotal));
+      if (foodEntTotal > 0) {
+        normalFoodSummary = {
+          foodDays: 1,
+          entitlement: foodEntTotal,
+          priorConsumed: foodPriorTotal,
+          remainingBefore: foodRemBefore,
+          remainingAfter: Math.max(0, round2(foodRemBefore - foodAllowTotal)),
+          requested: foodReqTotal,
+          allowed: foodAllowTotal,
+          excess: foodExcTotal,
+        };
+      }
+    }
+
     return {
       employeeClaims,
       grandRequested,
@@ -2050,6 +2092,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       perDayLimit: ordered.length > 1 ? grandPolicyLimit : (firstEmpItems[0]?.policyLimit || grandPolicyLimit),
       payableAmount: grandAllowed,
       plainExplanation,
+      foodSummary: normalFoodSummary,
     };
   }
 

@@ -1,6 +1,7 @@
 const LeaveType = require('../models/LeaveType');
 const LeavePolicy = require('../models/LeavePolicy');
 const LeavePolicyRule = require('../models/LeavePolicyRule');
+const policyService = require('../services/leave/policyService');
 
 // Normalize and reorder sequenceOrder (1..N) across a company's leave types & policies.
 // When `targetId` is given a `requestedOrder` (e.g. 1), it is placed at that 1-based
@@ -39,6 +40,13 @@ const syncCompanyLeaveSequence = async (companyId, targetId = null, requestedOrd
       await LeaveType.updateOne({ _id: doc._id }, { $set: { sequenceOrder: seq } });
       doc.sequenceOrder = seq;
     }
+    if (policyService.isCasualLeaveType(doc)) {
+      if (doc.maxAdvanceDays === null || doc.maxAdvanceDays === undefined) {
+        await LeaveType.updateOne({ _id: doc._id, maxAdvanceDays: null }, { $set: { maxAdvanceDays: 7 } });
+        doc.maxAdvanceDays = 7;
+      }
+      await LeavePolicy.updateMany({ leaveTypeRef: doc._id, maxAdvanceDays: null }, { $set: { maxAdvanceDays: 7 } });
+    }
     await LeavePolicy.updateMany({ leaveTypeRef: doc._id }, { $set: { sequenceOrder: seq } });
   }
 };
@@ -73,11 +81,14 @@ exports.createLeaveType = async (req, res, next) => {
 
     const hasLimit = req.body.hasLimit !== false;
     const allowedDays = Array.isArray(req.body.allowedDays) ? req.body.allowedDays : [];
+    const maxAdvanceDays = (req.body.maxAdvanceDays !== undefined && req.body.maxAdvanceDays !== null && req.body.maxAdvanceDays !== '')
+      ? Math.max(0, Number(req.body.maxAdvanceDays) || 0)
+      : (policyService.isCasualLeaveType(req.body) ? 7 : 0);
     const existingCount = await LeaveType.countDocuments(companyId ? { companyId } : {});
     const initialSeq = req.body.sequenceOrder !== undefined && req.body.sequenceOrder !== ''
       ? Math.max(1, Number(req.body.sequenceOrder))
       : existingCount + 1;
-    const leaveType = await LeaveType.create({ ...req.body, hasLimit, allowedDays, sequenceOrder: initialSeq, companyId });
+    const leaveType = await LeaveType.create({ ...req.body, hasLimit, allowedDays, maxAdvanceDays, sequenceOrder: initialSeq, companyId });
 
     // Auto-create associated LeavePolicy & default company rule if not exists
     let policy = await LeavePolicy.findOne({ companyId, leaveTypeRef: leaveType._id });
@@ -91,6 +102,7 @@ exports.createLeaveType = async (req, res, next) => {
         maxCarryForward: req.body.maxCarryForward || 0,
         prorateNewJoiner: true,
         allowedDays,
+        maxAdvanceDays,
         sequenceOrder: initialSeq,
       });
 
@@ -102,6 +114,7 @@ exports.createLeaveType = async (req, res, next) => {
         hasLimit,
         days: hasLimit ? (typeof leaveType.limit === 'number' ? leaveType.limit : 12) : 0,
         allowedDays,
+        maxAdvanceDays,
       });
     }
 
@@ -151,6 +164,9 @@ exports.updateLeaveType = async (req, res, next) => {
       if (req.body.allowedDays !== undefined) {
         policy.allowedDays = Array.isArray(req.body.allowedDays) ? req.body.allowedDays : [];
       }
+      if (req.body.maxAdvanceDays !== undefined && req.body.maxAdvanceDays !== null && req.body.maxAdvanceDays !== '') {
+        policy.maxAdvanceDays = Math.max(0, Number(req.body.maxAdvanceDays) || 0);
+      }
       if (req.body.name) {
         policy.name = `${leaveType.name} Policy`;
       }
@@ -161,12 +177,14 @@ exports.updateLeaveType = async (req, res, next) => {
         {
           hasLimit,
           days: hasLimit ? (typeof req.body.limit === 'number' ? req.body.limit : leaveType.limit) : 0,
-          ...(req.body.allowedDays !== undefined ? { allowedDays: policy.allowedDays } : {})
+          ...(req.body.allowedDays !== undefined ? { allowedDays: policy.allowedDays } : {}),
+          ...(req.body.maxAdvanceDays !== undefined && req.body.maxAdvanceDays !== null && req.body.maxAdvanceDays !== '' ? { maxAdvanceDays: policy.maxAdvanceDays } : {}),
         },
         { upsert: true }
       );
     } else {
       const effectiveAllowedDays = Array.isArray(leaveType.allowedDays) ? leaveType.allowedDays : [];
+      const effectiveMaxAdvance = policyService.resolveMaxAdvanceDays(leaveType, null, null);
       policy = await LeavePolicy.create({
         companyId: effectiveCompanyId,
         leaveTypeRef: leaveType._id,
@@ -176,6 +194,7 @@ exports.updateLeaveType = async (req, res, next) => {
         maxCarryForward: req.body.maxCarryForward || 0,
         prorateNewJoiner: true,
         allowedDays: effectiveAllowedDays,
+        maxAdvanceDays: effectiveMaxAdvance,
       });
       await LeavePolicyRule.create({
         companyId: effectiveCompanyId,
@@ -185,6 +204,7 @@ exports.updateLeaveType = async (req, res, next) => {
         hasLimit,
         days: hasLimit ? (typeof leaveType.limit === 'number' ? leaveType.limit : 12) : 0,
         allowedDays: effectiveAllowedDays,
+        maxAdvanceDays: effectiveMaxAdvance,
       });
     }
 

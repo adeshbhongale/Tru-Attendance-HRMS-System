@@ -22,7 +22,8 @@ exports.isPrivilegedLeaveAdmin = (actor) => {
   return false;
 };
 
-exports.assertApprover = async (leave, actor) => {
+// directOnly: mobile approvals — only the direct reporting manager (or the leave's explicit approverId) may act.
+exports.assertApprover = async (leave, actor, { directOnly = false } = {}) => {
   const requester = await User.findById(leave.user).select(
     'reportsTo approver companyId role'
   ).lean();
@@ -36,6 +37,16 @@ exports.assertApprover = async (leave, actor) => {
     const err = new Error('You cannot approve your own leave request');
     err.statusCode = 400;
     throw err;
+  }
+
+  if (directOnly) {
+    const isExplicitApprover = leave.approverId && leave.approverId.toString() === actorId;
+    if (!isReportingManager && !isExplicitApprover) {
+      const err = new Error('Only the employee\'s direct reporting manager can approve or reject this request');
+      err.statusCode = 403;
+      throw err;
+    }
+    return approverId;
   }
 
   if (!isReportingManager && !exports.isPrivilegedLeaveAdmin(actor)) {

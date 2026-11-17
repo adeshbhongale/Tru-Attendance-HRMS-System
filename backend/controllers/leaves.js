@@ -567,12 +567,14 @@ exports.getMyApprovals = async (req, res, next) => {
       ...(companyId ? { companyId } : {}),
     };
 
-    const isGlobalOrCompanyAdmin = approvalService.isPrivilegedLeaveAdmin(req.user);
+    // Mobile-only endpoint: every user (incl. management/admin roles) sees ONLY their direct reports' leaves.
+    // Org-wide approval is done from the admin website (PATCH /leaves/:id).
+    const isGlobalOrCompanyAdmin = false;
 
     const User = require('../models/User');
     const myDirectReports = await User.find({ reportsTo: req.user.id }).select('_id').lean();
     const directReportIds = myDirectReports.map((u) => u._id);
-    const hasSubordinates = isGlobalOrCompanyAdmin || directReportIds.length > 0;
+    const hasSubordinates = directReportIds.length > 0;
 
     // Check if Leave Approvals screen is blocked for this user via MobileAppConfig
     if (!isGlobalOrCompanyAdmin && companyId) {
@@ -692,7 +694,7 @@ exports.approveLeave = async (req, res, next) => {
     if (!leave) return res.status(404).json({ success: false, message: 'Leave not found' });
     if (leave.status !== 'Pending') return res.status(400).json({ success: false, message: 'Leave is not pending' });
 
-    await approvalService.assertApprover(leave, req.user);
+    await approvalService.assertApprover(leave, req.user, { directOnly: true });
     const effectiveCompanyId = leave.companyId || companyId;
     const posted = await approvalService.recordTransition(leave, 'Approved', effectiveCompanyId);
     if (posted) leave.ledgerPosted = true;
@@ -740,7 +742,7 @@ exports.rejectLeave = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Please provide a reason for rejection' });
     }
 
-    await approvalService.assertApprover(leave, req.user);
+    await approvalService.assertApprover(leave, req.user, { directOnly: true });
 
     leave.status = 'Rejected';
     leave.adminNote = noteText;

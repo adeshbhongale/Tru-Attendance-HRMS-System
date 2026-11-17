@@ -1520,7 +1520,16 @@ exports.employeeOptions = async (req, res) => {
       .limit(Math.min(1000, parseInt(req.query.limit) || 500))
       .lean();
 
-    const data = employees.map(e => ({
+    // Mobile claim form: hide Board of Directors (BOD level / designation) from the accompany picker.
+    // The requesting user is always kept so their own claim details still resolve.
+    const isMobile = String(req.headers['x-client-platform'] || '').toLowerCase() === 'mobile';
+    const BOD_RE = /^\s*bod\s*$|board\s+of\s+directors?/i;
+    const selfId = String(req.user?._id || req.user?.id || '');
+    const visible = isMobile
+      ? employees.filter(e => String(e._id) === selfId || !(BOD_RE.test(String(e.levelRef?.name || '')) || BOD_RE.test(String(e.designation?.name || e.designation || ''))))
+      : employees;
+
+    const data = visible.map(e => ({
       _id: e._id,
       name: e.name,
       employeeIdCode: e.employeeIdCode,

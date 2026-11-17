@@ -422,7 +422,7 @@ exports.getStats = async (req, res) => {
     const Holiday = require('../models/Holiday');
     const targetDateStart = new Date(targetDate); targetDateStart.setUTCHours(0, 0, 0, 0);
     const targetDateEnd = new Date(targetDate); targetDateEnd.setUTCHours(23, 59, 59, 999);
-    const isHoliday = await Holiday.findOne({ holiday_date: { $gte: targetDateStart, $lte: targetDateEnd }, status: 'active' });
+    const isHoliday = await Holiday.findOne({ ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}), holiday_date: { $gte: targetDateStart, $lte: targetDateEnd }, status: 'active' });
 
     let presentToday = 0;
     let onLeaveToday = 0;
@@ -1742,7 +1742,8 @@ exports.getEmployeePersonalDetails = async (req, res) => {
       const dateStr = getISTDateString(d);
       const record = recordsRaw.find(r => getISTDateString(r.date) === dateStr);
 
-      if (record) {
+      // An unpunched 'Absent' placeholder on a holiday is shown as Holiday, never Absent
+      if (record && (record.punchIn?.time || record.isManualOverride || record.status !== 'Absent' || !isHolidayOnDate(dateStr))) {
         const recordObj = record.toObject();
         const hrs = statsService.calculateWorkingHours(recordObj);
         const dist = parseFloat((recordObj.distance || recordObj.totalDistance || 0).toFixed(2));

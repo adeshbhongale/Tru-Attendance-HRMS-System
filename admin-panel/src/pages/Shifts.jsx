@@ -728,7 +728,7 @@ const Shifts = () => {
                               onClick={(e) => e.stopPropagation()}
                               className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[200] bg-white border border-slate-100 rounded-2xl shadow-2xl overflow-hidden min-w-[160px] p-2 text-left"
                             >
-                              {['All', 'Present', 'Late', 'Half Day', 'Absent', 'Neutral', 'Leave', 'Leave(Half)'].map(s => (
+                              {['All', 'Present', 'Late', 'Half Day', 'Absent', 'Holiday', 'Neutral', 'Leave', 'Leave(Half)'].map(s => (
                                 <div
                                   key={s}
                                   onClick={() => {
@@ -742,6 +742,7 @@ const Shifts = () => {
                                       s === 'Half Day' ? 'bg-orange-500' :
                                         s === 'Absent' ? 'bg-rose-500' :
                                           s === 'Neutral' ? 'bg-sky-500' :
+                                          s === 'Holiday' ? 'bg-blue-500' :
                                             s === 'Leave' || s === 'Leave(Half)' ? 'bg-purple-500' :
                                               'bg-slate-400'}`} />
                                   {s} Status
@@ -807,6 +808,7 @@ const Shifts = () => {
                               status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                 status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
                                   status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
+                                  status === 'Holiday' ? 'bg-blue-50 text-blue-600 border-blue-100' :
                                     status === 'Leave' || status === 'Leave(Half)' ? 'bg-purple-50 text-purple-600 border-purple-100' :
                                       'bg-slate-50 text-slate-400 border-slate-100'
                             }`}>

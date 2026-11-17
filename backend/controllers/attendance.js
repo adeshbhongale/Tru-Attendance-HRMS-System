@@ -93,14 +93,9 @@ exports.punchIn = async (req, res, next) => {
       }
     }
 
-    // ── Check for Week Offs and Holidays ──
+    // ── Week Offs / Holidays: punch-in is allowed; holiday work is recorded normally ──
     const targetIST = getISTDateComponents(targetDate);
     const dayName = targetIST.dayName;
-    const holiday = await Holiday.findOne({ companyId: req.tenant.companyId, holiday_date: targetDate });
-
-    if (holiday) {
-      return res.status(400).json({ success: false, message: `Today is ${holiday.holiday_name} (Holiday). Attendance is not required.` });
-    }
 
     let existingAttendance = await Attendance.findOne({
       companyId: req.tenant.companyId,
@@ -110,7 +105,7 @@ exports.punchIn = async (req, res, next) => {
 
     if (existingAttendance) {
       // If it's an 'Absent' placeholder, we allow overwriting it with a real punch-in
-      if (existingAttendance.status === 'Absent') {
+      if ((existingAttendance.status === 'Absent' || existingAttendance.status === 'Holiday') && !existingAttendance.punchIn?.time) {
         await Attendance.deleteOne({ _id: existingAttendance._id });
         existingAttendance = null;
       } else if (!existingAttendance.punchOut?.time) {
@@ -678,7 +673,9 @@ exports.getAllAttendance = async (req, res, next) => {
         let status = 'Absent';
         if (leaveUserIdsSet.has(user._id.toString())) {
           status = 'On Leave';
-        } else if (weeklyOffs.includes(dayName) || isHoliday) {
+        } else if (isHoliday) {
+          status = 'Holiday'; // Unpunched holiday is never Absent
+        } else if (weeklyOffs.includes(dayName)) {
           status = 'Not Punched In';
         } else {
           if (userCreated.getTime() === searchDateStart.getTime()) {
@@ -1072,17 +1069,19 @@ exports.getMonthlyView = async (req, res, next) => {
       CompanySetting.findOne({ companyId: req.tenant.companyId }),
       Holiday.find({
         companyId: req.tenant.companyId,
+        status: 'active',
+        // ±6h window so IST-midnight and UTC-midnight stored dates both match
         holiday_date: {
-          $gte: startDate.toISOString().split('T')[0],
-          $lt: endDate.toISOString().split('T')[0]
+          $gte: new Date(startDate.getTime() - 6 * 60 * 60 * 1000),
+          $lt: new Date(endDate.getTime() + 6 * 60 * 60 * 1000)
         }
       })
     ]);
 
     const holidayMap = {};
     monthHolidays.forEach(h => {
-      const d = new Date(h.holiday_date).getUTCDate();
-      holidayMap[d] = h.holiday_name;
+      const hIST = getISTDateComponents(new Date(h.holiday_date));
+      if (hIST.year === parseInt(year) && hIST.month + 1 === parseInt(month)) holidayMap[hIST.date] = h.holiday_name;
     });
 
     for (let i = 1; i <= daysInMonth; i++) {
@@ -1101,9 +1100,9 @@ exports.getMonthlyView = async (req, res, next) => {
 
       let status = 'Absent';
       if (isFuture) status = 'Future';
-      else if (isToday) status = 'Today';
       else if (isBeforeJoining) status = 'BeforeJoining';
-      else if (holidayName) status = 'Holiday';
+      else if (holidayName) status = 'Holiday'; // a real punch below overrides this
+      else if (isToday) status = 'Today';
       else if (isWeekOff) status = 'Week Off';
 
       let color = (isWeekOff || holidayName || isFuture || isBeforeJoining || isToday) ? 'transparent' : '#f43f5e';

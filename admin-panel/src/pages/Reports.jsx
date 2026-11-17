@@ -322,7 +322,7 @@ const Reports = () => {
   }, [data, mergedData]);
 
   // Fixed status list — always show all options regardless of what's in current data
-  const uniqueStatuses = ['All', 'Present', 'Late', 'Half Day', 'Absent', 'Leave', 'Leave(Half)', 'Neutral'];
+  const uniqueStatuses = ['All', 'Present', 'Late', 'Half Day', 'Absent', 'Holiday', 'Leave', 'Leave(Half)', 'Neutral'];
 
   // Reset to page 1 whenever a filter changes so results are always visible across all pages
   useEffect(() => { setCurrentPage(1); }, [shiftFilter, statusFilter, search]);
@@ -866,6 +866,7 @@ const Reports = () => {
                                 row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                   row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
                                     row.status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
+                                      row.status === 'Holiday' ? 'bg-blue-50 text-blue-600 border-blue-100' :
                                       row.status === 'Leave' || row.status === 'Leave(Half)' ? 'bg-purple-50 text-purple-600 border-purple-100' :
                                         'bg-indigo-50 text-indigo-600 border-indigo-100'
                               }`}>

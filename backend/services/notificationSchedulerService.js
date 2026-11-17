@@ -277,9 +277,6 @@ const processAutomaticWorkflows = async (io = null) => {
         ...(compId ? { companyId: compId } : {}),
         holiday_date: { $gte: todayStart, $lte: todayEnd }
       });
-      if (holidayToday) {
-        continue; // Company holiday
-      }
 
       // 3. Skip checking if the employee has an approved leave today
       const onLeave = await Leave.findOne({
@@ -311,6 +308,9 @@ const processAutomaticWorkflows = async (io = null) => {
       });
 
       const hasPunchedIn = attendance && attendance.punchIn && attendance.punchIn.time;
+
+      // Holiday: unpunched employees are on holiday (no absent alert); punched-in ones still get reminders
+      if (holidayToday && !hasPunchedIn) continue;
 
       if (hasPunchedIn) {
         // If the employee punches in, dynamically mark any unread absent alerts sent today as read

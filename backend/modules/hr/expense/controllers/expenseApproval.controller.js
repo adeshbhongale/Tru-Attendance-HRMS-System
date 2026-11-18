@@ -328,6 +328,8 @@ exports.approveClaim = async (req, res) => {
         after: access.snapshot(forwarded),
         metadata: { remarks, financeApprover: financeHead._id },
       });
+      // Notify the CFO / Finance Head that the claim is awaiting the 2nd approval
+      await require('../services/claimNotifications').notifyFinanceApprovalRequested(req, forwarded);
       return res.json({ success: true, data: withPermissions(req, forwarded) });
     }
 

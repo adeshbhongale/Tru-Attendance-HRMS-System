@@ -519,6 +519,20 @@ exports.getEmployeeNotifications = async (req, res) => {
       filter.title = { $not: /logout/i };
     }
 
+    // Optional filters (mobile notification page): notification type (Office Setup notification ids) + single date range
+    if (req.query.notificationIds) {
+      const ids = String(req.query.notificationIds).split(',').map((s) => s.trim()).filter((s) => mongoose.Types.ObjectId.isValid(s));
+      if (ids.length) filter.notificationId = { $in: ids.map((s) => new mongoose.Types.ObjectId(s)) };
+    }
+    if (req.query.from || req.query.to) {
+      const from = req.query.from ? new Date(req.query.from) : null;
+      const to = req.query.to ? new Date(req.query.to) : null;
+      filter.createdAt = {};
+      if (from && !Number.isNaN(from.getTime())) filter.createdAt.$gte = from;
+      if (to && !Number.isNaN(to.getTime())) filter.createdAt.$lte = to;
+      if (!Object.keys(filter.createdAt).length) delete filter.createdAt;
+    }
+
     const total = await EmployeeNotification.countDocuments(filter);
     const notifications = await EmployeeNotification.find(filter)
       .sort({ createdAt: -1 })
@@ -619,6 +633,32 @@ exports.deleteEmployeeNotification = async (req, res) => {
     }
 
     res.status(200).json({ success: true, data: {} });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Notification types configured in Office Setup -> Notifications (for the mobile feed filter)
+// @route   GET /api/notifications/employee/types
+// @access  Private
+exports.getEmployeeNotificationTypes = async (req, res) => {
+  try {
+    const companyId = req.tenant?.companyId || req.user?.companyId || req.user?.company || null;
+    const query = { status: { $ne: 'draft' }, title: { $not: /logout/i } };
+    if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
+      query.companyId = { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] };
+    }
+    const records = await Notification.find(query).select('_id title type isAuto autoType').sort({ title: 1 }).lean();
+
+    // One filter option per notification title (automatic workflows reuse one record; same-title broadcasts are merged)
+    const byTitle = new Map();
+    for (const n of records) {
+      const key = String(n.title || '').trim().toLowerCase();
+      if (!key) continue;
+      if (!byTitle.has(key)) byTitle.set(key, { title: String(n.title).trim(), type: n.type, isAuto: !!n.isAuto, ids: [] });
+      byTitle.get(key).ids.push(String(n._id));
+    }
+    res.status(200).json({ success: true, data: Array.from(byTitle.values()) });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }

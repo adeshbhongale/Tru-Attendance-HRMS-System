@@ -14,7 +14,8 @@ const {
   getEmployeeUnreadCount,
   markEmployeeNotificationRead,
   markAllEmployeeNotificationsRead,
-  deleteEmployeeNotification
+  deleteEmployeeNotification,
+  getEmployeeNotificationTypes
 } = require('../controllers/notifications');
 
 const router = express.Router();
@@ -30,6 +31,7 @@ router.use(protect);
 router.post('/register-token', registerDeviceToken);
 router.get('/employee/feed', getEmployeeNotifications);
 router.get('/employee/unread-count', getEmployeeUnreadCount);
+router.get('/employee/types', getEmployeeNotificationTypes);
 router.put('/employee/read-all', markAllEmployeeNotificationsRead);
 router.put('/employee/read/:id', markEmployeeNotificationRead);
 router.delete('/employee/:id', deleteEmployeeNotification);

@@ -61,6 +61,50 @@ async function receiptRulesFor(req) {
 }
 
 /**
+ * Live-photo geo-tag sent by the mobile claim form ({ latitude, longitude, accuracy, address, capturedAt }).
+ * Accepts an object (JSON body) or a JSON string (multipart field). Returns null when invalid.
+ */
+function parseGeoTag(raw) {
+  let g = raw;
+  if (typeof g === 'string') {
+    try { g = JSON.parse(g); } catch (_) { return null; }
+  }
+  if (!g || typeof g !== 'object') return null;
+  const latitude = Number(g.latitude);
+  const longitude = Number(g.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+  const capturedAt = g.capturedAt && !Number.isNaN(new Date(g.capturedAt).getTime()) ? new Date(g.capturedAt) : new Date();
+  const accuracy = Number.isFinite(Number(g.accuracy)) ? Math.round(Number(g.accuracy)) : null;
+  const address = String(g.address || '').replace(/[%$\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+  return { latitude, longitude, accuracy, address, capturedAt };
+}
+
+/** Cloudinary text overlay that burns the geo-tag (lat/long, address, date-time) onto the photo. */
+function geoTagOverlay(geo) {
+  const when = geo.capturedAt.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true,
+  });
+  const lines = [`Lat ${geo.latitude.toFixed(6)}  Long ${geo.longitude.toFixed(6)}${geo.accuracy !== null ? `  (Acc ${geo.accuracy}m)` : ''}`];
+  // Wrap the address into at most 2 short lines
+  const addrLines = [];
+  let cur = '';
+  for (const w of (geo.address ? geo.address.split(' ') : [])) {
+    if (cur && (cur.length + 1 + w.length) > 60) { addrLines.push(cur); cur = w; } else cur = cur ? `${cur} ${w}` : w;
+  }
+  if (cur) addrLines.push(cur);
+  lines.push(...addrLines.slice(0, 2).map((l) => l.slice(0, 64)));
+  lines.push(`${when} IST`);
+  return [{
+    overlay: { font_family: 'Arial', font_size: 26, font_weight: 'bold', text: lines.join('\n') },
+    color: '#FFFFFF',
+    background: 'rgb:00000099',
+    gravity: 'south_west',
+    x: 12,
+    y: 12,
+  }];
+}
+
+/**
  * POST /api/expense/uploads — multipart proof document upload (field: file)
  * Validates the company's allowed types / size and the real file signature.
  */
@@ -99,11 +143,13 @@ exports.uploadProofFile = async (req, res) => {
     const originalName = path.extname(baseName) ? baseName : `${baseName}${ext}`;
     const isNonImage = !realType.startsWith('image/');
     const folder = `expense/${req.tenant?.companyId || 'company'}`;
+    const geoTag = isNonImage ? null : parseGeoTag(req.body?.geoTag);
     const result = await uploadToCloudinary(req.file.buffer, folder, {
       originalName,
       ext,
       forceCloudinary: true,
       resource_type: isNonImage ? 'raw' : 'image',
+      ...(geoTag ? { extraTransformations: geoTagOverlay(geoTag) } : {}),
     });
 
     const data = {
@@ -112,6 +158,7 @@ exports.uploadProofFile = async (req, res) => {
       size: req.file.size,
       name: originalName,
       type: realType,
+      ...(geoTag ? { geoTag } : {}),
     };
     access.audit({ req, action: 'RECEIPT_UPLOADED', claim: null, description: `Receipt uploaded: ${originalName}`, metadata: { ...data, purpose: req.body?.purpose || 'receipt' } }).catch(() => {});
     res.json({ success: true, data });
@@ -136,7 +183,11 @@ exports.uploadProofBase64 = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No image base64 data provided.' });
     }
     const folder = `expense/${req.tenant?.companyId || 'company'}`;
-    const result = await uploadToCloudinary(rawImage, folder, { forceCloudinary: true });
+    const geoTag = parseGeoTag(req.body?.geoTag);
+    const result = await uploadToCloudinary(rawImage, folder, {
+      forceCloudinary: true,
+      ...(geoTag ? { extraTransformations: geoTagOverlay(geoTag) } : {}),
+    });
     res.json({
       success: true,
       data: {
@@ -145,6 +196,7 @@ exports.uploadProofBase64 = async (req, res) => {
         size: null,
         name: (name || 'proof').replace(/\.[^/.]+$/, '') + '.webp',
         type: 'image/webp',
+        ...(geoTag ? { geoTag } : {}),
       },
     });
   } catch (error) {

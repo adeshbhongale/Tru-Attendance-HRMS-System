@@ -102,7 +102,7 @@ const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
         secure: true,
         quality: isRaw ? undefined : 'auto:good',
         fetch_format: isRaw ? undefined : 'auto',
-        transformation: isRaw ? undefined : [{ width: 1600, height: 1600, crop: 'limit' }],
+        transformation: isRaw ? undefined : [{ width: 1600, height: 1600, crop: 'limit' }, ...(options.extraTransformations || [])],
         timeout: 45000,
       });
       return {
@@ -122,7 +122,7 @@ const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
           secure: true,
           quality: isRaw ? undefined : 'auto:good',
           fetch_format: isRaw ? undefined : 'auto',
-          transformation: isRaw ? undefined : [{ width: 1600, height: 1600, crop: 'limit' }],
+          transformation: isRaw ? undefined : [{ width: 1600, height: 1600, crop: 'limit' }, ...(options.extraTransformations || [])],
           timeout: 45000,
         };
         const stream = cloudinary.uploader.upload_stream(

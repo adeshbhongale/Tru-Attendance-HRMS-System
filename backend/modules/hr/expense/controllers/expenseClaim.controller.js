@@ -554,7 +554,11 @@ async function auditSubmission(req, claim, { deadlineOverridden }) {
       description: `${approvalTypeLabel} approval requested from ${ma.approverName || 'approver'}.`,
       metadata: { kind: ma.kind, approver: ma.approver, approverRole: ma.approverRole },
     });
+    // Notify the Reporting Manager (Full Payment / Stock Purchase / Other expense approval request)
+    await require('../services/claimNotifications').notifyApprovalRequested(req, claim);
   }
+  // Notify employees added as accommodation partners on a Lodging claim
+  await require('../services/claimNotifications').notifyAccommodationAdded(req, claim);
   if (deadlineOverridden) {
     await access.audit({ req, action: 'DEADLINE_OVERRIDDEN', claim, description: 'Submission deadline overridden by Super Admin.' });
   }

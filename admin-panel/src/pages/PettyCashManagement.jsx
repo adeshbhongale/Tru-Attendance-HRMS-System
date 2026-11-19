@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   TrendingDown,
   TrendingUp,
+  UserCheck,
   Wallet,
   X
 } from 'lucide-react';
@@ -59,6 +60,28 @@ const getLedgerCategoryBadge = (t) => {
       rowCls: 'bg-emerald-50/20',
       affectsBaseLimit: false,
       tone: 'emerald',
+    };
+  }
+
+  if (src === 'TEAM_LEAD_ADVANCE_IN') {
+    return {
+      label: 'Team Lead Advance (Received)',
+      shortLabel: 'TEAM_LEAD_ADVANCE_IN',
+      cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+      rowCls: 'bg-emerald-50/20',
+      affectsBaseLimit: false,
+      tone: 'emerald',
+    };
+  }
+
+  if (src === 'TEAM_LEAD_ADVANCE_OUT' || cat === 'TEAM_LEAD_ADVANCE') {
+    return {
+      label: 'Team Lead Advance (Given)',
+      shortLabel: 'TEAM_LEAD_ADVANCE_OUT',
+      cls: 'bg-purple-50 text-purple-700 border border-purple-200',
+      rowCls: 'bg-purple-50/20',
+      affectsBaseLimit: false,
+      tone: 'indigo',
     };
   }
 
@@ -178,7 +201,15 @@ const PettyCashManagement = () => {
   // Enhancement Requests tab state
   const [requests, setRequests] = useState([]);
   const [requestStatus, setRequestStatus] = useState('ALL');
+  const [requestProviderFilter, setRequestProviderFilter] = useState('ALL');
   const [loadingRequests, setLoadingRequests] = useState(false);
+
+  // Advance Providers (Team Leads) tab state
+  const [providerWallets, setProviderWallets] = useState([]);
+  const [providerSearch, setProviderSearch] = useState('');
+  const [providerOnlySelected, setProviderOnlySelected] = useState(false);
+  const [loadingProviders, setLoadingProviders] = useState(false);
+  const [togglingProviderId, setTogglingProviderId] = useState(null);
 
   // Return Requests tab state
   const [returnRequests, setReturnRequests] = useState([]);
@@ -240,14 +271,39 @@ const PettyCashManagement = () => {
   const loadRequests = useCallback(async () => {
     try {
       setLoadingRequests(true);
-      const res = await api.get('/expense/petty-cash/admin/requests', { params: { status: requestStatus, limit: 100 } });
+      const res = await api.get('/expense/petty-cash/admin/requests', {
+        params: {
+          status: requestStatus,
+          providerType: requestProviderFilter !== 'ALL' ? requestProviderFilter : undefined,
+          limit: 100,
+        },
+      });
       setRequests(res.data.data || []);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to load enhancement requests');
     } finally {
       setLoadingRequests(false);
     }
-  }, [requestStatus]);
+  }, [requestStatus, requestProviderFilter]);
+
+  const loadProviders = useCallback(async () => {
+    try {
+      setLoadingProviders(true);
+      const res = await api.get('/expense/petty-cash/admin/wallets', {
+        params: {
+          page: 1,
+          limit: 200,
+          search: providerSearch || undefined,
+          advanceProvider: providerOnlySelected ? 'true' : undefined,
+        },
+      });
+      setProviderWallets(res.data.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to load advance providers');
+    } finally {
+      setLoadingProviders(false);
+    }
+  }, [providerSearch, providerOnlySelected]);
 
   const loadReturnRequests = useCallback(async () => {
     try {
@@ -293,6 +349,7 @@ const PettyCashManagement = () => {
   useEffect(() => { if (tab === 'requests') loadRequests(); }, [tab, loadRequests]);
   useEffect(() => { if (tab === 'return_requests') loadReturnRequests(); }, [tab, loadReturnRequests]);
   useEffect(() => { if (tab === 'ledger') loadLedger(1); }, [tab, loadLedger]);
+  useEffect(() => { if (tab === 'advance_providers') loadProviders(); }, [tab, loadProviders]);
 
   const openEmployeeHistory = async (w) => {
     setHistoryModal({ wallet: w, transactions: [], loading: true });
@@ -320,6 +377,27 @@ const PettyCashManagement = () => {
       loadSummary();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to update employee status');
+    }
+  };
+
+  const handleToggleAdvanceProvider = async (w) => {
+    const next = !w.isAdvanceProvider;
+    const empId = w.employee?._id || w.employeeId;
+    const empName = w.employee?.name || 'employee';
+    try {
+      setTogglingProviderId(String(empId));
+      await api.post(`/expense/petty-cash/admin/wallets/${empId}/advance-provider`, { isAdvanceProvider: next });
+      toast.success(
+        next
+          ? `${empName} selected as Petty Cash Advance Provider (Team Lead)`
+          : `${empName} removed from Petty Cash Advance Providers`
+      );
+      loadProviders();
+      loadSummary();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update Advance Provider');
+    } finally {
+      setTogglingProviderId(null);
     }
   };
 
@@ -502,6 +580,7 @@ const PettyCashManagement = () => {
               if (tab === 'requests') loadRequests();
               if (tab === 'return_requests') loadReturnRequests();
               if (tab === 'ledger') loadLedger(ledgerPage.page);
+              if (tab === 'advance_providers') loadProviders();
             }}
             className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 transition-all cursor-pointer"
             title="Refresh"
@@ -564,7 +643,7 @@ const PettyCashManagement = () => {
       </div>
 
       {/* Navigation Tabs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs">
         {[
           {
             id: 'wallets',
@@ -594,6 +673,13 @@ const PettyCashManagement = () => {
             badgeTone: 'slate',
             icon: <History size={15} />,
           },
+          {
+            id: 'advance_providers',
+            label: 'Advance Providers',
+            badge: summary?.advanceProvidersCount ? String(summary.advanceProvidersCount) : null,
+            badgeTone: 'indigo',
+            icon: <UserCheck size={15} />,
+          },
         ].map((t) => {
           const isActive = tab === t.id;
           return (
@@ -615,7 +701,9 @@ const PettyCashManagement = () => {
                         ? 'bg-amber-100 text-amber-700'
                         : t.badgeTone === 'rose'
                           ? 'bg-rose-100 text-rose-700'
-                          : 'bg-slate-100 text-slate-600'
+                          : t.badgeTone === 'indigo'
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : 'bg-slate-100 text-slate-600'
                     }`}
                 >
                   {t.badge}
@@ -807,22 +895,36 @@ const PettyCashManagement = () => {
       {/* TAB 2: ENHANCEMENT REQUESTS */}
       {tab === 'requests' && (
         <div className="bg-white rounded-3xl border border-slate-200 p-5 space-y-4 shadow-xs">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
-              {['ALL', 'PENDING', 'FULFILLED', 'REJECTED'].map((s) => (
+              {[
+                { key: 'ALL', label: 'ALL' },
+                { key: 'PENDING', label: 'PENDING' },
+                { key: 'AWAITING_EMPLOYEE_ACCEPTANCE', label: 'AWAITING ACCEPT' },
+                { key: 'FULFILLED', label: 'FULFILLED' },
+                { key: 'REJECTED', label: 'REJECTED' },
+              ].map((s) => (
                 <button
-                  key={s}
-                  onClick={() => setRequestStatus(s)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${requestStatus === s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  key={s.key}
+                  onClick={() => setRequestStatus(s.key)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${requestStatus === s.key ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                 >
-                  {s}
+                  {s.label}
                 </button>
               ))}
             </div>
-            <p className="text-xs font-bold text-slate-400">
-              Approving an enhancement adds to Petty Cash Balance (Base Limit remains unchanged).
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={requestProviderFilter}
+                onChange={(e) => setRequestProviderFilter(e.target.value)}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700"
+              >
+                <option value="ALL">All Providers</option>
+                <option value="COMPANY">Company (Accounts)</option>
+                <option value="TEAM_LEAD">Team Lead</option>
+              </select>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded-2xl border border-slate-200">
@@ -831,6 +933,7 @@ const PettyCashManagement = () => {
                 <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold tracking-wider text-slate-500">
                   <th className="py-3 px-3.5 whitespace-nowrap">Date</th>
                   <th className="py-3 px-3 whitespace-nowrap">Employee</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Advance Provider</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Base Limit</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Balance</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Requested</th>
@@ -842,63 +945,118 @@ const PettyCashManagement = () => {
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {loadingRequests ? (
-                  <tr><td colSpan={9} className="py-10 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={18} /> Loading…</td></tr>
+                  <tr><td colSpan={10} className="py-10 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={18} /> Loading…</td></tr>
                 ) : requests.length === 0 ? (
-                  <tr><td colSpan={9} className="py-10 text-center text-slate-400 font-bold">No enhancement requests in this status.</td></tr>
+                  <tr><td colSpan={10} className="py-10 text-center text-slate-400 font-bold">No enhancement requests in this status.</td></tr>
                 ) : (
-                  requests.map((r) => (
-                    <tr key={r._id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3 px-3.5 text-slate-500 font-semibold whitespace-nowrap">{fmtDate(r.createdAt)}</td>
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <div className="font-extrabold text-slate-900">{r.employee?.name || '—'}</div>
-                        <div className="text-[11px] text-slate-400 font-semibold">
-                          {r.employee?.employeeIdCode || '—'}{r.employee?.department ? ` · ${r.employee.department}` : ''}
-                        </div>
-                      </td>
-                      <td className="py-3 px-3 text-right font-extrabold text-teal-700 whitespace-nowrap">
-                        {fmtINR(r.walletBaseLimit)}
-                      </td>
-                      <td className={`py-3 px-3 text-right font-extrabold whitespace-nowrap ${r.walletBalance < 0 ? 'text-rose-600' : 'text-slate-700'}`}>
-                        {fmtINR(r.walletBalance)}
-                      </td>
-                      <td className="py-3 px-3 text-right font-extrabold text-emerald-700 whitespace-nowrap">+{fmtINR(r.requestedAmount)}</td>
-                      <td className="py-3 px-3 text-right font-bold text-emerald-700 whitespace-nowrap">{r.approvedAmount ? `+${fmtINR(r.approvedAmount)}` : '—'}</td>
-                      <td className="py-3 px-3 min-w-[180px] max-w-[260px]">
-                        <div className="font-semibold text-slate-800 break-words">{r.reason}</div>
-                        {r.remarks && <div className="text-[11px] text-indigo-600 font-semibold mt-0.5 break-words">Accounts: {r.remarks}</div>}
-                      </td>
-                      <td className="py-3 px-3 text-center whitespace-nowrap">
-                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold whitespace-nowrap ${r.status === 'FULFILLED'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : r.status === 'REJECTED'
-                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                              : 'bg-amber-50 text-amber-700 border border-amber-200'
-                          }`}>
-                          {r.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3.5 text-right whitespace-nowrap">
-                        {r.status === 'PENDING' ? (
-                          <div className="inline-flex items-center gap-1.5">
-                            <button
-                              onClick={() => setRequestModal({ req: r, mode: 'approve', approvedAmount: String(r.requestedAmount), remarks: '' })}
-                              className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-extrabold text-[11px] cursor-pointer whitespace-nowrap transition-colors"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              onClick={() => setRequestModal({ req: r, mode: 'reject', approvedAmount: '', remarks: '' })}
-                              className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg font-extrabold text-[11px] cursor-pointer whitespace-nowrap transition-colors"
-                            >
-                              Reject
-                            </button>
+                  requests.map((r) => {
+                    const isTL = r.providerType === 'TEAM_LEAD';
+                    const tlName = r.providerEmployee?.name || r.providerEmployeeName || 'Team Lead';
+                    const tlCode = r.providerEmployee?.employeeIdCode;
+                    const statusLabel = r.status === 'AWAITING_EMPLOYEE_ACCEPTANCE'
+                      ? 'AWAITING ACCEPT'
+                      : (r.status === 'PENDING' && isTL ? 'PENDING (TL)' : r.status);
+                    return (
+                      <tr key={r._id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3 px-3.5 text-slate-500 font-semibold whitespace-nowrap">{fmtDate(r.createdAt)}</td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <div className="font-extrabold text-slate-900">{r.employee?.name || '—'}</div>
+                          <div className="text-[11px] text-slate-400 font-semibold">
+                            {r.employee?.employeeIdCode || '—'}{r.employee?.department ? ` · ${r.employee.department}` : ''}
                           </div>
-                        ) : (
-                          <span className="text-[11px] font-semibold text-slate-400">Reviewed</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          {isTL ? (
+                            <div>
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-purple-50 text-purple-700 border border-purple-200">
+                                Team Lead
+                              </span>
+                              <div className="font-bold text-slate-800 mt-0.5">{tlName}</div>
+                              {tlCode && <div className="text-[10px] text-slate-400 font-semibold">{tlCode}</div>}
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              Company (Accounts)
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right font-extrabold text-teal-700 whitespace-nowrap">
+                          {fmtINR(r.walletBaseLimit)}
+                        </td>
+                        <td className={`py-3 px-3 text-right font-extrabold whitespace-nowrap ${r.walletBalance < 0 ? 'text-rose-600' : 'text-slate-700'}`}>
+                          {fmtINR(r.walletBalance)}
+                        </td>
+                        <td className="py-3 px-3 text-right font-extrabold text-emerald-700 whitespace-nowrap">+{fmtINR(r.requestedAmount)}</td>
+                        <td className="py-3 px-3 text-right font-bold text-emerald-700 whitespace-nowrap">{r.approvedAmount ? `+${fmtINR(r.approvedAmount)}` : '—'}</td>
+                        <td className="py-3 px-3 min-w-[180px] max-w-[260px]">
+                          <div className="font-semibold text-slate-800 break-words">{r.reason}</div>
+                          {isTL && r.tlRemarks && (
+                            <div className="text-[11px] text-purple-700 font-semibold mt-0.5 break-words">Team Lead: {r.tlRemarks}</div>
+                          )}
+                          {!isTL && r.remarks && (
+                            <div className="text-[11px] text-indigo-600 font-semibold mt-0.5 break-words">Accounts: {r.remarks}</div>
+                          )}
+                          {Array.isArray(r.tlProofs) && r.tlProofs.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {r.tlProofs.map((url, idx) => (
+                                <a
+                                  key={`${r._id}_tlp_${idx}`}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded hover:bg-purple-100 whitespace-nowrap"
+                                >
+                                  Proof #{idx + 1}
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-center whitespace-nowrap">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold whitespace-nowrap ${r.status === 'FULFILLED'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : r.status === 'REJECTED'
+                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                : r.status === 'AWAITING_EMPLOYEE_ACCEPTANCE'
+                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}>
+                            {statusLabel}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3.5 text-right whitespace-nowrap">
+                          {!isTL && r.status === 'PENDING' ? (
+                            <div className="inline-flex items-center gap-1.5">
+                              <button
+                                onClick={() => setRequestModal({ req: r, mode: 'approve', approvedAmount: String(r.requestedAmount), remarks: '' })}
+                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-extrabold text-[11px] cursor-pointer whitespace-nowrap transition-colors"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => setRequestModal({ req: r, mode: 'reject', approvedAmount: '', remarks: '' })}
+                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg font-extrabold text-[11px] cursor-pointer whitespace-nowrap transition-colors"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          ) : isTL ? (
+                            <span className="text-[11px] font-semibold text-purple-600">
+                              {r.status === 'PENDING'
+                                ? 'With Team Lead'
+                                : r.status === 'AWAITING_EMPLOYEE_ACCEPTANCE'
+                                  ? 'With Employee'
+                                  : r.status === 'FULFILLED'
+                                    ? 'Transferred'
+                                    : 'Rejected by TL'}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-semibold text-slate-400">Reviewed</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -1089,6 +1247,7 @@ const PettyCashManagement = () => {
                 <option value="ALL">All Categories</option>
                 <option value="INITIAL_ALLOCATION">Initial Allocation</option>
                 <option value="ALLOCATION_ENHANCEMENT">Enhancement (+Balance)</option>
+                <option value="TEAM_LEAD_ADVANCE">Team Lead Advance</option>
                 <option value="PETTY_CASH_RETURN">Petty Cash Return</option>
                 <option value="EXPENSE_DEDUCTION">Expense Claim Deduction</option>
                 <option value="CLAIM_SETTLEMENT">Claim Settlement</option>
@@ -1114,6 +1273,8 @@ const PettyCashManagement = () => {
                 <option value="ALL">All Sources</option>
                 <option value="TOPUP">Initial Allocation</option>
                 <option value="TOPUP_REQUEST">Enhancement Request Credit</option>
+                <option value="TEAM_LEAD_ADVANCE_IN">Team Lead Advance Received</option>
+                <option value="TEAM_LEAD_ADVANCE_OUT">Team Lead Advance Given</option>
                 <option value="PETTY_CASH_RETURN">Petty Cash Return</option>
                 <option value="CLAIM_SUBMIT">Claim Submission Debit</option>
                 <option value="CLAIM_PAYMENT">Claim Payment Credit</option>
@@ -1255,6 +1416,120 @@ const PettyCashManagement = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* TAB 5: ADVANCE PROVIDERS (TEAM LEADS) */}
+      {tab === 'advance_providers' && (
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 space-y-4 shadow-xs">
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-extrabold text-slate-900">Petty Cash Advance Providers (Team Leads)</h2>
+              <p className="text-xs font-semibold text-slate-500 mt-0.5">
+                Select employees who can provide petty cash advances to other employees (and to other Team Leads) from their own petty cash balance. Selected providers appear in the mobile Enhancement Request form and in the Enhancement Requests tab.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={providerSearch}
+                onChange={(e) => setProviderSearch(e.target.value)}
+                placeholder="Search employee name, ID or department…"
+                className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setProviderOnlySelected(false)}
+                className={`px-3 py-2 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${!providerOnlySelected ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                All Employees
+              </button>
+              <button
+                onClick={() => setProviderOnlySelected(true)}
+                className={`px-3 py-2 rounded-xl text-xs font-extrabold cursor-pointer transition-colors ${providerOnlySelected ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                Selected Providers ({summary?.advanceProvidersCount || 0})
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-200">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold tracking-wider text-slate-500">
+                  <th className="py-3 px-3.5 whitespace-nowrap">Employee</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Department</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Designation</th>
+                  <th className="py-3 px-3 text-center whitespace-nowrap">Wallet Status</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Base Limit</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Current Balance</th>
+                  <th className="py-3 px-3.5 text-right whitespace-nowrap">Advance Provider (Team Lead)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {loadingProviders ? (
+                  <tr>
+                    <td colSpan={7} className="py-10 text-center text-slate-400">
+                      <Loader2 className="animate-spin inline mr-2" size={18} /> Loading employees…
+                    </td>
+                  </tr>
+                ) : providerWallets.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-10 text-center text-slate-400 font-bold">
+                      {providerOnlySelected ? 'No Advance Providers selected yet.' : 'No matching employees found.'}
+                    </td>
+                  </tr>
+                ) : (
+                  providerWallets.map((w) => {
+                    const empId = String(w.employee?._id || w.employeeId);
+                    const busy = togglingProviderId === empId;
+                    return (
+                      <tr key={w._id} className={`hover:bg-slate-50/80 transition-colors ${w.isAdvanceProvider ? 'bg-indigo-50/30' : ''}`}>
+                        <td className="py-3 px-3.5 whitespace-nowrap">
+                          <div className="font-extrabold text-slate-900">{w.employee?.name || '—'}</div>
+                          <div className="text-[11px] font-semibold text-slate-400">{w.employee?.employeeIdCode || '—'}</div>
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-slate-600 whitespace-nowrap">
+                          {w.employee?.department || '—'}
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-slate-600 whitespace-nowrap">
+                          {w.employee?.designation || '—'}
+                        </td>
+                        <td className="py-3 px-3 text-center whitespace-nowrap">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold ${w.enabled ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                            {w.enabled ? 'ON' : 'OFF'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right font-extrabold text-teal-700 whitespace-nowrap">
+                          {fmtINR(w.baseLimit)}
+                        </td>
+                        <td className={`py-3 px-3 text-right font-extrabold whitespace-nowrap ${w.negative ? 'text-rose-600' : 'text-slate-900'}`}>
+                          {fmtINR(w.balance)}
+                        </td>
+                        <td className="py-3 px-3.5 text-right whitespace-nowrap">
+                          <button
+                            disabled={busy}
+                            onClick={() => handleToggleAdvanceProvider(w)}
+                            className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold cursor-pointer transition-all whitespace-nowrap ${w.isAdvanceProvider
+                                ? 'bg-indigo-600 hover:bg-rose-600 text-white shadow-xs'
+                                : 'bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-700 border border-slate-200'
+                              }`}
+                          >
+                            {busy ? 'Saving…' : w.isAdvanceProvider ? 'Selected ✓ (Click to Remove)' : 'Select as Team Lead'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

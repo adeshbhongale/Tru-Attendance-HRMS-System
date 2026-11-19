@@ -285,9 +285,32 @@ export default function ExpenseClaimDetailContent({ claim }) {
           : allowAmt;
 
     const item0 = ecItems0[idx] || {};
+    const isSingleEntry = (rawEntries.length > 0 ? rawEntries.length : ecItems0.length) <= 1;
+    const pickNonEmpty = (...lists) => lists.find((arr) => Array.isArray(arr) && arr.length > 0) || [];
     return {
       ...item0,
       ...entry,
+      numberPlatePhotos: pickNonEmpty(
+        entry.numberPlatePhotos,
+        item0.numberPlatePhotos,
+        isSingleEntry ? claim.numberPlatePhotos : null
+      ),
+      startKmPhotos: pickNonEmpty(
+        entry.startKmPhotos,
+        item0.startKmPhotos,
+        isSingleEntry ? claim.startKmPhotos : null
+      ),
+      endKmPhotos: pickNonEmpty(
+        entry.endKmPhotos,
+        item0.endKmPhotos,
+        isSingleEntry ? claim.endKmPhotos : null
+      ),
+      serviceReports: pickNonEmpty(
+        entry.serviceReports,
+        item0.serviceReports,
+        item0.conveyanceKm?.serviceReports,
+        isSingleEntry ? claim.serviceReports : null
+      ),
       requestedAmount: reqAmt,
       allowedAmount: allowAmt,
       excessAmount: excAmt,
@@ -1275,7 +1298,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
                             </div>
                           )}
 
-                          {isConveyance && vehiclePhotos.length > 0 && (
+                          {vehiclePhotos.length > 0 && (
                             <div className="pt-1">
                               <p className="text-xs font-bold text-slate-600">
                                 🚗 Vehicle Number Plate Photo ({vehiclePhotos.length})
@@ -1284,7 +1307,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
                             </div>
                           )}
 
-                          {isConveyance && startKmPhotos.length > 0 && (
+                          {startKmPhotos.length > 0 && (
                             <div className="pt-1">
                               <p className="text-xs font-bold text-slate-600">
                                 🔢 Start KM Odometer Photo ({startKmPhotos.length})
@@ -1293,7 +1316,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
                             </div>
                           )}
 
-                          {isConveyance && endKmPhotos.length > 0 && (
+                          {endKmPhotos.length > 0 && (
                             <div className="pt-1">
                               <p className="text-xs font-bold text-slate-600">
                                 🏁 End KM Odometer Photo ({endKmPhotos.length})
@@ -1302,7 +1325,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
                             </div>
                           )}
 
-                          {isConveyance && entryServiceReports.length > 0 && (
+                          {entryServiceReports.length > 0 && (
                             <div className="pt-1">
                               <p className="text-xs font-bold text-slate-600">
                                 📑 Service Call Report ({entryServiceReports.length})

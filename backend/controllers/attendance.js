@@ -318,7 +318,7 @@ exports.punchIn = async (req, res, next) => {
 
 exports.punchOut = async (req, res, next) => {
   try {
-    const { latitude, longitude, address, selfie } = req.body;
+    const { latitude, longitude, address, selfie, earlyPunchOutReason } = req.body;
     const userId = req.user.id;
 
     // Parallelize DB lookups (Selfie upload moved to background)
@@ -358,8 +358,9 @@ exports.punchOut = async (req, res, next) => {
 
     const outOutside = !isInsideAnyLocation;
 
+    const punchOutTime = new Date();
     attendance.punchOut = {
-      time: new Date(),
+      time: punchOutTime,
       location: { latitude, longitude, address },
       selfie: (selfie && typeof selfie === 'string' && selfie.startsWith('http')) ? selfie : null,
       isOutside: outOutside
@@ -383,6 +384,43 @@ exports.punchOut = async (req, res, next) => {
       if (halfDayLeave) {
         attendance.halfDaySession = halfDayLeave.session || (halfDayLeave.startTime && halfDayLeave.startTime >= '13:00' ? 'Session 2' : 'Session 1');
       }
+    }
+
+    // Check if employee is punching out early (before shift working end time)
+    const shiftWindow = statsService.getShiftWindow(attendance, user);
+    const isEarlyPunchOut = Boolean(shiftWindow?.end && punchOutTime < shiftWindow.end);
+    const rawManagerId = user?.reportsTo || user?.approver || null;
+    const reportingManagerId = (rawManagerId && String(rawManagerId) !== String(userId)) ? rawManagerId : null;
+    const cleanEarlyReason = String(earlyPunchOutReason || '').trim().slice(0, 500);
+
+    if (isEarlyPunchOut && reportingManagerId) {
+      if (cleanEarlyReason.length < 3) {
+        return res.status(422).json({
+          success: false,
+          requireEarlyReason: true,
+          shiftEndTime: shiftWindow.end,
+          shiftEndLabel: shiftWindow.effectiveEndTime,
+          message: 'You are punching out before your shift end time. Please provide a reason (at least 3 characters).',
+        });
+      }
+      const mgr = await User.findById(reportingManagerId).select('name').lean();
+      attendance.earlyPunchOutRequest = {
+        isEarly: true,
+        reason: cleanEarlyReason,
+        shiftEndTime: shiftWindow.end,
+        status: 'PENDING',
+        approver: reportingManagerId,
+        approverName: mgr?.name || '',
+        requestedAt: punchOutTime,
+      };
+    } else if (isEarlyPunchOut && cleanEarlyReason) {
+      attendance.earlyPunchOutRequest = {
+        isEarly: true,
+        reason: cleanEarlyReason,
+        shiftEndTime: shiftWindow.end,
+        status: 'NONE',
+        requestedAt: punchOutTime,
+      };
     }
 
     // Recalculate status with 90% Rule upon Punch Out
@@ -492,6 +530,47 @@ exports.punchOut = async (req, res, next) => {
       });
     }
 
+    // Notify reporting manager when an early punch-out approval request is created
+    if (attendance.earlyPunchOutRequest?.status === 'PENDING' && attendance.earlyPunchOutRequest?.approver) {
+      setImmediate(async () => {
+        try {
+          const notificationService = require('../services/notificationService');
+          const Notification = require('../models/Notification');
+          const io = req.app.get('io') || null;
+          const outTimeStr = new Date(attendance.punchOut.time).toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+          });
+          const n = await notificationService.createAndSendNotification({
+            title: 'Early Punch-Out Approval Request ⏰',
+            description: `${user?.name || 'An employee'} punched out early at ${outTimeStr}. Reason: ${attendance.earlyPunchOutRequest.reason}. Open Other Approvals to approve or reject.`,
+            type: 'general notification',
+            autoType: null,
+            frequency: 'Instant',
+            targetType: 'Specific Employees',
+            employees: [attendance.earlyPunchOutRequest.approver],
+            companyId: req.tenant?.companyId || attendance.companyId || null,
+            isAuto: true,
+            data: {
+              screen: 'OtherApprovals',
+              attendanceId: String(attendance._id),
+              notifyKind: 'EARLY_PUNCH_OUT_REQUEST',
+            },
+          }, io);
+          if (n?._id) {
+            await Notification.updateOne(
+              { _id: n._id },
+              { $set: { description: 'Sent automatically to the Reporting Manager when an employee punches out before shift end time.' } }
+            ).catch(() => {});
+          }
+        } catch (notifErr) {
+          console.error('[Attendance] Early punch-out manager notification failed:', notifErr.message);
+        }
+      });
+    }
+
     // Notify mobile app via socket to stop background tracking and release WakeLock
     try {
       const io = req.app.get('io');
@@ -559,6 +638,171 @@ exports.getHistory = async (req, res, next) => {
       success: true,
       count: attendance.length,
       data: attendance,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Get early punch-out approval requests assigned to the logged-in Reporting Manager
+// @route   GET /api/attendance/early-punchout-approvals?status=PENDING|DECIDED
+// @access  Private
+exports.getEarlyPunchOutApprovals = async (req, res) => {
+  try {
+    const uid = req.user._id || req.user.id;
+    const companyId = req.tenant?.companyId;
+    const decided = String(req.query.status || 'PENDING').toUpperCase() === 'DECIDED';
+    const base = {
+      ...(companyId ? { companyId } : {}),
+      'earlyPunchOutRequest.approver': uid,
+    };
+    const filter = decided
+      ? { ...base, 'earlyPunchOutRequest.status': { $in: ['APPROVED', 'REJECTED'] } }
+      : { ...base, 'earlyPunchOutRequest.status': 'PENDING' };
+
+    const [rows, pendingCount] = await Promise.all([
+      Attendance.find(filter)
+        .populate('user', 'name employeeIdCode department designation')
+        .select('companyId user date punchIn.time punchOut.time status isHalfDay workingHours shiftInfo earlyPunchOutRequest createdAt updatedAt')
+        .sort(decided ? { 'earlyPunchOutRequest.decidedAt': -1, date: -1 } : { 'earlyPunchOutRequest.requestedAt': 1, date: -1 })
+        .limit(decided ? 100 : 200)
+        .lean(),
+      Attendance.countDocuments({ ...base, 'earlyPunchOutRequest.status': 'PENDING' }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: rows,
+      pendingCount,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Approve or Reject an early punch-out request (Reporting Manager)
+//          Approve -> Attendance status becomes Present; Reject -> Attendance status becomes Half Day
+// @route   POST /api/attendance/early-punchout-approvals/:id/decide
+// @access  Private
+exports.decideEarlyPunchOut = async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({ success: false, message: 'Attendance record not found' });
+    }
+    const action = String(req.body?.action || '').trim().toUpperCase();
+    if (!['APPROVE', 'REJECT'].includes(action)) {
+      return res.status(422).json({ success: false, message: 'action must be APPROVE or REJECT' });
+    }
+    const remarks = String(req.body?.remarks || req.body?.reason || '').trim().slice(0, 500);
+    if (remarks.length < 3) {
+      return res.status(422).json({
+        success: false,
+        message: action === 'APPROVE'
+          ? 'Please enter an approval remark (at least 3 characters).'
+          : 'Please enter a rejection reason (at least 3 characters).',
+      });
+    }
+
+    const uid = req.user._id || req.user.id;
+    const companyId = req.tenant?.companyId;
+    const existing = await Attendance.findOne({ _id: id, ...(companyId ? { companyId } : {}) }).lean();
+    if (!existing || !existing.earlyPunchOutRequest?.isEarly) {
+      return res.status(404).json({ success: false, message: 'Early punch-out request not found' });
+    }
+    if (String(existing.user) === String(uid)) {
+      return res.status(403).json({ success: false, message: 'You cannot approve or reject your own early punch-out request.' });
+    }
+    if (String(existing.earlyPunchOutRequest.approver) !== String(uid)) {
+      return res.status(403).json({ success: false, message: 'Only the employee\'s assigned Reporting Manager can decide this request.' });
+    }
+    if (existing.earlyPunchOutRequest.status !== 'PENDING') {
+      return res.status(409).json({ success: false, message: 'This early punch-out request has already been decided.' });
+    }
+
+    const isApprove = action === 'APPROVE';
+    const now = new Date();
+    const updated = await Attendance.findOneAndUpdate(
+      {
+        _id: existing._id,
+        ...(companyId ? { companyId } : {}),
+        'earlyPunchOutRequest.approver': uid,
+        'earlyPunchOutRequest.status': 'PENDING',
+      },
+      {
+        $set: {
+          status: isApprove ? 'Present' : 'Half Day',
+          isHalfDay: !isApprove,
+          isLate: false,
+          'earlyPunchOutRequest.status': isApprove ? 'APPROVED' : 'REJECTED',
+          'earlyPunchOutRequest.decidedAt': now,
+          'earlyPunchOutRequest.decidedBy': uid,
+          'earlyPunchOutRequest.decidedByName': req.user?.name || '',
+          'earlyPunchOutRequest.remarks': remarks,
+        },
+      },
+      { new: true }
+    ).populate('user', 'name employeeIdCode department designation');
+
+    if (!updated) {
+      return res.status(409).json({ success: false, message: 'This early punch-out request has already been processed.' });
+    }
+
+    try {
+      const trackingCache = require('../services/trackingCache');
+      trackingCache.invalidateAttendance(updated.user?._id || updated.user);
+    } catch (_) { }
+
+    // Notify employee of the manager's decision
+    setImmediate(async () => {
+      try {
+        const notificationService = require('../services/notificationService');
+        const Notification = require('../models/Notification');
+        const io = req.app.get('io') || null;
+        const empId = updated.user?._id || updated.user;
+        const dateStr = new Date(updated.date).toLocaleDateString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+        });
+        const mgrName = req.user?.name || 'Your Reporting Manager';
+        const n = await notificationService.createAndSendNotification({
+          title: isApprove ? 'Early Punch-Out Approved ✅' : 'Early Punch-Out Rejected ❌',
+          description: isApprove
+            ? `${mgrName} approved your early punch-out request for ${dateStr}. Your attendance status is marked as Present. Remark: ${remarks}`
+            : `${mgrName} rejected your early punch-out request for ${dateStr}. Your attendance status is marked as Half Day. Reason: ${remarks}`,
+          type: 'general notification',
+          autoType: null,
+          frequency: 'Instant',
+          targetType: 'Specific Employees',
+          employees: [empId],
+          companyId: companyId || updated.companyId || null,
+          isAuto: true,
+          data: {
+            screen: 'Attendance',
+            attendanceId: String(updated._id),
+            notifyKind: 'EARLY_PUNCH_OUT_DECIDED',
+          },
+        }, io);
+        if (n?._id) {
+          await Notification.updateOne(
+            { _id: n._id },
+            { $set: { description: 'Sent automatically to the employee when their early punch-out request is approved or rejected.' } }
+          ).catch(() => {});
+        }
+      } catch (notifErr) {
+        console.error('[Attendance] Early punch-out decision notification failed:', notifErr.message);
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: isApprove
+        ? 'Early punch-out approved. Attendance marked as Present.'
+        : 'Early punch-out rejected. Attendance marked as Half Day.',
+      data: updated,
     });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

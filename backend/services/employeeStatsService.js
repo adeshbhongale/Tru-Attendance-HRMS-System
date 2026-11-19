@@ -14,6 +14,56 @@ const User = require('../models/User');
 const { getISTDateComponents, createDateFromIST, getStartOfDayIST, getEndOfDayIST } = require('../utils/timezone');
 
 /**
+ * Compute the effective IST shift start and end Dates for an attendance record.
+ * Handles Session 1 / Session 2 half-day leave windows and cross-midnight shifts.
+ */
+const getShiftWindow = (attendance, user) => {
+  if (!attendance || !attendance.punchIn || !attendance.punchIn.time) return null;
+  const liveShift = (user?.shift && typeof user.shift === 'object' && user.shift.startTime && user.shift.endTime) ? user.shift : null;
+  const shift = liveShift || attendance.shiftInfo;
+  if (!shift || typeof shift !== 'object' || !shift.startTime || !shift.endTime) return null;
+  const punchIn = new Date(attendance.punchIn.time);
+  if (isNaN(punchIn.getTime())) return null;
+
+  const halfDaySession = attendance.halfDaySession || null;
+  let effectiveStartTime = shift.startTime || '00:00';
+  let effectiveEndTime = shift.endTime || '00:00';
+  if (halfDaySession === 'Session 1') {
+    effectiveStartTime = shift.secondSession?.startTime || '14:00';
+    effectiveEndTime = shift.secondSession?.endTime || shift.endTime || '18:00';
+  } else if (halfDaySession === 'Session 2') {
+    effectiveStartTime = shift.firstSession?.startTime || shift.startTime || '09:30';
+    effectiveEndTime = shift.firstSession?.endTime || '14:00';
+  }
+
+  const [sH, sM] = String(effectiveStartTime).split(':').map(Number);
+  const [eH, eM] = String(effectiveEndTime).split(':').map(Number);
+  if (isNaN(sH) || isNaN(eH)) return null;
+
+  const pIST = getISTDateComponents(punchIn);
+  const rIST = attendance.date ? getISTDateComponents(new Date(attendance.date)) : { ...pIST };
+  let start = createDateFromIST(rIST.year, rIST.month, rIST.date, sH, sM || 0);
+  let end = createDateFromIST(rIST.year, rIST.month, rIST.date, eH, eM || 0);
+
+  const startIST = getISTDateComponents(start);
+  if (sH < 4 && pIST.hour >= 12) {
+    if (startIST.date === pIST.date && startIST.month === pIST.month && startIST.year === pIST.year) {
+      start = createDateFromIST(startIST.year, startIST.month, startIST.date + 1, sH, sM || 0);
+      end = createDateFromIST(startIST.year, startIST.month, startIST.date + 1, eH, eM || 0);
+    }
+  } else if (eH < sH || (eH === sH && (eM || 0) < (sM || 0))) {
+    if (attendance.date) {
+      end = createDateFromIST(rIST.year, rIST.month, rIST.date + 1, eH, eM || 0);
+    } else if (pIST.hour > sH || (pIST.hour === sH && pIST.minute >= (sM || 0))) {
+      end = createDateFromIST(pIST.year, pIST.month, pIST.date + 1, eH, eM || 0);
+    } else if (pIST.hour < eH || (pIST.hour === eH && pIST.minute < (eM || 0))) {
+      start = createDateFromIST(pIST.year, pIST.month, pIST.date - 1, sH, sM || 0);
+    }
+  }
+  return { start, end, effectiveStartTime, effectiveEndTime };
+};
+
+/**
  * Resolve the "True" status of an attendance record dynamically.
  * Standardizes Half-Day detection across all APIs.
  */
@@ -23,6 +73,15 @@ const resolveStatus = (attendance, user) => {
   // If status was explicitly set via manual admin override, honour it directly
   if (attendance.isManualOverride && attendance.status) {
     return attendance.status;
+  }
+
+  // Early punch-out manager decision overrides automatic early-exit half-day status
+  const epoStatus = attendance.earlyPunchOutRequest?.status;
+  if (epoStatus === 'APPROVED') {
+    return 'Present';
+  }
+  if (epoStatus === 'REJECTED') {
+    return 'Half Day';
   }
 
   // If status is already saved as Present without late or half-day flags, preserve it
@@ -677,4 +736,5 @@ module.exports = {
   getEmployeeFullStats,
   resolveStatus,
   resolveShiftWorkingHours,
+  getShiftWindow,
 };

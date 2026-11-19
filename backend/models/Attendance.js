@@ -163,6 +163,23 @@ const AttendanceSchema = new mongoose.Schema({
       startTime: String,
       endTime: String,
     }
+  },
+  earlyPunchOutRequest: {
+    isEarly: { type: Boolean, default: false },
+    reason: { type: String, default: '', maxlength: 500 },
+    shiftEndTime: { type: Date, default: null },
+    status: {
+      type: String,
+      enum: ['NONE', 'PENDING', 'APPROVED', 'REJECTED'],
+      default: 'NONE',
+    },
+    approver: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    approverName: { type: String, default: '' },
+    requestedAt: { type: Date, default: null },
+    decidedAt: { type: Date, default: null },
+    decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    decidedByName: { type: String, default: '' },
+    remarks: { type: String, default: '', maxlength: 500 },
   }
 }, {
   timestamps: true,
@@ -172,5 +189,6 @@ const AttendanceSchema = new mongoose.Schema({
 // Index for quick search
 AttendanceSchema.index({ companyId: 1, user: 1, date: 1 });
 AttendanceSchema.index({ companyId: 1, date: -1 });
+AttendanceSchema.index({ companyId: 1, 'earlyPunchOutRequest.approver': 1, 'earlyPunchOutRequest.status': 1, date: -1 });
 
 module.exports = mongoose.model('Attendance', AttendanceSchema);

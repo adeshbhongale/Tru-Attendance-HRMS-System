@@ -85,6 +85,17 @@ const getLedgerCategoryBadge = (t) => {
     };
   }
 
+  if (src === 'TEAM_LEAD_RETURN_IN') {
+    return {
+      label: 'Team Lead Return (Received)',
+      shortLabel: 'TEAM_LEAD_RETURN_IN',
+      cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+      rowCls: 'bg-emerald-50/20',
+      affectsBaseLimit: false,
+      tone: 'emerald',
+    };
+  }
+
   if (cat === 'PETTY_CASH_RETURN' || src === 'PETTY_CASH_RETURN') {
     return {
       label: 'Petty Cash Return',
@@ -135,13 +146,16 @@ const getLedgerCategoryBadge = (t) => {
     };
   }
 
+  const isAdd = String(t?.direction || '').toUpperCase() === 'CR';
   return {
-    label: 'Account Adjustment',
-    shortLabel: cat || 'OTHER_ADJUSTMENT',
-    cls: 'bg-slate-100 text-slate-600 border border-slate-200',
+    label: isAdd ? 'Opening Balance' : 'Closing Balance',
+    shortLabel: isAdd ? 'OPENING_BALANCE' : 'CLOSING_BALANCE',
+    cls: isAdd
+      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+      : 'bg-rose-50 text-rose-700 border border-rose-200',
     rowCls: '',
     affectsBaseLimit: false,
-    tone: 'slate',
+    tone: isAdd ? 'emerald' : 'rose',
   };
 };
 
@@ -214,6 +228,7 @@ const PettyCashManagement = () => {
   // Return Requests tab state
   const [returnRequests, setReturnRequests] = useState([]);
   const [returnRequestStatus, setReturnRequestStatus] = useState('ALL');
+  const [returnRecipientFilter, setReturnRecipientFilter] = useState('ALL');
   const [returnSearch, setReturnSearch] = useState('');
   const [loadingReturnRequests, setLoadingReturnRequests] = useState(false);
 
@@ -309,7 +324,12 @@ const PettyCashManagement = () => {
     try {
       setLoadingReturnRequests(true);
       const res = await api.get('/expense/petty-cash/admin/return-requests', {
-        params: { status: returnRequestStatus, search: returnSearch || undefined, limit: 100 },
+        params: {
+          status: returnRequestStatus,
+          recipientType: returnRecipientFilter !== 'ALL' ? returnRecipientFilter : undefined,
+          search: returnSearch || undefined,
+          limit: 100,
+        },
       });
       setReturnRequests(res.data.data || []);
     } catch (err) {
@@ -317,7 +337,7 @@ const PettyCashManagement = () => {
     } finally {
       setLoadingReturnRequests(false);
     }
-  }, [returnRequestStatus, returnSearch]);
+  }, [returnRequestStatus, returnRecipientFilter, returnSearch]);
 
   const loadLedger = useCallback(async (page = 1) => {
     try {
@@ -608,7 +628,6 @@ const PettyCashManagement = () => {
         <StatCard
           title="Total Base Limit"
           value={loadingSummary ? '…' : fmtINR(summary?.totalBaseLimit)}
-          sub={`Allocations: ${fmtINR(summary?.totalAllocation)} · Returns: ${fmtINR(summary?.totalReturn)}`}
           icon={<ShieldCheck size={20} />}
           tone="teal"
         />
@@ -622,14 +641,12 @@ const PettyCashManagement = () => {
         <StatCard
           title="Positive Balances"
           value={loadingSummary ? '…' : fmtINR(summary?.totalPositive)}
-          sub={`Total Credits: ${fmtINR(summary?.totalCredit)}`}
           icon={<TrendingUp size={20} />}
           tone="emerald"
         />
         <StatCard
           title="Negative Balances"
           value={loadingSummary ? '…' : fmtINR(summary?.totalNegative)}
-          sub={`${summary?.negativeWallets || 0} negative · Debits: ${fmtINR(summary?.totalDebit)}`}
           icon={<TrendingDown size={20} />}
           tone="rose"
         />
@@ -1080,15 +1097,26 @@ const PettyCashManagement = () => {
                 </button>
               ))}
             </div>
-            <div className="relative w-full md:w-72">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                value={returnSearch}
-                onChange={(e) => setReturnSearch(e.target.value)}
-                placeholder="Search employee name, ID or department…"
-                className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500"
-              />
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={returnRecipientFilter}
+                onChange={(e) => setReturnRecipientFilter(e.target.value)}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700"
+              >
+                <option value="ALL">All Recipients</option>
+                <option value="COMPANY">Company (Accounts)</option>
+                <option value="TEAM_LEAD">Team Lead</option>
+              </select>
+              <div className="relative w-full md:w-64">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={returnSearch}
+                  onChange={(e) => setReturnSearch(e.target.value)}
+                  placeholder="Search employee name, ID or department…"
+                  className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500"
+                />
+              </div>
             </div>
           </div>
 
@@ -1098,6 +1126,7 @@ const PettyCashManagement = () => {
                 <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-extrabold tracking-wider text-slate-500">
                   <th className="py-3 px-3.5 whitespace-nowrap">Date</th>
                   <th className="py-3 px-3 whitespace-nowrap">Employee</th>
+                  <th className="py-3 px-3 whitespace-nowrap">Return To</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Base Limit</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Balance</th>
                   <th className="py-3 px-3 text-right whitespace-nowrap">Requested</th>
@@ -1110,19 +1139,22 @@ const PettyCashManagement = () => {
               <tbody className="divide-y divide-slate-100 text-xs">
                 {loadingReturnRequests ? (
                   <tr>
-                    <td colSpan={9} className="py-10 text-center text-slate-400">
+                    <td colSpan={10} className="py-10 text-center text-slate-400">
                       <Loader2 className="animate-spin inline mr-2" size={18} /> Loading return requests…
                     </td>
                   </tr>
                 ) : returnRequests.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-10 text-center text-slate-400 font-bold">
+                    <td colSpan={10} className="py-10 text-center text-slate-400 font-bold">
                       No petty cash return requests found in this status.
                     </td>
                   </tr>
                 ) : (
                   returnRequests.map((r) => {
                     const displayStatus = r.status === 'PROCESSED' ? 'APPROVED' : r.status;
+                    const isTL = r.recipientType === 'TEAM_LEAD';
+                    const tlName = r.recipientEmployee?.name || r.recipientEmployeeName || 'Team Lead';
+                    const tlCode = r.recipientEmployee?.employeeIdCode;
                     return (
                       <tr key={r._id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-3 px-3.5 text-slate-500 font-semibold whitespace-nowrap">{fmtDate(r.createdAt)}</td>
@@ -1131,6 +1163,21 @@ const PettyCashManagement = () => {
                           <div className="text-[11px] font-semibold text-slate-400">
                             {r.employee?.employeeIdCode || '—'}{r.employee?.department ? ` · ${r.employee.department}` : ''}
                           </div>
+                        </td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          {isTL ? (
+                            <div>
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-purple-50 text-purple-700 border border-purple-200">
+                                Team Lead
+                              </span>
+                              <div className="font-bold text-slate-800 mt-0.5">{tlName}</div>
+                              {tlCode && <div className="text-[10px] text-slate-400 font-semibold">{tlCode}</div>}
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              Company (Accounts)
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-3 text-right font-extrabold text-teal-700 whitespace-nowrap">{fmtINR(r.walletBaseLimit)}</td>
                         <td className={`py-3 px-3 text-right font-extrabold whitespace-nowrap ${r.walletBalance < 0 ? 'text-rose-600' : 'text-slate-800'}`}>
@@ -1162,8 +1209,8 @@ const PettyCashManagement = () => {
                             </div>
                           )}
                           {r.accountsRemarks && (
-                            <div className="text-[11px] text-indigo-600 font-semibold mt-0.5 break-words">
-                              Accounts: {r.accountsRemarks}
+                            <div className={`text-[11px] font-semibold mt-0.5 break-words ${isTL ? 'text-purple-700' : 'text-indigo-600'}`}>
+                              {isTL ? 'Team Lead' : 'Accounts'}: {r.accountsRemarks}
                             </div>
                           )}
                         </td>
@@ -1174,7 +1221,7 @@ const PettyCashManagement = () => {
                                 ? 'bg-rose-50 text-rose-700 border border-rose-200'
                                 : 'bg-amber-50 text-amber-700 border border-amber-200'
                             }`}>
-                            {displayStatus}
+                            {displayStatus === 'PENDING' && isTL ? 'PENDING (TL)' : displayStatus}
                           </span>
                         </td>
                         <td className="py-3 px-3.5 text-right whitespace-nowrap">
@@ -1192,7 +1239,7 @@ const PettyCashManagement = () => {
                             >
                               <Eye size={12} /> View
                             </button>
-                            {displayStatus === 'PENDING' && (
+                            {!isTL && displayStatus === 'PENDING' && (
                               <>
                                 <button
                                   onClick={() =>
@@ -1221,6 +1268,11 @@ const PettyCashManagement = () => {
                                   Reject
                                 </button>
                               </>
+                            )}
+                            {isTL && (
+                              <span className="text-[11px] font-semibold text-purple-600">
+                                {displayStatus === 'PENDING' ? 'With TL' : displayStatus === 'APPROVED' ? 'Accepted' : 'Rejected'}
+                              </span>
                             )}
                           </div>
                         </td>
@@ -1276,6 +1328,7 @@ const PettyCashManagement = () => {
                 <option value="TEAM_LEAD_ADVANCE_IN">Team Lead Advance Received</option>
                 <option value="TEAM_LEAD_ADVANCE_OUT">Team Lead Advance Given</option>
                 <option value="PETTY_CASH_RETURN">Petty Cash Return</option>
+                <option value="TEAM_LEAD_RETURN_IN">Team Lead Return Received</option>
                 <option value="CLAIM_SUBMIT">Claim Submission Debit</option>
                 <option value="CLAIM_PAYMENT">Claim Payment Credit</option>
                 <option value="CLAIM_REJECT">Claim Rejection Reversal</option>
@@ -1354,7 +1407,9 @@ const PettyCashManagement = () => {
                             {catMeta.label}
                           </span>
                           <div className="text-[10px] text-slate-400 font-bold mt-0.5">
-                            {t.type} ({t.direction}) · {t.source}
+                            {t.type === 'ADJUSTMENT' && (t.source === 'MANUAL' || t.source === 'ALLOCATION_ADJUSTMENT')
+                              ? (t.direction === 'CR' ? 'Opening Balance (CR)' : 'Closing Balance (DR)')
+                              : `${t.type} (${t.direction}) · ${t.source}`}
                           </div>
                         </td>
                         <td className={`py-3 px-3 text-right font-extrabold whitespace-nowrap ${t.direction === 'CR' ? 'text-emerald-600' : 'text-rose-600'}`}>
@@ -1794,6 +1849,14 @@ const PettyCashManagement = () => {
 
               <div className="pt-1 space-y-1">
                 <div className="flex justify-between">
+                  <span className="font-bold text-slate-500">Return To:</span>
+                  <span className={`font-extrabold ${returnModal.req.recipientType === 'TEAM_LEAD' ? 'text-purple-700' : 'text-indigo-700'}`}>
+                    {returnModal.req.recipientType === 'TEAM_LEAD'
+                      ? `Team Lead (${returnModal.req.recipientEmployee?.name || returnModal.req.recipientEmployeeName || 'Team Lead'})`
+                      : 'Company (Accounts)'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
                   <span className="font-bold text-slate-500">Requested Return Amount:</span>
                   <span className="font-extrabold text-rose-600">-{fmtINR(returnModal.req.requestedAmount)}</span>
                 </div>
@@ -1813,7 +1876,9 @@ const PettyCashManagement = () => {
                 </div>
                 {returnModal.req.accountsRemarks && returnModal.mode === 'view' && (
                   <div>
-                    <span className="font-bold text-slate-500">Accounts Remark: </span>
+                    <span className="font-bold text-slate-500">
+                      {returnModal.req.recipientType === 'TEAM_LEAD' ? 'Team Lead Remark: ' : 'Accounts Remark: '}
+                    </span>
                     <span className="font-semibold text-indigo-700">{returnModal.req.accountsRemarks}</span>
                   </div>
                 )}

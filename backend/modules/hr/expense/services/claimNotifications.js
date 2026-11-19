@@ -163,4 +163,245 @@ async function notifyAccommodationAdded(req, claim) {
   }
 }
 
-module.exports = { notifyApprovalRequested, notifyFinanceApprovalRequested, notifyAccommodationAdded };
+async function sendPettyCashNotice({ recipient, companyId, title, description, templateDescription, data, io }) {
+  if (!recipient) return null;
+  const notification = await notificationService.createAndSendNotification({
+    title,
+    description,
+    type: 'general notification',
+    autoType: null,
+    frequency: 'Instant',
+    targetType: 'Specific Employees',
+    employees: [recipient],
+    companyId: idOf(companyId) || null,
+    isAuto: true,
+    data,
+  }, io);
+  if (notification?._id && templateDescription) {
+    await Notification.updateOne({ _id: notification._id }, { $set: { description: templateDescription } }).catch(() => {});
+  }
+  return notification;
+}
+
+/** Employee requested a petty cash advance from a designated Team Lead -> notify Team Lead (opens OtherApprovals). */
+async function notifyTeamLeadAdvanceRequested(req, requestDoc, employeeNameStr) {
+  try {
+    if (!requestDoc || requestDoc.providerType !== 'TEAM_LEAD' || !requestDoc.providerEmployeeId) return;
+    const amt = formatINR((Number(requestDoc.requestedAmountPaise) || 0) / 100);
+    const who = employeeNameStr || req.user?.name || 'An employee';
+    await sendPettyCashNotice({
+      recipient: idOf(requestDoc.providerEmployeeId),
+      companyId: requestDoc.companyId,
+      title: 'Petty Cash Advance Request 💰',
+      description: `${who} requested a petty cash advance of ${amt} from you. Reason: ${requestDoc.reason || '—'}. Open Other Approvals to respond.`,
+      templateDescription: 'Sent automatically to a designated Team Lead when an employee requests a petty cash advance.',
+      data: {
+        screen: 'OtherApprovals',
+        requestId: String(requestDoc._id),
+        notifyKind: 'PETTY_CASH_TL_REQUEST',
+      },
+      io: req.app?.get?.('io') || null,
+    });
+  } catch (err) {
+    console.error('[PettyCash Notification] TL request notify failed:', err.message);
+  }
+}
+
+/** Team Lead submitted advance amount + proof + remark -> notify requesting Employee to accept (opens PettyCashWallet -> Enhancements). */
+async function notifyEmployeeAdvanceSubmitted(req, requestDoc, teamLeadNameStr) {
+  try {
+    if (!requestDoc || !requestDoc.employeeId) return;
+    const amt = formatINR((Number(requestDoc.approvedAmountPaise) || 0) / 100);
+    const who = teamLeadNameStr || req.user?.name || requestDoc.providerEmployeeName || 'Team Lead';
+    await sendPettyCashNotice({
+      recipient: idOf(requestDoc.employeeId),
+      companyId: requestDoc.companyId,
+      title: 'Petty Cash Advance Ready to Accept ✅',
+      description: `${who} sent you a petty cash advance of ${amt}${requestDoc.tlRemarks ? ` (${requestDoc.tlRemarks})` : ''}. Open Petty Cash Wallet to accept and receive it.`,
+      templateDescription: 'Sent automatically to the employee when a Team Lead submits a petty cash advance for acceptance.',
+      data: {
+        screen: 'PettyCashWallet',
+        tab: 'enhance_requests',
+        requestId: String(requestDoc._id),
+        notifyKind: 'PETTY_CASH_TL_SUBMITTED',
+      },
+      io: req.app?.get?.('io') || null,
+    });
+  } catch (err) {
+    console.error('[PettyCash Notification] employee submit notify failed:', err.message);
+  }
+}
+
+/** Team Lead rejected the petty cash advance request -> notify requesting Employee. */
+async function notifyTeamLeadAdvanceRejected(req, requestDoc, teamLeadNameStr) {
+  try {
+    if (!requestDoc || !requestDoc.employeeId) return;
+    const amt = formatINR((Number(requestDoc.requestedAmountPaise) || 0) / 100);
+    const who = teamLeadNameStr || req.user?.name || requestDoc.providerEmployeeName || 'Team Lead';
+    await sendPettyCashNotice({
+      recipient: idOf(requestDoc.employeeId),
+      companyId: requestDoc.companyId,
+      title: 'Petty Cash Advance Request Rejected ❌',
+      description: `${who} rejected your petty cash advance request of ${amt}. Reason: ${requestDoc.tlRemarks || requestDoc.remarks || '—'}.`,
+      templateDescription: 'Sent automatically to the employee when a Team Lead rejects a petty cash advance request.',
+      data: {
+        screen: 'PettyCashWallet',
+        tab: 'enhance_requests',
+        requestId: String(requestDoc._id),
+        notifyKind: 'PETTY_CASH_TL_REJECTED',
+      },
+      io: req.app?.get?.('io') || null,
+    });
+  } catch (err) {
+    console.error('[PettyCash Notification] TL reject notify failed:', err.message);
+  }
+}
+
+/** Employee accepted the Team Lead advance -> notify both Team Lead (deducted) and Employee (credited). */
+async function notifyAdvanceAccepted(req, requestDoc, { empName, tlName } = {}) {
+  try {
+    if (!requestDoc) return;
+    const amt = formatINR((Number(requestDoc.approvedAmountPaise) || 0) / 100);
+    const io = req.app?.get?.('io') || null;
+    const eName = empName || req.user?.name || 'Employee';
+    const tName = tlName || requestDoc.providerEmployeeName || 'Team Lead';
+
+    await Promise.all([
+      requestDoc.providerEmployeeId ? sendPettyCashNotice({
+        recipient: idOf(requestDoc.providerEmployeeId),
+        companyId: requestDoc.companyId,
+        title: 'Petty Cash Advance Accepted 💸',
+        description: `${eName} accepted your petty cash advance of ${amt}. ${amt} has been deducted from your Petty Cash Wallet.`,
+        templateDescription: 'Sent automatically to the Team Lead when an employee accepts a petty cash advance.',
+        data: {
+          screen: 'PettyCashWallet',
+          tab: 'ledger',
+          requestId: String(requestDoc._id),
+          notifyKind: 'PETTY_CASH_TL_ACCEPTED',
+        },
+        io,
+      }) : null,
+      requestDoc.employeeId ? sendPettyCashNotice({
+        recipient: idOf(requestDoc.employeeId),
+        companyId: requestDoc.companyId,
+        title: 'Petty Cash Wallet Credited 💰',
+        description: `${amt} petty cash advance from ${tName} has been credited to your Petty Cash Wallet.`,
+        templateDescription: 'Sent automatically to the employee when a Team Lead petty cash advance is credited.',
+        data: {
+          screen: 'PettyCashWallet',
+          tab: 'ledger',
+          requestId: String(requestDoc._id),
+          notifyKind: 'PETTY_CASH_EMP_CREDITED',
+        },
+        io,
+      }) : null,
+    ]);
+  } catch (err) {
+    console.error('[PettyCash Notification] accept notify failed:', err.message);
+  }
+}
+
+/** Employee requested to return petty cash to a designated Team Lead -> notify Team Lead (opens OtherApprovals). */
+async function notifyTeamLeadReturnRequested(req, returnDoc, employeeNameStr) {
+  try {
+    if (!returnDoc || returnDoc.recipientType !== 'TEAM_LEAD' || !returnDoc.recipientEmployeeId) return;
+    const amt = formatINR((Number(returnDoc.requestedAmountPaise) || 0) / 100);
+    const who = employeeNameStr || req.user?.name || 'An employee';
+    await sendPettyCashNotice({
+      recipient: idOf(returnDoc.recipientEmployeeId),
+      companyId: returnDoc.companyId,
+      title: 'Petty Cash Return Request ↩️',
+      description: `${who} sent a petty cash return request of ${amt} to you with payment proof. Open Other Approvals to accept or reject.`,
+      templateDescription: 'Sent automatically to a designated Team Lead when an employee submits a petty cash return request to them.',
+      data: {
+        screen: 'OtherApprovals',
+        requestId: String(returnDoc._id),
+        notifyKind: 'PETTY_CASH_TL_RETURN_REQUEST',
+      },
+      io: req.app?.get?.('io') || null,
+    });
+  } catch (err) {
+    console.error('[PettyCash Notification] TL return request notify failed:', err.message);
+  }
+}
+
+/** Team Lead accepted the petty cash return -> notify both Employee (deducted) and Team Lead (credited). */
+async function notifyReturnAcceptedByTeamLead(req, returnDoc, { empName, tlName } = {}) {
+  try {
+    if (!returnDoc) return;
+    const amt = formatINR((Number(returnDoc.approvedAmountPaise || returnDoc.requestedAmountPaise) || 0) / 100);
+    const io = req.app?.get?.('io') || null;
+    const eName = empName || 'Employee';
+    const tName = tlName || req.user?.name || returnDoc.recipientEmployeeName || 'Team Lead';
+    await Promise.all([
+      returnDoc.employeeId ? sendPettyCashNotice({
+        recipient: idOf(returnDoc.employeeId),
+        companyId: returnDoc.companyId,
+        title: 'Petty Cash Return Accepted ✅',
+        description: `${tName} accepted your petty cash return of ${amt}. ${amt} has been deducted from your Petty Cash Wallet.`,
+        templateDescription: 'Sent automatically to the employee when a Team Lead accepts their petty cash return request.',
+        data: {
+          screen: 'PettyCashWallet',
+          tab: 'ledger',
+          requestId: String(returnDoc._id),
+          notifyKind: 'PETTY_CASH_TL_RETURN_ACCEPTED',
+        },
+        io,
+      }) : null,
+      returnDoc.recipientEmployeeId ? sendPettyCashNotice({
+        recipient: idOf(returnDoc.recipientEmployeeId),
+        companyId: returnDoc.companyId,
+        title: 'Petty Cash Return Credited 💰',
+        description: `${amt} returned by ${eName} has been added to your Petty Cash Wallet.`,
+        templateDescription: 'Sent automatically to the Team Lead when a petty cash return from an employee is credited.',
+        data: {
+          screen: 'PettyCashWallet',
+          tab: 'ledger',
+          requestId: String(returnDoc._id),
+          notifyKind: 'PETTY_CASH_TL_RETURN_CREDITED',
+        },
+        io,
+      }) : null,
+    ]);
+  } catch (err) {
+    console.error('[PettyCash Notification] TL return accept notify failed:', err.message);
+  }
+}
+
+/** Team Lead rejected the petty cash return -> notify requesting Employee. */
+async function notifyTeamLeadReturnRejected(req, returnDoc, tlName) {
+  try {
+    if (!returnDoc || !returnDoc.employeeId) return;
+    const amt = formatINR((Number(returnDoc.requestedAmountPaise) || 0) / 100);
+    const who = tlName || req.user?.name || returnDoc.recipientEmployeeName || 'Team Lead';
+    await sendPettyCashNotice({
+      recipient: idOf(returnDoc.employeeId),
+      companyId: returnDoc.companyId,
+      title: 'Petty Cash Return Rejected ❌',
+      description: `${who} rejected your petty cash return request of ${amt}. Reason: ${returnDoc.reviewRemarks || '—'}.`,
+      templateDescription: 'Sent automatically to the employee when a Team Lead rejects a petty cash return request.',
+      data: {
+        screen: 'PettyCashWallet',
+        tab: 'return_requests',
+        requestId: String(returnDoc._id),
+        notifyKind: 'PETTY_CASH_TL_RETURN_REJECTED',
+      },
+      io: req.app?.get?.('io') || null,
+    });
+  } catch (err) {
+    console.error('[PettyCash Notification] TL return reject notify failed:', err.message);
+  }
+}
+
+module.exports = {
+  notifyApprovalRequested,
+  notifyFinanceApprovalRequested,
+  notifyAccommodationAdded,
+  notifyTeamLeadAdvanceRequested,
+  notifyEmployeeAdvanceSubmitted,
+  notifyTeamLeadAdvanceRejected,
+  notifyAdvanceAccepted,
+  notifyTeamLeadReturnRequested,
+  notifyReturnAcceptedByTeamLead,
+  notifyTeamLeadReturnRejected,
+};

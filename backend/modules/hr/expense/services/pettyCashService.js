@@ -214,8 +214,9 @@ function deriveTransactionCategory(p, baseLimitBeforePaise, totalAllocationBefor
       : 'ALLOCATION_ENHANCEMENT';
   }
   if (p.source === 'TOPUP_REQUEST') return 'ALLOCATION_ENHANCEMENT';
+  if (p.source === 'TEAM_LEAD_ADVANCE_IN' || p.source === 'TEAM_LEAD_ADVANCE_OUT') return 'TEAM_LEAD_ADVANCE';
   if (p.source === 'ALLOCATION_ADJUSTMENT') return 'ALLOCATION_ADJUSTMENT';
-  if (p.source === 'PETTY_CASH_RETURN') return 'PETTY_CASH_RETURN';
+  if (p.source === 'PETTY_CASH_RETURN' || p.source === 'TEAM_LEAD_RETURN_IN') return 'PETTY_CASH_RETURN';
   if (['CLAIM_SUBMIT', 'CLAIM_EDIT', 'CLAIM_REJECT', 'CLAIM_DELETE'].includes(p.source)) return 'EXPENSE_DEDUCTION';
   if (p.source === 'CLAIM_PAYMENT') return 'CLAIM_SETTLEMENT';
   return 'OTHER_ADJUSTMENT';
@@ -273,12 +274,31 @@ async function postTransaction(p, session) {
   if (debitDelta) inc.totalDebitPaise = debitDelta;
   const updateOp = { $inc: inc };
   if (p.autoEnable) updateOp.$set = { enabled: true };
+  const walletFilter = { companyId, employeeId, ...(p.requireActive ? { status: 'ACTIVE' } : {}) };
+  if (Number.isInteger(p.minBalancePaise)) {
+    walletFilter.balancePaise = { $gte: p.minBalancePaise };
+  }
   const wallet = await PettyCashWallet.findOneAndUpdate(
-    { companyId, employeeId, ...(p.requireActive ? { status: 'ACTIVE' } : {}) },
+    walletFilter,
     updateOp,
     { new: true, session: session || undefined }
   );
-  if (!wallet) throw new PettyCashError(404, 'Petty cash wallet not found for this employee.');
+  if (!wallet) {
+    if (Number.isInteger(p.minBalancePaise)) {
+      const current = await PettyCashWallet.findOne({ companyId, employeeId }).session(session || null).lean();
+      if (current) {
+        if (p.requireActive && current.status !== 'ACTIVE') {
+          throw new PettyCashError(409, 'Petty cash wallet is currently frozen and cannot be debited.');
+        }
+        throw new PettyCashError(
+          422,
+          p.insufficientBalanceMessage ||
+            `Insufficient petty cash balance (${rupee(current.balancePaise)}). Transfer of ${rupee(p.minBalancePaise)} would make the balance negative.`
+        );
+      }
+    }
+    throw new PettyCashError(404, 'Petty cash wallet not found for this employee.');
+  }
 
   const baseLimitAfterPaise = wallet.baseLimitPaise || 0;
   const baseLimitBeforePaise = baseLimitAfterPaise - baseLimitDelta;
@@ -286,7 +306,8 @@ async function postTransaction(p, session) {
   const transactionCategory = deriveTransactionCategory(p, baseLimitBeforePaise, totalAllocBeforePaise);
 
   const user = p.req?.user;
-  const [txn] = await PettyCashTransaction.create([{
+  const txnDoc = {
+    ...(p._id ? { _id: oid(p._id) } : {}),
     companyId,
     walletId: wallet._id,
     employeeId,
@@ -304,6 +325,8 @@ async function postTransaction(p, session) {
     paymentReference: p.paymentReference || '',
     requestId: p.requestId || null,
     returnRequestId: p.returnRequestId || null,
+    counterpartyEmployeeId: p.counterpartyEmployeeId ? oid(p.counterpartyEmployeeId) : null,
+    pairedTxnId: p.pairedTxnId ? oid(p.pairedTxnId) : null,
     reversalOf: p.reversalOf || null,
     idempotencyKey: p.idempotencyKey,
     description: p.description || '',
@@ -311,7 +334,8 @@ async function postTransaction(p, session) {
     performedBy: user?._id || null,
     performedByName: user?.name || (user ? '' : 'System'),
     performedByRole: p.performedByRole || (user ? String(user.role || '') : 'SYSTEM'),
-  }], { session: session || undefined });
+  };
+  const [txn] = await PettyCashTransaction.create([txnDoc], { session: session || undefined });
   return { txn, wallet, duplicate: false };
 }
 
@@ -460,6 +484,21 @@ async function setWalletEnabled(companyId, employeeId, enabled, req) {
   return { wallet };
 }
 
+async function setAdvanceProvider(companyId, employeeId, isAdvanceProvider, req) {
+  await ensureWallet(companyId, employeeId);
+  const flag = !!isAdvanceProvider;
+  const wallet = await PettyCashWallet.findOneAndUpdate(
+    { companyId: oid(companyId), employeeId: oid(employeeId) },
+    {
+      $set: flag
+        ? { isAdvanceProvider: true, advanceProviderSetAt: new Date(), advanceProviderSetBy: req?.user?._id || null }
+        : { isAdvanceProvider: false },
+    },
+    { new: true }
+  ).lean();
+  return { wallet };
+}
+
 /**
  * Directly set/update an employee's Base Limit (Accounts Admin & Super Admin only).
  * Does not modify current Petty Cash Balance.
@@ -509,16 +548,47 @@ async function adjust({ companyId, employeeId, direction, amountPaise, reason, c
     source: isAlloc ? 'ALLOCATION_ADJUSTMENT' : 'MANUAL',
     transactionCategory: isAlloc ? 'ALLOCATION_ADJUSTMENT' : 'OTHER_ADJUSTMENT',
     amountPaise, idempotencyKey: `ADJ:${idempotencyKey}`,
-    description: isAlloc
-      ? `Account credit adjustment of ${rupee(amountPaise)}: ${reason}`
-      : `Manual ${direction === 'CR' ? 'credit' : 'debit'} adjustment of ${rupee(amountPaise)}: ${reason}`,
+    description: direction === 'CR'
+      ? `Opening balance of ${rupee(amountPaise)}: ${reason}`
+      : `Closing balance of ${rupee(amountPaise)}: ${reason}`,
     remarks: reason,
     req,
     autoEnable: isAlloc,
   }, session));
 }
 
-/** Reverse a manual / top-up / allocation / return transaction. Claim-linked rows are managed by the claim workflow. */
+async function reverseSingleTxn(original, { companyId, reason, req, session }) {
+  let origBaseDelta = 0;
+  if (
+    typeof original.baseLimitAfterPaise === 'number'
+    && typeof original.baseLimitBeforePaise === 'number'
+    && (original.baseLimitAfterPaise !== 0 || original.baseLimitBeforePaise !== 0)
+  ) {
+    origBaseDelta = original.baseLimitAfterPaise - original.baseLimitBeforePaise;
+  } else if (original.source === 'TOPUP') {
+    origBaseDelta = original.direction === 'CR' ? original.amountPaise : -original.amountPaise;
+  }
+
+  const res = await postTransaction({
+    companyId, employeeId: original.employeeId,
+    type: 'REVERSAL', direction: original.direction === 'CR' ? 'DR' : 'CR', source: 'REVERSAL',
+    transactionCategory: 'REVERSAL',
+    amountPaise: original.amountPaise,
+    baseLimitDeltaOverride: -origBaseDelta,
+    originalSource: original.source,
+    idempotencyKey: `REV:${original._id}`,
+    reversalOf: original._id,
+    requestId: original.requestId || null,
+    returnRequestId: original.returnRequestId || null,
+    counterpartyEmployeeId: original.counterpartyEmployeeId || null,
+    description: `Reversal of ${original.type} ${rupee(original.amountPaise)}: ${reason}`,
+    remarks: reason, req,
+  }, session);
+  await PettyCashTransaction.updateOne({ _id: original._id, reversedBy: null }, { $set: { reversedBy: res.txn._id } }, { session: session || undefined });
+  return res;
+}
+
+/** Reverse a manual / top-up / allocation / return / team-lead transfer transaction. Claim-linked rows are managed by the claim workflow. */
 async function reverseTransaction({ companyId, txnId, reason, req }) {
   return runAtomic(async (session) => {
     const original = await PettyCashTransaction.findOne({ _id: oid(txnId), companyId: oid(companyId) }).session(session || null);
@@ -527,46 +597,34 @@ async function reverseTransaction({ companyId, txnId, reason, req }) {
     if (original.claimId) throw new PettyCashError(409, 'Claim-linked transactions are managed by the claim workflow (reject / delete the claim) and cannot be reversed manually.');
     if (original.reversedBy) throw new PettyCashError(409, 'This transaction has already been reversed.');
 
-    let origBaseDelta = 0;
-    if (
-      typeof original.baseLimitAfterPaise === 'number'
-      && typeof original.baseLimitBeforePaise === 'number'
-      && (original.baseLimitAfterPaise !== 0 || original.baseLimitBeforePaise !== 0)
-    ) {
-      origBaseDelta = original.baseLimitAfterPaise - original.baseLimitBeforePaise;
-    } else if (original.source === 'TOPUP') {
-      origBaseDelta = original.direction === 'CR' ? original.amountPaise : -original.amountPaise;
+    const res = await reverseSingleTxn(original, { companyId, reason, req, session });
+
+    // If this transaction is one leg of a Team Lead advance transfer, reverse its paired leg atomically too.
+    let pairedRes = null;
+    if (original.pairedTxnId) {
+      const paired = await PettyCashTransaction.findOne({ _id: original.pairedTxnId, companyId: oid(companyId), reversedBy: null }).session(session || null);
+      if (paired) {
+        pairedRes = await reverseSingleTxn(paired, { companyId, reason, req, session });
+      }
     }
 
-    const res = await postTransaction({
-      companyId, employeeId: original.employeeId,
-      type: 'REVERSAL', direction: original.direction === 'CR' ? 'DR' : 'CR', source: 'REVERSAL',
-      transactionCategory: 'REVERSAL',
-      amountPaise: original.amountPaise,
-      baseLimitDeltaOverride: -origBaseDelta,
-      originalSource: original.source,
-      idempotencyKey: `REV:${original._id}`,
-      reversalOf: original._id,
-      requestId: original.requestId || null,
-      returnRequestId: original.returnRequestId || null,
-      description: `Reversal of ${original.type} ${rupee(original.amountPaise)}: ${reason}`,
-      remarks: reason, req,
-    }, session);
-    await PettyCashTransaction.updateOne({ _id: original._id, reversedBy: null }, { $set: { reversedBy: res.txn._id } }, { session: session || undefined });
     if (original.requestId) {
-      await PettyCashRequest.updateOne({ _id: original.requestId }, { $set: { remarks: `Credit reversed: ${reason}`.slice(0, 500) } }, { session: session || undefined });
+      await PettyCashRequest.updateOne({ _id: original.requestId }, { $set: { remarks: `Transfer/Credit reversed: ${reason}`.slice(0, 500) } }, { session: session || undefined });
     }
     if (original.returnRequestId) {
       await PettyCashReturnRequest.updateOne({ _id: original.returnRequestId }, { $set: { reviewRemarks: `Return reversed: ${reason}`.slice(0, 500) } }, { session: session || undefined });
     }
-    return res;
+    return { ...res, pairedReversal: pairedRes?.txn || null };
   });
 }
 
-/** Credit an approved top-up request (PENDING -> FULFILLED). */
+/** Credit an approved company top-up request (PENDING -> FULFILLED). */
 async function fulfilRequest({ companyId, requestId, approvedAmountPaise, remarks, reference, req }) {
   const request = await PettyCashRequest.findOne({ _id: oid(requestId), companyId: oid(companyId) }).lean();
   if (!request) throw new PettyCashError(404, 'Request not found.');
+  if (request.providerType === 'TEAM_LEAD') {
+    throw new PettyCashError(409, 'Team Lead advance requests are handled by the assigned Team Lead, not Accounts Admin.');
+  }
   if (request.status === 'FULFILLED') throw new PettyCashError(409, 'This request has already been credited.');
   if (request.status !== 'PENDING') throw new PettyCashError(409, 'This request was already reviewed.');
   const amountPaise = approvedAmountPaise || request.requestedAmountPaise;
@@ -574,7 +632,7 @@ async function fulfilRequest({ companyId, requestId, approvedAmountPaise, remark
   return runAtomic(async (session) => {
     const now = new Date();
     const updated = await PettyCashRequest.findOneAndUpdate(
-      { _id: request._id, status: 'PENDING' },
+      { _id: request._id, status: 'PENDING', providerType: { $ne: 'TEAM_LEAD' } },
       {
         $set: {
           status: 'FULFILLED',
@@ -600,6 +658,245 @@ async function fulfilRequest({ companyId, requestId, approvedAmountPaise, remark
     }, session);
     await PettyCashRequest.updateOne({ _id: request._id }, { $set: { creditTxnId: res.txn._id } }, { session: session || undefined });
     return { request: { ...updated.toObject(), creditTxnId: res.txn._id }, ...res };
+  });
+}
+
+// ─── Team Lead Petty Cash Advance Flow ───────────────────────────────────────
+
+/** Available petty cash a Team Lead can transfer without going negative, accounting for unaccepted advances. */
+async function getTeamLeadAvailableAdvance(companyId, teamLeadId, excludeRequestId = null, session = null) {
+  const cid = oid(companyId);
+  const tlId = oid(teamLeadId);
+  const reqFilter = {
+    companyId: cid,
+    providerType: 'TEAM_LEAD',
+    providerEmployeeId: tlId,
+    status: 'AWAITING_EMPLOYEE_ACCEPTANCE',
+  };
+  if (excludeRequestId) reqFilter._id = { $ne: oid(excludeRequestId) };
+  const [wallet, awaitingReqs] = await Promise.all([
+    PettyCashWallet.findOne({ companyId: cid, employeeId: tlId }).session(session || null).lean(),
+    PettyCashRequest.find(reqFilter).select('approvedAmountPaise').session(session || null).lean(),
+  ]);
+  const balancePaise = wallet ? (wallet.balancePaise || 0) : 0;
+  const reservedPaise = (awaitingReqs || []).reduce((sum, r) => sum + (r.approvedAmountPaise || 0), 0);
+  const availablePaise = Math.max(0, balancePaise - reservedPaise);
+  return { wallet, balancePaise, reservedPaise, availablePaise };
+}
+
+/**
+ * Team Lead accepts & submits a petty cash advance (PENDING -> AWAITING_EMPLOYEE_ACCEPTANCE).
+ * Requires positive amount <= TL available balance (never allows TL to go negative), >= 1 proof, and remark.
+ * Wallet balances are NOT moved until the requesting employee accepts.
+ */
+async function submitTeamLeadAdvance({ companyId, requestId, teamLeadId, approvedAmountPaise, proofs, remarks, req }) {
+  const existing = await PettyCashRequest.findOne({ _id: oid(requestId), companyId: oid(companyId) }).lean();
+  if (!existing) throw new PettyCashError(404, 'Enhancement request not found.');
+  if (existing.providerType !== 'TEAM_LEAD') {
+    throw new PettyCashError(409, 'This request is routed to Company (Accounts), not a Team Lead.');
+  }
+  if (String(existing.providerEmployeeId) !== String(teamLeadId)) {
+    throw new PettyCashError(403, 'Only the selected Team Lead can respond to this request.');
+  }
+  if (existing.status !== 'PENDING') {
+    throw new PettyCashError(409, 'This request has already been reviewed.');
+  }
+  if (!Number.isInteger(approvedAmountPaise) || approvedAmountPaise <= 0) {
+    throw new PettyCashError(422, 'Advance amount must be greater than zero.');
+  }
+  const cleanProofs = Array.isArray(proofs)
+    ? proofs.map((p) => (typeof p === 'string' ? p.trim() : String(p?.url || p?.uri || '').trim())).filter(Boolean).slice(0, 10)
+    : [];
+  if (!cleanProofs.length) {
+    throw new PettyCashError(422, 'At least one proof photo is required to send the advance.');
+  }
+  const cleanRemarks = String(remarks || '').trim();
+  if (cleanRemarks.length < 3) {
+    throw new PettyCashError(422, 'Please enter a remark (at least 3 characters).');
+  }
+
+  const { balancePaise, reservedPaise, availablePaise } = await getTeamLeadAvailableAdvance(companyId, teamLeadId, existing._id);
+  if (balancePaise <= 0) {
+    throw new PettyCashError(422, `Your petty cash balance is ${rupee(balancePaise)}. You cannot transfer an advance while your balance is zero or negative.`);
+  }
+  if (availablePaise <= 0) {
+    throw new PettyCashError(422, `Your available petty cash balance is ₹0.00 (${rupee(reservedPaise)} is awaiting employee acceptance).`);
+  }
+  if (approvedAmountPaise > availablePaise) {
+    throw new PettyCashError(422, `Transfer amount (${rupee(approvedAmountPaise)}) cannot exceed your available petty cash balance (${rupee(availablePaise)}) so your balance does not go negative.`);
+  }
+
+  const now = new Date();
+  const updated = await PettyCashRequest.findOneAndUpdate(
+    { _id: existing._id, status: 'PENDING', providerType: 'TEAM_LEAD', providerEmployeeId: oid(teamLeadId) },
+    {
+      $set: {
+        status: 'AWAITING_EMPLOYEE_ACCEPTANCE',
+        approvedAmountPaise,
+        tlProofs: cleanProofs,
+        tlRemarks: cleanRemarks.slice(0, 500),
+        tlSubmittedAt: now,
+        reviewedBy: oid(teamLeadId),
+        reviewedByName: req?.user?.name || existing.providerEmployeeName || '',
+        reviewedAt: now,
+        remarks: cleanRemarks.slice(0, 500),
+      },
+    },
+    { new: true }
+  ).lean();
+  if (!updated) throw new PettyCashError(409, 'This request was already processed.');
+  return { request: updated };
+}
+
+/** Team Lead rejects a petty cash advance request (PENDING -> REJECTED). Moves to History only. */
+async function rejectTeamLeadAdvance({ companyId, requestId, teamLeadId, remarks, req }) {
+  const existing = await PettyCashRequest.findOne({ _id: oid(requestId), companyId: oid(companyId) }).lean();
+  if (!existing) throw new PettyCashError(404, 'Enhancement request not found.');
+  if (existing.providerType !== 'TEAM_LEAD') {
+    throw new PettyCashError(409, 'This request is routed to Company (Accounts), not a Team Lead.');
+  }
+  if (String(existing.providerEmployeeId) !== String(teamLeadId)) {
+    throw new PettyCashError(403, 'Only the selected Team Lead can reject this request.');
+  }
+  if (existing.status !== 'PENDING') {
+    throw new PettyCashError(409, 'This request has already been reviewed.');
+  }
+  const cleanRemarks = String(remarks || '').trim();
+  if (cleanRemarks.length < 3) {
+    throw new PettyCashError(422, 'Please provide a reason for rejecting the request (at least 3 characters).');
+  }
+  const now = new Date();
+  const updated = await PettyCashRequest.findOneAndUpdate(
+    { _id: existing._id, status: 'PENDING', providerType: 'TEAM_LEAD', providerEmployeeId: oid(teamLeadId) },
+    {
+      $set: {
+        status: 'REJECTED',
+        tlRemarks: cleanRemarks.slice(0, 500),
+        reviewedBy: oid(teamLeadId),
+        reviewedByName: req?.user?.name || existing.providerEmployeeName || '',
+        reviewedAt: now,
+        remarks: cleanRemarks.slice(0, 500),
+      },
+    },
+    { new: true }
+  ).lean();
+  if (!updated) throw new PettyCashError(409, 'This request was already processed.');
+  return { request: updated };
+}
+
+/**
+ * Employee accepts a Team Lead advance (AWAITING_EMPLOYEE_ACCEPTANCE -> FULFILLED).
+ * Atomically debits the Team Lead's wallet (guarded so TL balance never goes negative)
+ * and credits the requesting Employee's wallet. Base Limits stay unchanged on both wallets.
+ */
+async function acceptTeamLeadAdvance({ companyId, requestId, employeeId, req }) {
+  const existing = await PettyCashRequest.findOne({ _id: oid(requestId), companyId: oid(companyId) }).lean();
+  if (!existing) throw new PettyCashError(404, 'Enhancement request not found.');
+  if (existing.providerType !== 'TEAM_LEAD' || !existing.providerEmployeeId) {
+    throw new PettyCashError(409, 'Only Team Lead advance requests require employee acceptance.');
+  }
+  if (String(existing.employeeId) !== String(employeeId)) {
+    throw new PettyCashError(403, 'Only the requesting employee can accept this advance.');
+  }
+  if (existing.status === 'FULFILLED' || existing.employeeAcceptedAt) {
+    throw new PettyCashError(409, 'This advance has already been accepted and credited.');
+  }
+  if (existing.status !== 'AWAITING_EMPLOYEE_ACCEPTANCE') {
+    throw new PettyCashError(409, 'This request is not awaiting your acceptance.');
+  }
+  const amountPaise = existing.approvedAmountPaise;
+  if (!Number.isInteger(amountPaise) || amountPaise <= 0) {
+    throw new PettyCashError(422, 'Invalid advance amount.');
+  }
+
+  const User = require('../../../../models/User');
+  const [empUser, tlUser] = await Promise.all([
+    User.findById(existing.employeeId).select('name').lean(),
+    User.findById(existing.providerEmployeeId).select('name').lean(),
+  ]);
+  const empName = empUser?.name || req?.user?.name || 'Employee';
+  const tlName = tlUser?.name || existing.providerEmployeeName || 'Team Lead';
+
+  await ensureWallet(companyId, existing.providerEmployeeId);
+  await ensureWallet(companyId, existing.employeeId);
+
+  const debitTxnId = new mongoose.Types.ObjectId();
+  const creditTxnId = new mongoose.Types.ObjectId();
+
+  return runAtomic(async (session) => {
+    const now = new Date();
+    const updated = await PettyCashRequest.findOneAndUpdate(
+      {
+        _id: existing._id,
+        companyId: oid(companyId),
+        employeeId: oid(employeeId),
+        providerType: 'TEAM_LEAD',
+        status: 'AWAITING_EMPLOYEE_ACCEPTANCE',
+        employeeAcceptedAt: null,
+      },
+      {
+        $set: {
+          status: 'FULFILLED',
+          employeeAcceptedAt: now,
+          creditedAt: now,
+          debitTxnId,
+          creditTxnId,
+        },
+      },
+      { new: true, session: session || undefined }
+    );
+    if (!updated) throw new PettyCashError(409, 'This advance was already accepted or processed.');
+
+    const tlDebit = await postTransaction({
+      _id: debitTxnId,
+      companyId,
+      employeeId: existing.providerEmployeeId,
+      type: 'DEBIT',
+      direction: 'DR',
+      source: 'TEAM_LEAD_ADVANCE_OUT',
+      transactionCategory: 'TEAM_LEAD_ADVANCE',
+      amountPaise,
+      minBalancePaise: amountPaise,
+      insufficientBalanceMessage: `${tlName}'s current petty cash balance is less than ${rupee(amountPaise)}. Transfer cannot make Team Lead's balance negative.`,
+      idempotencyKey: `TL_ADV_DR:${existing._id}`,
+      requestId: existing._id,
+      counterpartyEmployeeId: existing.employeeId,
+      pairedTxnId: creditTxnId,
+      description: `Petty cash advance given to ${empName}: ${rupee(amountPaise)}.`,
+      remarks: existing.tlRemarks || existing.reason,
+      req,
+      requireActive: true,
+    }, session);
+
+    const empCredit = await postTransaction({
+      _id: creditTxnId,
+      companyId,
+      employeeId: existing.employeeId,
+      type: 'CREDIT',
+      direction: 'CR',
+      source: 'TEAM_LEAD_ADVANCE_IN',
+      transactionCategory: 'TEAM_LEAD_ADVANCE',
+      amountPaise,
+      idempotencyKey: `TL_ADV_CR:${existing._id}`,
+      requestId: existing._id,
+      counterpartyEmployeeId: existing.providerEmployeeId,
+      pairedTxnId: debitTxnId,
+      description: `Petty cash advance received from ${tlName}: ${rupee(amountPaise)}.`,
+      remarks: existing.tlRemarks || existing.reason,
+      req,
+      requireActive: true,
+      autoEnable: true,
+    }, session);
+
+    return {
+      request: updated.toObject(),
+      debitTxn: tlDebit.txn,
+      creditTxn: empCredit.txn,
+      tlWallet: tlDebit.wallet,
+      empWallet: empCredit.wallet,
+      empName,
+      tlName,
+    };
   });
 }
 
@@ -639,8 +936,18 @@ async function getAvailableForReturn(companyId, employeeId, excludeReturnRequest
   };
 }
 
-/** Employee creates a Return Request for excess petty cash above Base Limit. Does NOT modify Base Limit or Balance until processed. */
-async function createReturnRequest({ companyId, employeeId, requestedAmountPaise, reason, remarks, attachments = [] }) {
+/** Employee creates a Return Request for excess petty cash above Base Limit (to Company or designated Team Lead). Requires payment proof. */
+async function createReturnRequest({
+  companyId,
+  employeeId,
+  requestedAmountPaise,
+  reason,
+  remarks,
+  attachments = [],
+  recipientType = 'COMPANY',
+  recipientEmployeeId = null,
+  recipientEmployeeName = '',
+}) {
   if (!Number.isInteger(requestedAmountPaise) || requestedAmountPaise <= 0) {
     throw new PettyCashError(422, 'Return amount must be greater than zero.');
   }
@@ -648,11 +955,20 @@ async function createReturnRequest({ companyId, employeeId, requestedAmountPaise
   if (cleanRemarks.length < 3) {
     throw new PettyCashError(422, 'Please provide a remark for returning petty cash (at least 3 characters).');
   }
+  const cleanAttachments = Array.isArray(attachments)
+    ? attachments
+        .map((a) => (typeof a === 'string' ? a.trim() : String(a?.url || a?.uri || '').trim()))
+        .filter(Boolean)
+        .slice(0, 10)
+    : [];
+  if (!cleanAttachments.length) {
+    throw new PettyCashError(422, 'At least one payment proof photo is required to submit a return request.');
+  }
   const cleanReason = String(reason || cleanRemarks).trim();
   const wallet = await ensureWallet(companyId, employeeId);
   const { baseLimitPaise, balancePaise, excessPaise, reservedPaise, availablePaise, openCount } = await getAvailableForReturn(companyId, employeeId);
   if (openCount >= 3) {
-    throw new PettyCashError(409, 'You already have 3 open return requests. Wait for Accounts to review them.');
+    throw new PettyCashError(409, 'You already have 3 open return requests. Wait for them to be reviewed.');
   }
   if (balancePaise <= baseLimitPaise || excessPaise <= 0) {
     throw new PettyCashError(
@@ -672,16 +988,13 @@ async function createReturnRequest({ companyId, employeeId, requestedAmountPaise
       `Return amount (${rupee(requestedAmountPaise)}) exceeds available returnable excess (${rupee(availablePaise)}) after accounting for pending return requests (${rupee(reservedPaise)}).`
     );
   }
-  const cleanAttachments = Array.isArray(attachments)
-    ? attachments
-        .map((a) => (typeof a === 'string' ? a.trim() : String(a?.url || a?.uri || '').trim()))
-        .filter(Boolean)
-        .slice(0, 10)
-    : [];
   const doc = await PettyCashReturnRequest.create({
     companyId: oid(companyId),
     walletId: wallet._id,
     employeeId: oid(employeeId),
+    recipientType: recipientType === 'TEAM_LEAD' ? 'TEAM_LEAD' : 'COMPANY',
+    recipientEmployeeId: recipientType === 'TEAM_LEAD' && recipientEmployeeId ? oid(recipientEmployeeId) : null,
+    recipientEmployeeName: recipientType === 'TEAM_LEAD' ? String(recipientEmployeeName || '').trim() : '',
     requestedAmountPaise,
     reason: cleanReason.slice(0, 500),
     remarks: cleanRemarks.slice(0, 500),
@@ -692,13 +1005,16 @@ async function createReturnRequest({ companyId, employeeId, requestedAmountPaise
 }
 
 /**
- * Approve a Return Request (PENDING -> APPROVED) and deduct the return amount from Petty Cash Balance.
+ * Approve a Company Return Request (PENDING -> APPROVED) and deduct the return amount from Petty Cash Balance.
  * Accounts Admin can cut any positive return amount even if the employee submitted a claim while the return request was pending.
  * Requires a remark (`reviewRemarks`) of at least 3 characters.
  */
 async function approveReturnRequest({ companyId, returnRequestId, approvedAmountPaise, reviewRemarks, reference, req }) {
   const existing = await PettyCashReturnRequest.findOne({ _id: oid(returnRequestId), companyId: oid(companyId) }).lean();
   if (!existing) throw new PettyCashError(404, 'Return request not found.');
+  if (existing.recipientType === 'TEAM_LEAD') {
+    throw new PettyCashError(409, 'Team Lead return requests are handled by the selected Team Lead, not Accounts Admin.');
+  }
   if (existing.status === 'APPROVED' || existing.status === 'PROCESSED' || existing.transactionId) {
     throw new PettyCashError(409, 'This return request has already been approved.');
   }
@@ -722,7 +1038,7 @@ async function approveReturnRequest({ companyId, returnRequestId, approvedAmount
   return runAtomic(async (session) => {
     const now = new Date();
     const updated = await PettyCashReturnRequest.findOneAndUpdate(
-      { _id: existing._id, status: 'PENDING', transactionId: null },
+      { _id: existing._id, status: 'PENDING', transactionId: null, recipientType: { $ne: 'TEAM_LEAD' } },
       {
         $set: {
           status: 'APPROVED',
@@ -767,10 +1083,13 @@ async function approveReturnRequest({ companyId, returnRequestId, approvedAmount
   });
 }
 
-/** Reject a Return Request (PENDING -> REJECTED). Never modifies Base Limit or Balance. */
+/** Reject a Company Return Request (PENDING -> REJECTED). Never modifies Base Limit or Balance. */
 async function rejectReturnRequest({ companyId, returnRequestId, reviewRemarks, req }) {
   const existing = await PettyCashReturnRequest.findOne({ _id: oid(returnRequestId), companyId: oid(companyId) }).lean();
   if (!existing) throw new PettyCashError(404, 'Return request not found.');
+  if (existing.recipientType === 'TEAM_LEAD') {
+    throw new PettyCashError(409, 'Team Lead return requests are handled by the selected Team Lead, not Accounts Admin.');
+  }
   if (existing.status === 'APPROVED' || existing.status === 'PROCESSED' || existing.transactionId) {
     throw new PettyCashError(409, 'An approved return request cannot be rejected.');
   }
@@ -782,12 +1101,182 @@ async function rejectReturnRequest({ companyId, returnRequestId, reviewRemarks, 
     throw new PettyCashError(422, 'Please provide a reason for rejecting the return request.');
   }
   const updated = await PettyCashReturnRequest.findOneAndUpdate(
-    { _id: existing._id, status: 'PENDING', transactionId: null },
+    { _id: existing._id, status: 'PENDING', transactionId: null, recipientType: { $ne: 'TEAM_LEAD' } },
     {
       $set: {
         status: 'REJECTED',
         reviewedBy: req?.user?._id || null,
         reviewedByName: req?.user?.name || '',
+        reviewedAt: new Date(),
+        reviewRemarks: cleanRemarks.slice(0, 500),
+      },
+    },
+    { new: true }
+  ).lean();
+  if (!updated) throw new PettyCashError(409, 'This return request was already reviewed.');
+  return { returnRequest: updated };
+}
+
+/**
+ * Team Lead accepts a Return Request (PENDING -> APPROVED).
+ * Atomically deducts the accepted return amount from the Employee's petty cash balance
+ * and credits it to the Team Lead's petty cash balance. Base Limits stay unchanged on both wallets.
+ */
+async function approveTeamLeadReturnRequest({ companyId, returnRequestId, teamLeadId, approvedAmountPaise, reviewRemarks, req }) {
+  const existing = await PettyCashReturnRequest.findOne({ _id: oid(returnRequestId), companyId: oid(companyId) }).lean();
+  if (!existing) throw new PettyCashError(404, 'Return request not found.');
+  if (existing.recipientType !== 'TEAM_LEAD' || !existing.recipientEmployeeId) {
+    throw new PettyCashError(409, 'This return request is routed to Company (Accounts), not a Team Lead.');
+  }
+  if (String(existing.recipientEmployeeId) !== String(teamLeadId)) {
+    throw new PettyCashError(403, 'Only the selected Team Lead can accept this return request.');
+  }
+  if (existing.status === 'APPROVED' || existing.status === 'PROCESSED' || existing.transactionId) {
+    throw new PettyCashError(409, 'This return request has already been accepted.');
+  }
+  if (existing.status === 'REJECTED') {
+    throw new PettyCashError(409, 'This return request was already rejected.');
+  }
+
+  const cleanRemarks = String(reviewRemarks || '').trim();
+  if (cleanRemarks.length < 3) {
+    throw new PettyCashError(422, 'Please provide a remark for accepting the return request (at least 3 characters).');
+  }
+
+  const amountPaise = approvedAmountPaise !== undefined && approvedAmountPaise !== null
+    ? approvedAmountPaise
+    : existing.requestedAmountPaise;
+  if (!Number.isInteger(amountPaise) || amountPaise <= 0) {
+    throw new PettyCashError(422, 'Accepted return amount must be greater than zero.');
+  }
+
+  const User = require('../../../../models/User');
+  const [empUser, tlUser] = await Promise.all([
+    User.findById(existing.employeeId).select('name').lean(),
+    User.findById(existing.recipientEmployeeId).select('name').lean(),
+  ]);
+  const empName = empUser?.name || 'Employee';
+  const tlName = tlUser?.name || req?.user?.name || existing.recipientEmployeeName || 'Team Lead';
+
+  await ensureWallet(companyId, existing.employeeId);
+  await ensureWallet(companyId, existing.recipientEmployeeId);
+
+  const debitTxnId = new mongoose.Types.ObjectId();
+  const creditTxnId = new mongoose.Types.ObjectId();
+
+  return runAtomic(async (session) => {
+    const now = new Date();
+    const updated = await PettyCashReturnRequest.findOneAndUpdate(
+      {
+        _id: existing._id,
+        companyId: oid(companyId),
+        recipientType: 'TEAM_LEAD',
+        recipientEmployeeId: oid(teamLeadId),
+        status: 'PENDING',
+        transactionId: null,
+      },
+      {
+        $set: {
+          status: 'APPROVED',
+          approvedAmountPaise: amountPaise,
+          processedAmountPaise: amountPaise,
+          reviewedBy: oid(teamLeadId),
+          reviewedByName: tlName,
+          reviewedAt: now,
+          reviewRemarks: cleanRemarks.slice(0, 500),
+          processedBy: oid(teamLeadId),
+          processedByName: tlName,
+          processedAt: now,
+          transactionId: debitTxnId,
+          creditTxnId,
+        },
+      },
+      { new: true, session: session || undefined }
+    );
+    if (!updated) throw new PettyCashError(409, 'This return request has already been processed.');
+
+    const empDebit = await postTransaction({
+      _id: debitTxnId,
+      companyId,
+      employeeId: existing.employeeId,
+      type: 'DEBIT',
+      direction: 'DR',
+      source: 'PETTY_CASH_RETURN',
+      transactionCategory: 'PETTY_CASH_RETURN',
+      amountPaise,
+      idempotencyKey: `RETURN_REQ:${existing._id}`,
+      returnRequestId: existing._id,
+      counterpartyEmployeeId: existing.recipientEmployeeId,
+      pairedTxnId: creditTxnId,
+      description: `Petty cash returned to ${tlName}: ${rupee(amountPaise)} (${existing.remarks || existing.reason}).`,
+      remarks: cleanRemarks.slice(0, 500),
+      req,
+    }, session);
+
+    const tlCredit = await postTransaction({
+      _id: creditTxnId,
+      companyId,
+      employeeId: existing.recipientEmployeeId,
+      type: 'CREDIT',
+      direction: 'CR',
+      source: 'TEAM_LEAD_RETURN_IN',
+      transactionCategory: 'PETTY_CASH_RETURN',
+      amountPaise,
+      idempotencyKey: `TL_RET_CR:${existing._id}`,
+      returnRequestId: existing._id,
+      counterpartyEmployeeId: existing.employeeId,
+      pairedTxnId: debitTxnId,
+      description: `Petty cash return received from ${empName}: ${rupee(amountPaise)}.`,
+      remarks: cleanRemarks.slice(0, 500),
+      req,
+      autoEnable: true,
+    }, session);
+
+    await PettyCashReturnRequest.updateOne(
+      { _id: existing._id },
+      { $set: { walletId: empDebit.txn.walletId } },
+      { session: session || undefined }
+    );
+
+    return {
+      returnRequest: { ...updated.toObject(), walletId: empDebit.txn.walletId },
+      debitTxn: empDebit.txn,
+      creditTxn: tlCredit.txn,
+      empWallet: empDebit.wallet,
+      tlWallet: tlCredit.wallet,
+      empName,
+      tlName,
+    };
+  });
+}
+
+/** Team Lead rejects a Return Request (PENDING -> REJECTED). Moves to History only; no balances changed. */
+async function rejectTeamLeadReturnRequest({ companyId, returnRequestId, teamLeadId, reviewRemarks, req }) {
+  const existing = await PettyCashReturnRequest.findOne({ _id: oid(returnRequestId), companyId: oid(companyId) }).lean();
+  if (!existing) throw new PettyCashError(404, 'Return request not found.');
+  if (existing.recipientType !== 'TEAM_LEAD' || !existing.recipientEmployeeId) {
+    throw new PettyCashError(409, 'This return request is routed to Company (Accounts), not a Team Lead.');
+  }
+  if (String(existing.recipientEmployeeId) !== String(teamLeadId)) {
+    throw new PettyCashError(403, 'Only the selected Team Lead can reject this return request.');
+  }
+  if (existing.status === 'APPROVED' || existing.status === 'PROCESSED' || existing.transactionId) {
+    throw new PettyCashError(409, 'An approved return request cannot be rejected.');
+  }
+  if (existing.status === 'REJECTED') {
+    throw new PettyCashError(409, 'This return request was already rejected.');
+  }
+  const cleanRemarks = String(reviewRemarks || '').trim();
+  if (cleanRemarks.length < 3) {
+    throw new PettyCashError(422, 'Please provide a reason for rejecting the return request (at least 3 characters).');
+  }
+  const updated = await PettyCashReturnRequest.findOneAndUpdate(
+    { _id: existing._id, status: 'PENDING', transactionId: null, recipientType: 'TEAM_LEAD', recipientEmployeeId: oid(teamLeadId) },
+    {
+      $set: {
+        status: 'REJECTED',
+        reviewedBy: oid(teamLeadId),
+        reviewedByName: req?.user?.name || existing.recipientEmployeeName || '',
         reviewedAt: new Date(),
         reviewRemarks: cleanRemarks.slice(0, 500),
       },
@@ -815,15 +1304,22 @@ module.exports = {
   prepareForClaim,
   walletBalanceOf,
   setWalletEnabled,
+  setAdvanceProvider,
   setBaseLimit,
   topUp,
   adjust,
   reverseTransaction,
   fulfilRequest,
+  getTeamLeadAvailableAdvance,
+  submitTeamLeadAdvance,
+  rejectTeamLeadAdvance,
+  acceptTeamLeadAdvance,
   getAvailableForReturn,
   createReturnRequest,
   approveReturnRequest,
   rejectReturnRequest,
+  approveTeamLeadReturnRequest,
+  rejectTeamLeadReturnRequest,
   ACTIVE_EMPLOYEE_FILTER,
   _resetTxnSupport: () => { txnSupported = null; },
 };

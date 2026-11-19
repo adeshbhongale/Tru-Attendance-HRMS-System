@@ -406,10 +406,17 @@ async function migrateOtherPurchaseClaims(companyId, { force = false } = {}) {
       let entriesChanged = false;
       for (const e of claim.entries) {
         if (String(e.otherSubType || '').toUpperCase() === 'PURCHASE') {
-          e.expenseType = 'STOCK_PURCHASE';
-          e.otherSubType = '';
-          entriesChanged = true;
-          changed = true;
+          const eType = String(e.expenseType || '').toUpperCase();
+          if (eType === 'OTHER' || eType === 'OTHER_EXPENSE') {
+            e.expenseType = 'STOCK_PURCHASE';
+            e.otherSubType = '';
+            entriesChanged = true;
+            changed = true;
+          } else if (eType && eType !== 'STOCK_PURCHASE') {
+            e.otherSubType = '';
+            entriesChanged = true;
+            changed = true;
+          }
         }
       }
       if (entriesChanged) claim.markModified('entries');
@@ -419,10 +426,16 @@ async function migrateOtherPurchaseClaims(companyId, { force = false } = {}) {
         if (Array.isArray(ec.items)) {
           for (const it of ec.items) {
             if (String(it.otherSubType || '').toUpperCase() === 'PURCHASE') {
-              it.expenseType = 'STOCK_PURCHASE';
-              it.expenseTypeName = 'Stock Purchase';
-              it.otherSubType = '';
-              changed = true;
+              const itType = String(it.expenseType || '').toUpperCase();
+              if (itType === 'OTHER' || itType === 'OTHER_EXPENSE') {
+                it.expenseType = 'STOCK_PURCHASE';
+                it.expenseTypeName = 'Stock Purchase';
+                it.otherSubType = '';
+                changed = true;
+              } else if (itType && itType !== 'STOCK_PURCHASE') {
+                it.otherSubType = '';
+                changed = true;
+              }
             }
           }
         }

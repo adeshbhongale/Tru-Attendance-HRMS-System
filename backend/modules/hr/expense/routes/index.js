@@ -98,17 +98,27 @@ router.get('/dashboard-analytics', workflow.getExpenseDashboardAnalytics);
 // Petty cash wallet: employee (own wallet only; identity from the auth token)
 router.get('/petty-cash/wallet', petty.myWallet);
 router.get('/petty-cash/transactions', petty.myTransactions);
+router.get('/petty-cash/advance-providers', petty.advanceProviders);
 router.get('/petty-cash/requests', petty.myRequests);
 router.post('/petty-cash/requests', petty.createRequest);
+router.post('/petty-cash/requests/:id/accept', petty.acceptRequest);
 router.get('/petty-cash/return-requests', petty.myReturnRequests);
 router.post('/petty-cash/return-requests', petty.createReturnRequest);
 
+// Petty cash wallet: Team Lead advance & return approvals (mobile Other Approvals)
+router.get('/petty-cash/team-lead/requests', petty.teamLeadRequests);
+router.post('/petty-cash/team-lead/requests/:id/submit', petty.submitTeamLeadAdvance);
+router.post('/petty-cash/team-lead/requests/:id/reject', petty.rejectTeamLeadAdvance);
+router.get('/petty-cash/team-lead/return-requests', petty.teamLeadReturnRequests);
+router.post('/petty-cash/team-lead/return-requests/:id/approve', petty.approveTeamLeadReturnRequest);
+router.post('/petty-cash/team-lead/return-requests/:id/reject', petty.rejectTeamLeadReturnRequest);
 
 // Petty cash wallet: Accounts Admin (role checked in every handler)
 router.get('/petty-cash/admin/summary', petty.adminSummary);
 router.get('/petty-cash/admin/wallets', petty.adminWallets);
 router.get('/petty-cash/admin/wallets/:employeeId', petty.adminWalletDetail);
 router.post('/petty-cash/admin/wallets/:employeeId/enable', petty.setEnabled);
+router.post('/petty-cash/admin/wallets/:employeeId/advance-provider', petty.setAdvanceProvider);
 router.post('/petty-cash/admin/wallets/:employeeId/base-limit', petty.setBaseLimit);
 router.post('/petty-cash/admin/wallets/:employeeId/topup', petty.topUp);
 router.post('/petty-cash/admin/wallets/:employeeId/adjust', petty.adjust);

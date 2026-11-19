@@ -494,12 +494,17 @@ it('19. Base Limit lifecycle: initial allocation, enhancement, allocation adjust
 it('20. Return Request validation: blocks return > excess (balance - baseLimit), blocks when balance <= baseLimit, and rejected request changes nothing', async () => {
   // Currently U.tagged has Base Limit ₹4,000, Balance ₹4,800 -> Returnable excess is ₹800
   let r = await request(app).post('/api/expense/petty-cash/return-requests').set(as('tagged'))
-    .send({ amount: 1000, remarks: 'Trying to return more than excess above base limit' });
+    .send({ amount: 1000, remarks: 'Trying to return more than excess above base limit', attachments: ['https://example.com/proof-x.jpg'] });
   assert.equal(r.status, 422, 'Cannot return more than (balance - baseLimit)');
 
-  // Submit valid return request of ₹800 (= 4800 - 4000) and reject it -> balances stay at Base ₹4,000, Balance ₹4,800
+  // Missing payment proof is blocked for Company return (422)
   r = await request(app).post('/api/expense/petty-cash/return-requests').set(as('tagged'))
-    .send({ amount: 800, remarks: 'Return request to be rejected' });
+    .send({ amount: 500, remarks: 'Missing payment proof test' });
+  assert.equal(r.status, 422, 'Payment proof is required for Company return request');
+
+  // Submit valid return request of ₹800 (= 4800 - 4000) with proof and reject it -> balances stay at Base ₹4,000, Balance ₹4,800
+  r = await request(app).post('/api/expense/petty-cash/return-requests').set(as('tagged'))
+    .send({ amount: 800, remarks: 'Return request to be rejected', attachments: ['https://example.com/proof-rej.jpg'] });
   assert.equal(r.status, 201);
   const rejRes = await request(app).post(`/api/expense/petty-cash/admin/return-requests/${r.body.data._id}/reject`).set(as('accounts'))
     .send({ reason: 'Keep petty cash for next week tour' });
@@ -513,7 +518,7 @@ it('20. Return Request validation: blocks return > excess (balance - baseLimit),
   // Employee submits a PENDING return request of ₹500 (when excess is ₹800), then submits a ₹500 claim so excess drops to ₹300.
   // Accounts Admin still approves and cuts ₹500 without being blocked by the reduced excess!
   const pendingRet = await request(app).post('/api/expense/petty-cash/return-requests').set(as('tagged'))
-    .send({ amount: 500, remarks: 'Returning ₹500 excess cash' });
+    .send({ amount: 500, remarks: 'Returning ₹500 excess cash', attachments: ['https://example.com/proof-500.jpg'] });
   assert.equal(pendingRet.status, 201);
 
   const midClaim = await ExpenseClaim.create({
@@ -614,6 +619,281 @@ it('21. Historical migration: migrateOtherPurchaseClaims converts OTHER+PURCHASE
   const normalDoc = await ExpenseClaim.findById(normalOtherClaim._id).lean();
   assert.equal(normalDoc.claimType, 'OTHER', 'Normal OTHER claim untouched');
   assert.equal(normalDoc.entries[0].expenseType, 'OTHER');
+});
+
+// ── Team Lead Petty Cash Advance Flow ───────────────────────────────────────
+it('22. Advance Providers: designate Team Leads, self-exclusion, TL-to-TL visibility, and Other Approvals badge', async () => {
+  // Designate U.emp and U.emp2 as Advance Providers (Team Leads)
+  let r = await request(app).post(`/api/expense/petty-cash/admin/wallets/${U.emp._id}/advance-provider`).set(as('accounts')).send({ isAdvanceProvider: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.isAdvanceProvider, true);
+
+  r = await request(app).post(`/api/expense/petty-cash/admin/wallets/${U.emp2._id}/advance-provider`).set(as('accounts')).send({ isAdvanceProvider: true });
+  assert.equal(r.status, 200);
+
+  // Employee (non-provider) sees both Team Leads
+  r = await request(app).get('/api/expense/petty-cash/advance-providers').set(as('tagged'));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.length, 2);
+
+  // Team Lead U.emp sees only the OTHER Team Lead U.emp2 (self excluded)
+  r = await request(app).get('/api/expense/petty-cash/advance-providers').set(as('emp'));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.length, 1);
+  assert.equal(String(r.body.data[0]._id), String(U.emp2._id));
+
+  // Self-selection rejected (422)
+  r = await request(app).post('/api/expense/petty-cash/requests').set(as('emp'))
+    .send({ amount: 500, reason: 'Self request attempt', providerType: 'TEAM_LEAD', providerEmployeeId: String(U.emp._id) });
+  assert.equal(r.status, 422);
+
+  // Non-provider selection rejected (422)
+  r = await request(app).post('/api/expense/petty-cash/requests').set(as('emp'))
+    .send({ amount: 500, reason: 'Non-provider attempt', providerType: 'TEAM_LEAD', providerEmployeeId: String(U.tagged._id) });
+  assert.equal(r.status, 422);
+
+  // Configured Team Lead is recognized as approver on /expense/approvals
+  r = await request(app).get('/api/expense/approvals?status=PENDING').set(as('emp2'));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.isApprover, true);
+});
+
+it('23. Team Lead Advance: non-negative balance cap, required proof+remark, accept-only atomic transfer, paired reversal', async () => {
+  // U.emp2 currently has ₹0 balance -> request ₹2,000 from U.emp2
+  const reqRes = await request(app).post('/api/expense/petty-cash/requests').set(as('tagged'))
+    .send({ amount: 2000, reason: 'Field visit advance from TL', providerType: 'TEAM_LEAD', providerEmployeeId: String(U.emp2._id) });
+  assert.equal(reqRes.status, 201, JSON.stringify(reqRes.body));
+  assert.equal(reqRes.body.data.providerType, 'TEAM_LEAD');
+  const reqId = reqRes.body.data._id;
+
+  // Accounts Admin cannot approve or reject a Team Lead request (409)
+  let r = await request(app).post(`/api/expense/petty-cash/admin/requests/${reqId}/approve`).set(as('accounts')).send({ approvedAmount: 2000 });
+  assert.equal(r.status, 409);
+  r = await request(app).post(`/api/expense/petty-cash/admin/requests/${reqId}/reject`).set(as('accounts')).send({ remarks: 'Nope' });
+  assert.equal(r.status, 409);
+
+  // /expense/approvals pendingCount includes the pending TL petty cash request
+  const apprRes = await request(app).get('/api/expense/approvals?status=PENDING').set(as('emp2'));
+  assert.equal(apprRes.body.pettyCashPendingCount, 1);
+
+  // TL has ₹0 balance -> submit blocked (422) so TL never goes negative
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/requests/${reqId}/submit`).set(as('emp2'))
+    .send({ amount: 500, proofs: ['https://example.com/p1.jpg'], remarks: 'Handed over cash' });
+  assert.equal(r.status, 422);
+
+  // Top up TL U.emp2 with ₹1,500
+  await request(app).post(`/api/expense/petty-cash/admin/wallets/${U.emp2._id}/topup`).set(as('accounts'))
+    .send({ amount: 1500, reason: 'TL float', idempotencyKey: key() });
+  const tlBalBefore = await balance(U.emp2);
+  const empBalBefore = await balance(U.tagged);
+  assert.equal(tlBalBefore, 150000);
+
+  // Missing proof -> 422; missing remark -> 422; wrong TL -> 403
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/requests/${reqId}/submit`).set(as('emp2'))
+    .send({ amount: 1500, proofs: [], remarks: 'Cash given' });
+  assert.equal(r.status, 422);
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/requests/${reqId}/submit`).set(as('emp2'))
+    .send({ amount: 1500, proofs: ['https://example.com/p1.jpg'], remarks: '' });
+  assert.equal(r.status, 422);
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/requests/${reqId}/submit`).set(as('emp'))
+    .send({ amount: 1500, proofs: ['https://example.com/p1.jpg'], remarks: 'Not my request' });
+  assert.equal(r.status, 403);
+
+  // Requested ₹2,000 > TL current balance ₹1,500 -> sending ₹2,000 blocked (422)
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/requests/${reqId}/submit`).set(as('emp2'))
+    .send({ amount: 2000, proofs: ['https://example.com/p1.jpg'], remarks: 'Full requested amount' });
+  assert.equal(r.status, 422);
+
+  // Sending current balance ₹1,500 succeeds -> status AWAITING_EMPLOYEE_ACCEPTANCE, balances NOT moved yet
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/requests/${reqId}/submit`).set(as('emp2'))
+    .send({ amount: 1500, proofs: ['https://example.com/p1.jpg'], remarks: 'Transferred available ₹1,500 cash' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.status, 'AWAITING_EMPLOYEE_ACCEPTANCE');
+  assert.equal(await balance(U.emp2), tlBalBefore, 'TL balance unchanged before employee accepts');
+  assert.equal(await balance(U.tagged), empBalBefore, 'Employee balance unchanged before employee accepts');
+
+  // Reserved balance check: TL availableForAdvance is now 0
+  const tlQueue = await request(app).get('/api/expense/petty-cash/team-lead/requests?status=DECIDED').set(as('emp2'));
+  assert.equal(tlQueue.body.walletSummary.availableForAdvance, 0);
+  assert.equal(tlQueue.body.walletSummary.reservedAdvance, 1500);
+
+  // Non-owner cannot accept (403)
+  r = await request(app).post(`/api/expense/petty-cash/requests/${reqId}/accept`).set(as('emp2'));
+  assert.equal(r.status, 403);
+
+  // Employee accepts -> atomic debit TL (-₹1,500) & credit employee (+₹1,500), Base Limits unchanged
+  const tlBaseBefore = (await PettyCashWallet.findOne({ companyId, employeeId: U.emp2._id }).lean()).baseLimitPaise;
+  const empBaseBefore = (await PettyCashWallet.findOne({ companyId, employeeId: U.tagged._id }).lean()).baseLimitPaise;
+  const accRes = await request(app).post(`/api/expense/petty-cash/requests/${reqId}/accept`).set(as('tagged'));
+  assert.equal(accRes.status, 200, JSON.stringify(accRes.body));
+  assert.equal(accRes.body.data.status, 'FULFILLED');
+  assert.equal(await balance(U.emp2), tlBalBefore - 150000);
+  assert.equal(await balance(U.tagged), empBalBefore + 150000);
+  assert.equal((await PettyCashWallet.findOne({ companyId, employeeId: U.emp2._id }).lean()).baseLimitPaise, tlBaseBefore);
+  assert.equal((await PettyCashWallet.findOne({ companyId, employeeId: U.tagged._id }).lean()).baseLimitPaise, empBaseBefore);
+
+  // Double accept blocked (409)
+  const dupAcc = await request(app).post(`/api/expense/petty-cash/requests/${reqId}/accept`).set(as('tagged'));
+  assert.equal(dupAcc.status, 409);
+
+  // Paired reversal: reversing credit leg reverses TL debit leg atomically too
+  const revRes = await request(app).post(`/api/expense/petty-cash/admin/transactions/${accRes.body.credit._id}/reverse`).set(as('admin'))
+    .send({ reason: 'Test paired reversal' });
+  assert.equal(revRes.status, 200);
+  assert.equal(await balance(U.emp2), tlBalBefore, 'TL debit reversed atomically');
+  assert.equal(await balance(U.tagged), empBalBefore, 'Employee credit reversed atomically');
+});
+
+it('24. Team Lead rejection moves request to History only and leaves balances unchanged', async () => {
+  const reqRes = await request(app).post('/api/expense/petty-cash/requests').set(as('tagged'))
+    .send({ amount: 500, reason: 'Request to be rejected by TL', providerType: 'TEAM_LEAD', providerEmployeeId: String(U.emp2._id) });
+  assert.equal(reqRes.status, 201);
+  const reqId = reqRes.body.data._id;
+
+  const rejRes = await request(app).post(`/api/expense/petty-cash/team-lead/requests/${reqId}/reject`).set(as('emp2'))
+    .send({ remarks: 'No cash on hand right now' });
+  assert.equal(rejRes.status, 200);
+  assert.equal(rejRes.body.data.status, 'REJECTED');
+
+  const pending = await request(app).get('/api/expense/petty-cash/team-lead/requests?status=PENDING').set(as('emp2'));
+  assert.ok(!pending.body.data.some((x) => String(x._id) === String(reqId)), 'Rejected request removed from Pending');
+  const history = await request(app).get('/api/expense/petty-cash/team-lead/requests?status=DECIDED').set(as('emp2'));
+  assert.ok(history.body.data.some((x) => String(x._id) === String(reqId) && x.status === 'REJECTED'), 'Rejected request shown in History');
+});
+
+it('25. TL-to-TL enhancement request & atomic balance-drop guard prevents negative TL wallet on acceptance', async () => {
+  // TL1 (U.emp) requests ₹1,000 from TL2 (U.emp2, who has ₹1,500)
+  const tl2BalStart = await balance(U.emp2);
+  const tl1BalStart = await balance(U.emp);
+
+  const reqRes = await request(app).post('/api/expense/petty-cash/requests').set(as('emp'))
+    .send({ amount: 1000, reason: 'TL1 requesting advance from TL2', providerType: 'TEAM_LEAD', providerEmployeeId: String(U.emp2._id) });
+  assert.equal(reqRes.status, 201);
+  const reqId = reqRes.body.data._id;
+
+  // TL2 submits ₹1,000
+  let r = await request(app).post(`/api/expense/petty-cash/team-lead/requests/${reqId}/submit`).set(as('emp2'))
+    .send({ amount: 1000, proofs: ['https://example.com/tl2.jpg'], remarks: 'Sent ₹1,000 to TL1' });
+  assert.equal(r.status, 200);
+
+  // Before TL1 accepts, TL2's balance drops by ₹1,000 (down to ₹500) via an adjustment -> accepting ₹1,000 must fail (422) so TL2 never goes negative!
+  await request(app).post(`/api/expense/petty-cash/admin/wallets/${U.emp2._id}/adjust`).set(as('accounts'))
+    .send({ direction: 'DR', amount: 1000, reason: 'Temporary balance drop test', idempotencyKey: key() });
+  r = await request(app).post(`/api/expense/petty-cash/requests/${reqId}/accept`).set(as('emp'));
+  assert.equal(r.status, 422, 'Acceptance blocked when TL balance dropped below advance amount');
+  assert.equal(await balance(U.emp2), tl2BalStart - 100000, 'TL2 balance stayed non-negative');
+
+  // Restore ₹1,000 to TL2 -> now TL1 accepts successfully!
+  await request(app).post(`/api/expense/petty-cash/admin/wallets/${U.emp2._id}/adjust`).set(as('accounts'))
+    .send({ direction: 'CR', amount: 1000, reason: 'Restore balance', idempotencyKey: key() });
+  r = await request(app).post(`/api/expense/petty-cash/requests/${reqId}/accept`).set(as('emp'));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(await balance(U.emp2), tl2BalStart - 100000, 'TL2 debited ₹1,000');
+  assert.equal(await balance(U.emp), tl1BalStart + 100000, 'TL1 credited ₹1,000');
+});
+
+it('26. Team Lead Return Request: payment proof required, TL accept transfers employee -> TL atomically, TL reject -> History, paired reversal', async () => {
+  // Give U.tagged excess above Base Limit (set Base Limit ₹1,000, ensure balance is ₹2,500 -> excess ₹1,500)
+  await request(app).post(`/api/expense/petty-cash/admin/wallets/${U.tagged._id}/base-limit`).set(as('accounts'))
+    .send({ baseLimit: 1000, reason: 'Set base limit for TL return test' });
+  const taggedStart = await balance(U.tagged);
+  if (taggedStart < 250000) {
+    await request(app).post(`/api/expense/petty-cash/admin/wallets/${U.tagged._id}/adjust`).set(as('accounts'))
+      .send({ direction: 'CR', amount: (250000 - taggedStart) / 100, reason: 'Fund excess for TL return test', idempotencyKey: key() });
+  }
+  const empBalBefore = await balance(U.tagged);
+  const tlBalBefore = await balance(U.emp2);
+  const empBaseBefore = (await PettyCashWallet.findOne({ companyId, employeeId: U.tagged._id }).lean()).baseLimitPaise;
+  const tlBaseBefore = (await PettyCashWallet.findOne({ companyId, employeeId: U.emp2._id }).lean()).baseLimitPaise;
+
+  // Missing proof for Team Lead return -> 422
+  let r = await request(app).post('/api/expense/petty-cash/return-requests').set(as('tagged'))
+    .send({ amount: 1000, remarks: 'Returning cash to TL', recipientType: 'TEAM_LEAD', recipientEmployeeId: String(U.emp2._id) });
+  assert.equal(r.status, 422, 'Payment proof required for Team Lead return');
+
+  // Self-return blocked (422) & non-provider return blocked (422)
+  r = await request(app).post('/api/expense/petty-cash/return-requests').set(as('emp2'))
+    .send({ amount: 100, remarks: 'Self return', attachments: ['https://example.com/p.jpg'], recipientType: 'TEAM_LEAD', recipientEmployeeId: String(U.emp2._id) });
+  assert.equal(r.status, 422);
+  r = await request(app).post('/api/expense/petty-cash/return-requests').set(as('emp'))
+    .send({ amount: 100, remarks: 'Return to non-provider', attachments: ['https://example.com/p.jpg'], recipientType: 'TEAM_LEAD', recipientEmployeeId: String(U.tagged._id) });
+  assert.equal(r.status, 422);
+
+  // Valid return of ₹1,000 with payment proof to Team Lead U.emp2
+  const retRes = await request(app).post('/api/expense/petty-cash/return-requests').set(as('tagged'))
+    .send({
+      amount: 1000,
+      remarks: 'Returning unused advance cash to Team Lead',
+      attachments: ['https://example.com/return-proof-tl.jpg'],
+      recipientType: 'TEAM_LEAD',
+      recipientEmployeeId: String(U.emp2._id),
+    });
+  assert.equal(retRes.status, 201, JSON.stringify(retRes.body));
+  assert.equal(retRes.body.data.recipientType, 'TEAM_LEAD');
+  const retId = retRes.body.data._id;
+
+  // Accounts Admin cannot approve or reject a Team Lead return request (409)
+  r = await request(app).post(`/api/expense/petty-cash/admin/return-requests/${retId}/approve`).set(as('accounts'))
+    .send({ approvedAmount: 1000, remarks: 'Accounts attempt' });
+  assert.equal(r.status, 409);
+  r = await request(app).post(`/api/expense/petty-cash/admin/return-requests/${retId}/reject`).set(as('accounts'))
+    .send({ remarks: 'Accounts reject attempt' });
+  assert.equal(r.status, 409);
+
+  // /expense/approvals includes the pending TL return request in pendingCount
+  const appr = await request(app).get('/api/expense/approvals?status=PENDING').set(as('emp2'));
+  assert.equal(appr.body.pettyCashReturnPendingCount, 1);
+
+  // Wrong TL cannot approve (403); missing remark rejected (422)
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/return-requests/${retId}/approve`).set(as('emp'))
+    .send({ approvedAmount: 1000, remarks: 'Wrong TL' });
+  assert.equal(r.status, 403);
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/return-requests/${retId}/approve`).set(as('emp2'))
+    .send({ approvedAmount: 1000, remarks: '' });
+  assert.equal(r.status, 422);
+
+  // Selected Team Lead U.emp2 accepts ₹1,000 return -> employee debited (-₹1,000), TL credited (+₹1,000), Base Limits unchanged
+  const accRes = await request(app).post(`/api/expense/petty-cash/team-lead/return-requests/${retId}/approve`).set(as('emp2'))
+    .send({ approvedAmount: 1000, remarks: 'Received ₹1,000 cash with receipt' });
+  assert.equal(accRes.status, 200, JSON.stringify(accRes.body));
+  assert.equal(accRes.body.data.status, 'APPROVED');
+  assert.equal(await balance(U.tagged), empBalBefore - 100000, 'Employee balance reduced by ₹1,000');
+  assert.equal(await balance(U.emp2), tlBalBefore + 100000, 'Team Lead balance increased by ₹1,000');
+  assert.equal((await PettyCashWallet.findOne({ companyId, employeeId: U.tagged._id }).lean()).baseLimitPaise, empBaseBefore);
+  assert.equal((await PettyCashWallet.findOne({ companyId, employeeId: U.emp2._id }).lean()).baseLimitPaise, tlBaseBefore);
+
+  // Double accept blocked (409)
+  r = await request(app).post(`/api/expense/petty-cash/team-lead/return-requests/${retId}/approve`).set(as('emp2'))
+    .send({ approvedAmount: 1000, remarks: 'Duplicate' });
+  assert.equal(r.status, 409);
+
+  // Paired reversal: reversing credit leg reverses both Employee debit & TL credit atomically
+  const rev = await request(app).post(`/api/expense/petty-cash/admin/transactions/${accRes.body.credit._id}/reverse`).set(as('admin'))
+    .send({ reason: 'Test paired return reversal' });
+  assert.equal(rev.status, 200);
+  assert.equal(await balance(U.tagged), empBalBefore, 'Employee debit reversed');
+  assert.equal(await balance(U.emp2), tlBalBefore, 'Team Lead credit reversed');
+
+  // Team Lead rejects a return request -> moves to History only, balances unchanged
+  const ret2 = await request(app).post('/api/expense/petty-cash/return-requests').set(as('tagged'))
+    .send({
+      amount: 500,
+      remarks: 'Returning ₹500 to be rejected',
+      attachments: ['https://example.com/return-proof-2.jpg'],
+      recipientType: 'TEAM_LEAD',
+      recipientEmployeeId: String(U.emp2._id),
+    });
+  assert.equal(ret2.status, 201);
+  const rejRes = await request(app).post(`/api/expense/petty-cash/team-lead/return-requests/${ret2.body.data._id}/reject`).set(as('emp2'))
+    .send({ remarks: 'Proof photo unclear' });
+  assert.equal(rejRes.status, 200);
+  assert.equal(rejRes.body.data.status, 'REJECTED');
+  const tlPending = await request(app).get('/api/expense/petty-cash/team-lead/return-requests?status=PENDING').set(as('emp2'));
+  assert.ok(!tlPending.body.data.some((x) => String(x._id) === String(ret2.body.data._id)));
+  const tlHistory = await request(app).get('/api/expense/petty-cash/team-lead/return-requests?status=DECIDED').set(as('emp2'));
+  assert.ok(tlHistory.body.data.some((x) => String(x._id) === String(ret2.body.data._id) && x.status === 'REJECTED'));
+  assert.equal(await balance(U.tagged), empBalBefore);
+  assert.equal(await balance(U.emp2), tlBalBefore);
 });
 
 

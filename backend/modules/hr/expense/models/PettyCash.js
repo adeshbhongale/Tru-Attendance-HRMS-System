@@ -25,10 +25,15 @@ const walletSchema = new mongoose.Schema({
   enabled: { type: Boolean, default: false },
   enabledAt: { type: Date, default: null },
   enabledBy: { type: ObjectId, ref: 'User', default: null },
+  // Designated Team Lead / Advance Provider who can transfer advance petty cash to other employees.
+  isAdvanceProvider: { type: Boolean, default: false },
+  advanceProviderSetAt: { type: Date, default: null },
+  advanceProviderSetBy: { type: ObjectId, ref: 'User', default: null },
   status: { type: String, enum: ['ACTIVE', 'FROZEN'], default: 'ACTIVE' },
 }, { timestamps: true });
 walletSchema.index({ companyId: 1, employeeId: 1 }, { unique: true });
 walletSchema.index({ companyId: 1, balancePaise: 1 });
+walletSchema.index({ companyId: 1, isAdvanceProvider: 1 });
 
 const TXN_TYPES = ['CREDIT', 'DEBIT', 'ADJUSTMENT', 'REVERSAL'];
 const TXN_SOURCES = [
@@ -39,6 +44,9 @@ const TXN_SOURCES = [
   'CLAIM_PAYMENT',
   'TOPUP',
   'TOPUP_REQUEST',
+  'TEAM_LEAD_ADVANCE_IN',
+  'TEAM_LEAD_ADVANCE_OUT',
+  'TEAM_LEAD_RETURN_IN',
   'ALLOCATION_ADJUSTMENT',
   'PETTY_CASH_RETURN',
   'MANUAL',
@@ -48,12 +56,15 @@ const TXN_CATEGORIES = [
   'INITIAL_ALLOCATION',
   'ALLOCATION_ENHANCEMENT',
   'ALLOCATION_ADJUSTMENT',
+  'TEAM_LEAD_ADVANCE',
   'EXPENSE_DEDUCTION',
   'CLAIM_SETTLEMENT',
   'PETTY_CASH_RETURN',
   'REVERSAL',
   'OTHER_ADJUSTMENT',
 ];
+const REQUEST_STATUSES = ['PENDING', 'AWAITING_EMPLOYEE_ACCEPTANCE', 'REJECTED', 'FULFILLED'];
+const REQUEST_PROVIDER_TYPES = ['COMPANY', 'TEAM_LEAD'];
 const RETURN_REQUEST_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'PROCESSED'];
 
 const transactionSchema = new mongoose.Schema({
@@ -74,6 +85,8 @@ const transactionSchema = new mongoose.Schema({
   paymentReference: { type: String, default: '' },
   requestId: { type: ObjectId, ref: 'PettyCashRequest', default: null },
   returnRequestId: { type: ObjectId, ref: 'PettyCashReturnRequest', default: null },
+  counterpartyEmployeeId: { type: ObjectId, ref: 'User', default: null },
+  pairedTxnId: { type: ObjectId, ref: 'PettyCashTransaction', default: null },
   reversalOf: { type: ObjectId, ref: 'PettyCashTransaction', default: null },
   reversedBy: { type: ObjectId, ref: 'PettyCashTransaction', default: null },
   idempotencyKey: { type: String, required: true },
@@ -102,24 +115,36 @@ const blockMutation = function (next) {
 const requestSchema = new mongoose.Schema({
   companyId: { type: ObjectId, ref: 'Company', required: true },
   employeeId: { type: ObjectId, ref: 'User', required: true },
+  providerType: { type: String, enum: REQUEST_PROVIDER_TYPES, default: 'COMPANY' },
+  providerEmployeeId: { type: ObjectId, ref: 'User', default: null },
+  providerEmployeeName: { type: String, default: '' },
   requestedAmountPaise: { ...intPaise, min: 1, required: true },
   approvedAmountPaise: intPaise,
   reason: { type: String, required: true, trim: true, maxlength: 500 },
-  status: { type: String, enum: ['PENDING', 'REJECTED', 'FULFILLED'], default: 'PENDING' },
+  status: { type: String, enum: REQUEST_STATUSES, default: 'PENDING' },
   reviewedBy: { type: ObjectId, ref: 'User', default: null },
   reviewedByName: { type: String, default: '' },
   reviewedAt: { type: Date, default: null },
+  tlProofs: [{ type: String }],
+  tlRemarks: { type: String, default: '', maxlength: 500 },
+  tlSubmittedAt: { type: Date, default: null },
+  employeeAcceptedAt: { type: Date, default: null },
   creditedAt: { type: Date, default: null },
+  debitTxnId: { type: ObjectId, ref: 'PettyCashTransaction', default: null },
   creditTxnId: { type: ObjectId, ref: 'PettyCashTransaction', default: null },
   remarks: { type: String, default: '', maxlength: 500 },
 }, { timestamps: true });
 requestSchema.index({ companyId: 1, status: 1, createdAt: -1 });
+requestSchema.index({ companyId: 1, providerType: 1, providerEmployeeId: 1, status: 1, createdAt: -1 });
 requestSchema.index({ employeeId: 1, createdAt: -1 });
 
 const returnRequestSchema = new mongoose.Schema({
   companyId: { type: ObjectId, ref: 'Company', required: true },
   walletId: { type: ObjectId, ref: 'PettyCashWallet', default: null },
   employeeId: { type: ObjectId, ref: 'User', required: true },
+  recipientType: { type: String, enum: REQUEST_PROVIDER_TYPES, default: 'COMPANY' },
+  recipientEmployeeId: { type: ObjectId, ref: 'User', default: null },
+  recipientEmployeeName: { type: String, default: '' },
   requestedAmountPaise: { ...intPaise, min: 1, required: true },
   approvedAmountPaise: intPaise,
   processedAmountPaise: intPaise,
@@ -136,8 +161,10 @@ const returnRequestSchema = new mongoose.Schema({
   processedAt: { type: Date, default: null },
   paymentReference: { type: String, default: '' },
   transactionId: { type: ObjectId, ref: 'PettyCashTransaction', default: null },
+  creditTxnId: { type: ObjectId, ref: 'PettyCashTransaction', default: null },
 }, { timestamps: true });
 returnRequestSchema.index({ companyId: 1, status: 1, createdAt: -1 });
+returnRequestSchema.index({ companyId: 1, recipientType: 1, recipientEmployeeId: 1, status: 1, createdAt: -1 });
 returnRequestSchema.index({ employeeId: 1, createdAt: -1 });
 
 const model = (name, schema) => mongoose.models[name] || mongoose.model(name, schema);
@@ -149,6 +176,8 @@ module.exports = {
   TXN_TYPES,
   TXN_SOURCES,
   TXN_CATEGORIES,
+  REQUEST_STATUSES,
+  REQUEST_PROVIDER_TYPES,
   RETURN_REQUEST_STATUSES,
 };
 

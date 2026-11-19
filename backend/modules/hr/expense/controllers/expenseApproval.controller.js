@@ -5,6 +5,8 @@ const approvers = require('../services/approverService');
 const { computePayable, formatINR } = require('../services/claimRules');
 const { round2 } = require('../services/calculationEngine');
 const pettyCash = require('../services/pettyCashService');
+const { PettyCashWallet, PettyCashRequest, PettyCashReturnRequest } = require('../models/PettyCash');
+const Attendance = require('../../../../models/Attendance');
 const finance = require('../services/financeApprovalService');
 
 /**
@@ -184,7 +186,21 @@ exports.myApprovals = async (req, res) => {
       }
       : pendingFilter;
 
-    const [claims, pendingCount, isApprover, isFinanceHead, headRec] = await Promise.all([
+    const pcBase = {
+      ...(companyId && companyId !== 'ALL' ? { companyId } : {}),
+      providerType: 'TEAM_LEAD',
+      providerEmployeeId: uid,
+    };
+    const pcRetBase = {
+      ...(companyId && companyId !== 'ALL' ? { companyId } : {}),
+      recipientType: 'TEAM_LEAD',
+      recipientEmployeeId: uid,
+    };
+    const epoBase = {
+      ...(companyId && companyId !== 'ALL' ? { companyId } : {}),
+      'earlyPunchOutRequest.approver': uid,
+    };
+    const [claims, pendingCount, isApprover, isFinanceHead, headRec, pettyCashAdvPendingCount, pettyCashRetPendingCount, earlyPunchOutPendingCount, isAdvanceProvider, hasAnyPcReq, hasAnyPcRetReq, hasAnyEpoReq] = await Promise.all([
       ExpenseClaim.find(filter)
         .populate(POPULATE)
         .sort(decided ? { 'financeApproval.decidedAt': -1, 'managerApproval.decidedAt': -1, updatedAt: -1 } : { submittedAt: 1, createdAt: 1 })
@@ -194,7 +210,15 @@ exports.myApprovals = async (req, res) => {
       approvers.isPotentialApprover(req.user, companyId),
       finance.isFinanceHeadUser(uid, companyId),
       companyId && companyId !== 'ALL' ? finance.getFinanceHeadRecord(companyId).catch(() => null) : Promise.resolve(null),
+      PettyCashRequest.countDocuments({ ...pcBase, status: 'PENDING' }),
+      PettyCashReturnRequest.countDocuments({ ...pcRetBase, status: 'PENDING' }),
+      Attendance.countDocuments({ ...epoBase, 'earlyPunchOutRequest.status': 'PENDING' }),
+      PettyCashWallet.exists({ ...(companyId && companyId !== 'ALL' ? { companyId } : {}), employeeId: uid, isAdvanceProvider: true }),
+      PettyCashRequest.exists(pcBase),
+      PettyCashReturnRequest.exists(pcRetBase),
+      Attendance.exists({ ...epoBase, 'earlyPunchOutRequest.status': { $in: ['PENDING', 'APPROVED', 'REJECTED'] } }),
     ]);
+    const pettyCashPendingCount = pettyCashAdvPendingCount + pettyCashRetPendingCount;
     const data = claims.map((c) => {
       const needsSecond = Boolean(
         finance.needsFinanceApproval(c, { financeHead: headRec }) ||
@@ -213,7 +237,18 @@ exports.myApprovals = async (req, res) => {
         myApprovalStage: access.isFinanceApprover(c, uid) ? 'FINANCE' : 'MANAGER',
       };
     });
-    res.json({ success: true, data, pendingCount, isApprover: isApprover || isFinanceHead || pendingCount > 0 });
+    const totalPending = pendingCount + pettyCashPendingCount + earlyPunchOutPendingCount;
+    res.json({
+      success: true,
+      data,
+      pendingCount: totalPending,
+      claimPendingCount: pendingCount,
+      pettyCashPendingCount,
+      pettyCashAdvancePendingCount: pettyCashAdvPendingCount,
+      pettyCashReturnPendingCount: pettyCashRetPendingCount,
+      earlyPunchOutPendingCount,
+      isApprover: Boolean(isApprover || isFinanceHead || isAdvanceProvider || hasAnyPcReq || hasAnyPcRetReq || hasAnyEpoReq || totalPending > 0),
+    });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, message: err.message });
   }

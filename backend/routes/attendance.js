@@ -10,7 +10,9 @@ const {
   trackBatch,
   adminEditAttendance,
   gpsStatusUpdate,
-  uploadPunchSelfie
+  uploadPunchSelfie,
+  getEarlyPunchOutApprovals,
+  decideEarlyPunchOut
 } = require('../controllers/attendance');
 
 const router = express.Router();
@@ -21,6 +23,8 @@ router.use(protect);
 
 router.post('/punch-in', punchIn);
 router.post('/punch-out', punchOut);
+router.get('/early-punchout-approvals', getEarlyPunchOutApprovals);
+router.post('/early-punchout-approvals/:id/decide', decideEarlyPunchOut);
 router.post('/upload-selfie', uploadPunchSelfie);
 router.post('/break', toggleBreak);
 router.get('/history', getHistory);

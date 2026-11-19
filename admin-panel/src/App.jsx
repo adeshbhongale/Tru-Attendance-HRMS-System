@@ -35,6 +35,7 @@ import MaterialMovementAudit from './pages/MaterialMovementAudit';
 import MaterialMovementDashboardPage from './pages/MaterialMovementDashboardPage';
 import Materials from './pages/Materials';
 import OrgChart from './pages/OrgChart';
+import PayrollPage from './pages/PayrollPage';
 import PendingApprovals from './pages/PendingApprovals';
 import Products from './pages/Products';
 import Profile from './pages/Profile';
@@ -136,7 +137,7 @@ const AppContent = () => {
         <Sidebar isOpen={isSidebarOpen} toggleSidebar={toggleSidebar} />
       )}
 
-      <main className={`flex-1 ${isAuthenticated ? 'p-3 md:p-4 lg:p-5' : ''}`}>
+      <main className={`flex-1 min-w-0 ${isAuthenticated ? 'p-3 md:p-4 lg:p-5' : ''}`}>
         {isAuthenticated && (
           <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-4 animate-fade-up">
             <div className="flex items-center gap-3 w-full xl:w-auto">
@@ -242,6 +243,7 @@ const AppContent = () => {
             <Route path="/admin-notifications" element={isAuthenticated ? (canAccessAdminNotifications ? <AdminNotifications /> : <Navigate to="/" />) : <Navigate to="/login" />} />
 
             {/* Expense Management & Dashboard */}
+            <Route path="/payroll" element={isAuthenticated ? (canAccessHRSetup ? <PayrollPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/expense-management" element={isAuthenticated ? (canAccessHRSetup ? <ExpenseManagement /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/expense-dashboard" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseDashboardPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/expenses-dashboard" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseDashboardPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />

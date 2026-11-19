@@ -12,6 +12,7 @@ import {
   Clock,
   FileText,
   Home,
+  IndianRupee,
   KeyRound,
   Layers,
   LogOut,
@@ -185,6 +186,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Reports', icon: <FileText size={18} />, path: '/reports' },
     { name: 'Shifts', icon: <Clock size={18} />, path: '/shifts' },
     { name: 'Leaves', icon: <FileText size={18} />, path: '/leaves' },
+    { name: 'Payroll', icon: <IndianRupee size={18} />, path: '/payroll' },
     { name: 'Material Movement', icon: <ArrowRightLeft size={18} />, path: '/material-movement-dashboard' },
     { name: 'Tracking Dashboard', icon: <Activity size={18} />, path: '/tracking-dashboard' },
     { name: 'Customer Visit', icon: <MapPin size={18} />, path: '/visits-dashboard' },
@@ -228,7 +230,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     }
     if (isCompanyAdmin) return navItems;
     if (isHRAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Tracking Dashboard', 'Customer Visit', 'Expense Dashboard', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Payroll', 'Reports', 'Tracking Dashboard', 'Customer Visit', 'Expense Dashboard', 'Notifications'].includes(item.name));
     }
     if (isStoreAdmin) {
       return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports'].includes(item.name));
@@ -236,7 +238,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     if (isAccountAdmin) {
       return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Expense Dashboard', 'Petty Cash Wallet'].includes(item.name));
     }
-    return navItems.filter(item => item.name !== 'Expense Dashboard' && item.name !== 'Petty Cash Wallet');
+    return navItems.filter(item => item.name !== 'Expense Dashboard' && item.name !== 'Petty Cash Wallet' && item.name !== 'Payroll');
   })();
 
   const visibleSettingsItems = (() => {

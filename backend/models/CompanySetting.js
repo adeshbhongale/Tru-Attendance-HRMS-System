@@ -75,6 +75,32 @@ const CompanySettingSchema = new mongoose.Schema({
     type: String,
     default: 'A newer version of the application is available with updated features and bug fixes. Please update to continue.'
   },
+  payroll: {
+    lateStartTime: {
+      type: String,
+      default: '09:30'
+    },
+    halfDayTime: {
+      type: String,
+      default: '10:30'
+    },
+    lateFlatAmount: {
+      type: Number,
+      default: 300
+    },
+    approvedLeaveMultiplier: {
+      type: Number,
+      default: 1
+    },
+    uninformedAbsentMultiplier: {
+      type: Number,
+      default: 2
+    },
+    rejectedLeaveAbsentMultiplier: {
+      type: Number,
+      default: 2.5
+    }
+  },
   updatedAt: {
     type: Date,
     default: Date.now

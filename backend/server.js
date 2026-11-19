@@ -62,7 +62,7 @@ app.set('trust proxy', 1);
 
 // Enable CORS (Must be at the very top)
 const allowedOrigins = process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',') : ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:5174'];
-app.use(cors({
+const corsOptions = {
   origin: function (origin, callback) {
     // Always allow requests with no origin (mobile apps, Expo Go, curl, Postman)
     if (!origin) return callback(null, true);
@@ -75,8 +75,12 @@ app.use(cors({
     // In production, still allow (change this to restrict if needed)
     return callback(null, true);
   },
+  methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-company-id', 'companyid', 'x-client-platform', 'x-client-type', 'x-app-version', 'x-app-build'],
   credentials: true,
-}));
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Disable ETag to prevent 304 Not Modified statuses
 app.disable('etag');
@@ -208,6 +212,9 @@ app.use('/api/upload', require('./modules/material/routes/upload.routes'));
 // Expense Management Module (HR module - combined multi-employee claims)
 app.use('/api/expense', require('./modules/hr/expense/routes'));
 app.use('/api/expenses', require('./modules/hr/expense/routes'));
+
+// Payroll Module (HR module - web admin panel only)
+app.use('/api/payroll', require('./modules/hr/payroll/routes'));
 
 const PORT = process.env.PORT || 5000;
 

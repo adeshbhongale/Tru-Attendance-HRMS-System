@@ -84,6 +84,21 @@ const EmployeeSchema = new mongoose.Schema({
   gender: String,
   dob: Date,
   bloodGroup: String,
+  uan: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  basicPay: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  payPerDay: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   documents: [{
     docName: String,
     docType: String,

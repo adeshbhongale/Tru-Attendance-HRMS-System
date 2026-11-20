@@ -292,7 +292,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
   const showClaimsPausedAlert = () =>
     Alert.alert(
       "Claims Temporarily Off",
-      "Expense claim applications are currently turned off by Super Admin. Please try again later."
+      "Expense claim applications are currently turned off. Please try again later."
     );
 
   const renderStat = (label, value, color) => (
@@ -387,7 +387,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                 Claims Temporarily Paused
               </Text>
               <Text style={{ fontSize: 11, fontWeight: "600", color: "#b91c1c", marginTop: 2 }}>
-                Expense claim applications are currently turned off by Super Admin. Please try again later.
+                Expense claim applications are currently turned off. Please try again later.
               </Text>
             </View>
           </View>

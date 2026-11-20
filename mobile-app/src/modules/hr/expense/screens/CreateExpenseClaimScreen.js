@@ -3416,7 +3416,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   // Validation: Strictly validates that all required (*) fields are filled before previewing calculation, saving draft, or submitting
   const validateForm = () => {
     if (!claimsEnabled) {
-      Alert.alert("Claims Temporarily Off", "Expense claim applications are currently turned off by Super Admin. Please try again later.");
+      Alert.alert("Claims Temporarily Off", "Expense claim applications are currently turned off. Please try again later.");
       return false;
     }
     const now = new Date();
@@ -3903,7 +3903,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             <View style={styles.missingProofBanner}>
               <AlertCircle size={16} color="#dc2626" />
               <Text style={styles.missingProofText}>
-                Expense claim applications are currently turned off by Super Admin. Please try again later.
+                Expense claim applications are currently turned off. Please try again later.
               </Text>
             </View>
           ) : null}

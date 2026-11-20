@@ -1363,7 +1363,7 @@ exports.getMonthlyView = async (req, res, next) => {
         if (d.getUTCMonth() + 1 === parseInt(month) && d.getUTCFullYear() === parseInt(year)) {
           const day = d.getUTCDate();
           if (dailyStatus[day] && !dailyStatus[day].isBeforeJoining) {
-            dailyStatus[day] = { ...dailyStatus[day], status: 'On Leave', color: '#f59e0b', isFuture: false };
+            dailyStatus[day] = { ...dailyStatus[day], status: 'On Leave', color: '#f59e0b', isFuture: false, isLeave: true, leaveName: leave.leaveType || '' };
             summary.onLeave++;
           }
         }

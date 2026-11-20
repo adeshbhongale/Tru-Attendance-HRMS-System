@@ -455,7 +455,7 @@ const MonthlyViewScreen = ({ navigation }) => {
             ) : (
               <View style={{ paddingVertical: 20, alignItems: 'center' }}>
                 <Text style={{ fontSize: 13, fontWeight: '600', color: '#64748b', textAlign: 'center' }}>
-                  {selectedDayData?.isHoliday ? `Holiday: ${selectedDayData?.holidayName || ''}` : selectedDayData?.isWeekOff ? 'Weekly Off' : selectedDayData?.isFuture ? 'Future Date' : 'No attendance recorded for this date.'}
+                  {(selectedDayData?.isLeave || selectedDayData?.status === 'On Leave' || selectedDayData?.status === 'OnLeave' || selectedDayData?.status === 'Half Day Leave' || selectedDayData?.status === 'Leave(Half)' || selectedDayData?.status === 'Leave') ? (selectedDayData?.leaveName || 'On Leave') : selectedDayData?.isHoliday ? `Holiday: ${selectedDayData?.holidayName || ''}` : selectedDayData?.isWeekOff ? 'Weekly Off' : selectedDayData?.isFuture ? 'Future Date' : 'No attendance recorded for this date.'}
                 </Text>
               </View>
             )}

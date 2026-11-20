@@ -15,7 +15,7 @@ const DateField = ({ value, onChange, placeholder = "Select date", minimumDate, 
 
   const handleAndroid = (event, date) => {
     setOpen(false);
-    if (event.type === "set" && date) onChange(toISODate(date));
+    if ((!event?.type || event.type === "set") && date) onChange(toISODate(date));
   };
 
   return (

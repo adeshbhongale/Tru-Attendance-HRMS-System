@@ -1,3 +1,4 @@
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { Camera, CircleAlert, CircleCheck, CloudUpload, FileText, Image as ImageIcon, RefreshCw, X } from "lucide-react-native";
 import { useCallback, useState } from "react";
@@ -89,12 +90,15 @@ const ReceiptUploader = ({
         const r = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 0.6 });
         if (!r.canceled) addAssets(r.assets || []);
       } else if (source === "gallery") {
-        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!perm.granted) {
-          Alert.alert("Photos permission needed", "Allow photo access to attach bills.", [{ text: "Cancel" }, { text: "Open Settings", onPress: () => Linking.openSettings() }]);
-          return;
-        }
-        const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.6, allowsMultipleSelection: true, selectionLimit: remaining, base64: true });
+        // Uses Android system Photo Picker (zero runtime permissions required)
+        const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.6, allowsMultipleSelection: true, selectionLimit: remaining });
+        if (!r.canceled) addAssets(r.assets || []);
+      } else if (source === "pdf") {
+        const r = await DocumentPicker.getDocumentAsync({
+          type: ["application/pdf", "image/*"],
+          multiple: true,
+          copyToCacheDirectory: true,
+        });
         if (!r.canceled) addAssets(r.assets || []);
       }
     } catch (e) {
@@ -168,6 +172,7 @@ const ReceiptUploader = ({
           {[
             { key: "camera", label: "Take Photo", sub: "Use the camera to capture a bill", icon: Camera },
             { key: "gallery", label: "Choose From Gallery", sub: "Select one or more images", icon: ImageIcon },
+            { key: "pdf", label: "Choose PDF Document", sub: "Select a PDF invoice or receipt", icon: FileText },
           ].map((o) => {
             const Icon = o.icon;
             return (

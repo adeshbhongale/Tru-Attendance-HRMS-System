@@ -88,28 +88,34 @@ const DashboardScreen = ({ navigation, route }) => {
         return;
       }
 
-      // 2. If not flagged yet on server, check device GPS relative to office (supports live test / pre-punch)
+      // 2. If not flagged yet on server, check device GPS relative to office only when foreground location permission is already granted
       if (office && office.latitude && office.longitude) {
         try {
-          let pos = await Location.getLastKnownPositionAsync().catch(() => null);
-          if (!pos) {
-            pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }).catch(() => null);
-          }
-          if (pos?.coords) {
-            const R = 6371e3;
-            const p1 = (pos.coords.latitude * Math.PI) / 180;
-            const p2 = (office.latitude * Math.PI) / 180;
-            const dp = ((office.latitude - pos.coords.latitude) * Math.PI) / 180;
-            const dl = ((office.longitude - pos.coords.longitude) * Math.PI) / 180;
-            const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
-            const distMeters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const fgPerm = typeof Location.getForegroundPermissionsAsync === 'function'
+            ? await Location.getForegroundPermissionsAsync()
+            : { status: 'denied' };
+          if (fgPerm.status === 'granted') {
+            const isClockedIn = !!(att && att.punchIn?.time && !att.punchOut?.time);
+            let pos = await Location.getLastKnownPositionAsync().catch(() => null);
+            if (!pos && isClockedIn) {
+              pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null);
+            }
+            if (pos?.coords) {
+              const R = 6371e3;
+              const p1 = (pos.coords.latitude * Math.PI) / 180;
+              const p2 = (office.latitude * Math.PI) / 180;
+              const dp = ((office.latitude - pos.coords.latitude) * Math.PI) / 180;
+              const dl = ((office.longitude - pos.coords.longitude) * Math.PI) / 180;
+              const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+              const distMeters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-            if (distMeters >= 150000) {
-              setOutstationInfo({
-                isOutstation: true,
-                distanceKm: Math.round(distMeters / 1000)
-              });
-              return;
+              if (distMeters >= 150000) {
+                setOutstationInfo({
+                  isOutstation: true,
+                  distanceKm: Math.round(distMeters / 1000)
+                });
+                return;
+              }
             }
           }
         } catch (locErr) {
@@ -760,25 +766,9 @@ const DashboardScreen = ({ navigation, route }) => {
 
         {/* Bottom Content Area - transparent background */}
         <View className="flex-1 bg-transparent px-4 pt-2 pb-8">
-          {/* Action Grid (2x2) */}
-          <View className="flex-row justify-between mb-4">
-            {/* Department Card - not yet developed */}
-            <TouchableOpacity
-              activeOpacity={0.9}
-              className="bg-[#eef1f5] rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
-            >
-              <View className="w-14 h-14 rounded-full bg-[#dde3ea] justify-center items-center mb-4">
-                <Building2 size={24} color="#8a97a8" />
-              </View>
-              <Text className="text-slate-400 font-bold text-[14px] text-center tracking-wide">
-                Department
-              </Text>
-              <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
-                Coming soon
-              </Text>
-            </TouchableOpacity>
-
-            {/* HR Card - active / next in development */}
+          {/* Action Grid */}
+          <View className="flex-row justify-between mb-6">
+            {/* HR Card */}
             <TouchableOpacity
               activeOpacity={0.9}
               onPress={() => navigation.navigate("HRScreen")}
@@ -791,10 +781,8 @@ const DashboardScreen = ({ navigation, route }) => {
                 HR
               </Text>
             </TouchableOpacity>
-          </View>
 
-          <View className="flex-row justify-between mb-6">
-            {/* Reports Card - Active */}
+            {/* Reports Card */}
             <TouchableOpacity
               activeOpacity={0.9}
               onPress={() => navigation.navigate("Reports")}
@@ -805,24 +793,6 @@ const DashboardScreen = ({ navigation, route }) => {
               </View>
               <Text className="text-slate-800 font-bold text-[14px] text-center tracking-wide">
                 Reports
-              </Text>
-            </TouchableOpacity>
-
-            {/* Material Movement Card - Disabled */}
-            <TouchableOpacity
-              activeOpacity={1}
-              disabled={true}
-              /* onPress={() => navigation.navigate("MaterialMovementHub")} */
-              className="bg-[#eef1f5] rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
-            >
-              <View className="w-14 h-14 rounded-full bg-[#dde3ea] justify-center items-center mb-4">
-                <Package size={24} color="#8a97a8" />
-              </View>
-              <Text className="text-slate-400 font-bold text-[14px] text-center tracking-wide">
-                Material Movement
-              </Text>
-              <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
-                Coming soon
               </Text>
             </TouchableOpacity>
           </View>

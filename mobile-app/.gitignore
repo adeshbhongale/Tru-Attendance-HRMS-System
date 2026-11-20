@@ -34,12 +34,19 @@ yarn-error.*
 .env*.local
 .env
 
+# Firebase credentials (never commit raw service configs)
+google-services.json
+GoogleService-Info.plist
+android/app/google-services.json
+
 # typescript
 *.tsbuildinfo
 
-# generated native folders
+# generated native folders & build artifacts
 /ios
-/android
-
-/google-services.json
-/GoogleService-Info.plist
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.keystore
+!android/app/debug.keystore

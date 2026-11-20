@@ -100,13 +100,6 @@ const openGoogleMaps = (address, lat, lng) => {
   if (url) Linking.openURL(url).catch(() => { });
 };
 
-// Build Google Maps Static Image URL for a location
-const getStaticMapUrl = (lat, lng) => {
-  const MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-  if (!MAPS_KEY || !lat || !lng) return null;
-  return `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=16&size=300x120&markers=color:red%7C${lat},${lng}&key=${MAPS_KEY}`;
-};
-
 // ─────────────────────────────────────────────────────────────
 // STYLESHEET
 // ─────────────────────────────────────────────────────────────
@@ -643,43 +636,52 @@ const CustomerVisitScreen = ({ navigation }) => {
         }
       }
 
-      // 1. GPS
-      const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
+      // 1. GPS (enforce Prominent Disclosure if foreground permission not yet granted)
+      let { status: fgStatus } = await Location.getForegroundPermissionsAsync();
       if (fgStatus !== 'granted') {
-        Alert.alert('Permission Denied', 'GPS location access is required.');
+        const accepted = await new Promise((resolve) => {
+          Alert.alert(
+            'Location Access Disclosure',
+            'Gatimaan collects your precise location to verify customer visit check-ins and log your field route.',
+            [
+              { text: 'Not Now', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continue', onPress: () => resolve(true) },
+            ],
+            { cancelable: false }
+          );
+        });
+        if (!accepted) {
+          setActionLoading(false); setActionVisitId(null);
+          return;
+        }
+        const reqPerm = await Location.requestForegroundPermissionsAsync();
+        fgStatus = reqPerm.status;
+      }
+      if (fgStatus !== 'granted') {
+        Alert.alert(
+          'Permission Denied',
+          'GPS location access is required.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings().catch(() => {}) },
+          ]
+        );
         setActionLoading(false); setActionVisitId(null);
         return;
       }
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
 
-      // 2. Geocode — get exact address
+      // 2. Geocode — native OS reverse geocoding (zero API key exposure)
       let address = 'Location captured';
       try {
-        const MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-        if (MAPS_KEY) {
-          const geoRes = await fetch(
-            `https://maps.googleapis.com/maps/api/geocode/json?latlng=${loc.coords.latitude},${loc.coords.longitude}&key=${MAPS_KEY}`
-          );
-          const geoData = await geoRes.json();
-          if (geoData.status === 'OK' && geoData.results.length > 0) {
-            address = geoData.results[0].formatted_address;
-          } else {
-            const geocode = await Location.reverseGeocodeAsync({
-              latitude: loc.coords.latitude, longitude: loc.coords.longitude,
-            });
-            if (geocode[0]) {
-              const g = geocode[0];
-              address = [g.name, g.street, g.city, g.region].filter(Boolean).join(', ');
-            }
-          }
-        } else {
-          const geocode = await Location.reverseGeocodeAsync({
-            latitude: loc.coords.latitude, longitude: loc.coords.longitude,
-          });
-          if (geocode[0]) {
-            const g = geocode[0];
-            address = [g.name, g.street, g.city, g.region].filter(Boolean).join(', ');
-          }
+        const geocode = await Location.reverseGeocodeAsync({
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+        });
+        if (geocode && geocode[0]) {
+          const g = geocode[0];
+          const resolved = [g.name, g.street, g.city || g.subregion, g.region].filter(Boolean).join(', ');
+          if (resolved) address = resolved;
         }
       } catch (_) { }
 
@@ -698,12 +700,19 @@ const CustomerVisitScreen = ({ navigation }) => {
       // 4. Camera
       const { status: camStatus } = await ImagePicker.requestCameraPermissionsAsync();
       if (camStatus !== 'granted') {
-        Alert.alert('Permission Denied', 'Camera access is required for selfie verification.');
+        Alert.alert(
+          'Permission Denied',
+          'Camera access is required for selfie verification.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings().catch(() => {}) },
+          ]
+        );
         setActionLoading(false); setActionVisitId(null);
         return;
       }
       const selfieResult = await ImagePicker.launchCameraAsync({
-        mediaTypes: 'images', allowsEditing: false, quality: 0.7,
+        mediaTypes: ['images'], allowsEditing: false, quality: 0.7,
         base64: true, cameraType: 'front', preferFrontCamera: true,
       });
       if (selfieResult.canceled) {
@@ -1011,7 +1020,8 @@ const CustomerVisitScreen = ({ navigation }) => {
             value={visitDate}
             mode="date"
             minimumDate={new Date()}
-            onChange={(e, date) => { setShowDatePicker(false); if (date) setVisitDate(date); }}
+            onValueChange={(e, date) => { setShowDatePicker(false); if (date) setVisitDate(date); }}
+            onDismiss={() => setShowDatePicker(false)}
           />
         )}
         {showTimePicker && (
@@ -1019,7 +1029,8 @@ const CustomerVisitScreen = ({ navigation }) => {
             value={visitTime}
             mode="time"
             is24Hour={false}
-            onChange={(e, date) => { setShowTimePicker(false); if (date) setVisitTime(date); }}
+            onValueChange={(e, date) => { setShowTimePicker(false); if (date) setVisitTime(date); }}
+            onDismiss={() => setShowTimePicker(false)}
           />
         )}
 
@@ -1798,7 +1809,8 @@ const CustomerVisitScreen = ({ navigation }) => {
           value={editVisitDate}
           mode="date"
           minimumDate={new Date()}
-          onChange={(e, date) => { setShowEditDatePicker(false); if (date) setEditVisitDate(date); }}
+          onValueChange={(e, date) => { setShowEditDatePicker(false); if (date) setEditVisitDate(date); }}
+          onDismiss={() => setShowEditDatePicker(false)}
         />
       )}
       {showEditTimePicker && (
@@ -1806,7 +1818,8 @@ const CustomerVisitScreen = ({ navigation }) => {
           value={editVisitTime}
           mode="time"
           is24Hour={false}
-          onChange={(e, date) => { setShowEditTimePicker(false); if (date) setEditVisitTime(date); }}
+          onValueChange={(e, date) => { setShowEditTimePicker(false); if (date) setEditVisitTime(date); }}
+          onDismiss={() => setShowEditTimePicker(false)}
         />
       )}
 

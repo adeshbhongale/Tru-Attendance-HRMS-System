@@ -1,49 +1,29 @@
-import { Linking, NativeModules, Platform } from 'react-native';
-
-const { NativeWakeLock } = NativeModules;
+import { Alert, Linking, Platform } from 'react-native';
 
 /**
- * Checks whether battery optimization is currently ignored (exempted) for this app.
+ * Google Play Store Policy Compliance:
+ * REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is restricted by Google Play Policy.
+ * Foreground Location Service (FOREGROUND_SERVICE_LOCATION) is used instead.
  */
 export const isBatteryOptimizationIgnored = async () => {
-  if (Platform.OS !== 'android') return true;
-  if (NativeWakeLock && typeof NativeWakeLock.isIgnoringBatteryOptimizations === 'function') {
-    try {
-      return await NativeWakeLock.isIgnoringBatteryOptimizations();
-    } catch (_) {
-      return false;
-    }
-  }
-  return false;
+  return true;
 };
 
-/**
- * Directly requests Android OS to exempt the app from battery optimization (Doze mode)
- * using the official Android Settings ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS intent.
- */
 export const requestIgnoreBatteryOptimizations = async () => {
   if (Platform.OS !== 'android') return;
-
-  // 1. Try Native Android Module for direct system prompt dialog
-  if (NativeWakeLock && typeof NativeWakeLock.requestIgnoreBatteryOptimizations === 'function') {
-    try {
-      const res = await NativeWakeLock.requestIgnoreBatteryOptimizations();
-      if (res) return;
-    } catch (nativeErr) {
-      console.warn('[BatteryOpt] Native module notice:', nativeErr?.message);
-    }
-  }
-
-  // 2. Fallback via Linking intents
   try {
-    await Linking.sendIntent('android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS');
-  } catch (err1) {
-    try {
-      await Linking.sendIntent('android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS', [
-        { key: 'package', value: 'package:com.adesh.trackflow' }
-      ]);
-    } catch (err2) {
-      Linking.openSettings();
-    }
-  }
+    Linking.openSettings();
+  } catch (_) {}
+};
+
+export const promptDisableBatteryOptimization = () => {
+  if (Platform.OS !== 'android') return;
+  Alert.alert(
+    'Battery Optimization Tip',
+    'If background route tracking stops while your screen is locked, you can set Battery usage to Unrestricted in App Settings.',
+    [
+      { text: 'Later', style: 'cancel' },
+      { text: 'Open Settings', onPress: () => Linking.openSettings() },
+    ]
+  );
 };

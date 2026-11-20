@@ -1,22 +1,24 @@
 {
   "expo": {
-    "name": "Geo-Track HRMS System",
-    "slug": "geo-track-hrms-system",
-    "scheme": "trackflow",
-    "version": "1.0.1",
+    "name": "Gatimaan",
+    "slug": "gatimaan",
+    "scheme": [
+      "gatimaan",
+      "trackflow"
+    ],
+    "version": "1.0.3",
     "orientation": "portrait",
-    "icon": "./assets/favicon.png",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.adesh.trackflow",
-      "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "This app requires location access in the foreground to verify your punch-in/out range relative to the office geofence.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app requires location access in the background to log your route and verify compliance with office geofencing rules while you are clocked in.",
-        "NSLocationAlwaysUsageDescription": "This app requires location access in the background to log your route and verify compliance with office geofencing rules while you are clocked in.",
-        "NSCameraUsageDescription": "This app requires camera access to take selfies during punch-in and punch-out for identity verification.",
-        "NSPhotoLibraryUsageDescription": "This app requires photo library access to allow uploading profile images.",
+        "NSLocationWhenInUseUsageDescription": "Gatimaan requires location access in the foreground to verify your punch-in/out range relative to the office geofence.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Gatimaan collects location data in the background to log your field route and verify compliance with office geofencing rules while you are punched in.",
+        "NSLocationAlwaysUsageDescription": "Gatimaan collects location data in the background to log your field route and verify compliance with office geofencing rules while you are punched in.",
+        "NSCameraUsageDescription": "Gatimaan requires camera access to capture attendance selfies and expense receipts.",
+        "NSPhotoLibraryUsageDescription": "Gatimaan requires photo library access to upload profile pictures and expense receipts.",
         "UIBackgroundModes": [
           "location"
         ],
@@ -24,18 +26,13 @@
       }
     },
     "android": {
-      "versionCode": 2,
+      "versionCode": 4,
+      "allowBackup": false,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/favicon.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.adesh.trackflow",
-      "googleServicesFile": "./google-services.json",
-      "config": {
-        "googleMaps": {
-          "apiKey": "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI"
-        }
-      },
       "permissions": [
         "CAMERA",
         "ACCESS_COARSE_LOCATION",
@@ -43,56 +40,38 @@
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
-        "FOREGROUND_SERVICE_DATA_SYNC",
-        "FOREGROUND_SERVICE_REMOTE_MESSAGING",
-        "WAKE_LOCK",
         "RECEIVE_BOOT_COMPLETED",
+        "WAKE_LOCK",
         "ACCESS_NETWORK_STATE",
-        "ACCESS_WIFI_STATE",
-        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
         "POST_NOTIFICATIONS"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "com.google.android.gms.permission.AD_ID"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "@react-native-community/datetimepicker",
-      "expo-camera",
-      [
-        "expo-location",
-        {
-          "locationAlwaysAndWhenInUsePermission": "This app requires location access in the foreground and background to log your route and verify compliance with office geofencing rules while you are clocked in.",
-          "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": true
-        }
-      ],
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/splash.png",
-          "resizeMode": "cover",
-          "backgroundColor": "#ffffff",
-          "dark": {
-            "image": "./assets/splash.png",
-            "backgroundColor": "#ffffff"
-          }
-        }
-      ],
-      "expo-updates"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "787038e4-7225-4787-a053-519c618c6ef2"
-      }
-    },
-    "owner": "shreyas-trucode",
+    "owner": "gatimaan",
     "updates": {
-      "url": "https://u.expo.dev/787038e4-7225-4787-a053-519c618c6ef2",
+      "url": "https://u.expo.dev/27dda92e-6b43-424d-b808-8884c0047fb4",
       "enabled": true,
       "checkAutomatically": "ON_LOAD",
-      "fallbackToCacheTimeout": 0
+      "fallbackToCacheTimeout": 10000
     },
-    "runtimeVersion": "1.0.1"
+    "runtimeVersion": "1.0.3",
+    "extra": {
+      "eas": {
+        "projectId": "27dda92e-6b43-424d-b808-8884c0047fb4"
+      }
+    }
   }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Dimensions, Easing, Text, View } from 'react-native';
+import { Animated, Easing, PixelRatio, Text, View } from 'react-native';
 
 /**
  * MarqueeText — horizontally scrolling ticker text.
@@ -10,11 +10,9 @@ import { Animated, Dimensions, Easing, Text, View } from 'react-native';
  *   speedPerPx  (number)  — ms of scroll duration per pixel of distance (default 20)
  */
 
-// A deliberately oversized width so the measuring/visible Text node is
-// NEVER bound by any inherited "at most" constraint from ancestors
-// (including the device screen width itself). This is what actually lets
-// long, multi-task strings render and measure at their true full length.
-const MEASURE_WIDTH = Dimensions.get('window').width * 25;
+// Bounded below Android HardwareUI's universal 4096px GPU texture limit while
+// remaining wide enough that Yoga never truncates the ticker at screen width.
+const MEASURE_WIDTH = Math.floor(4096 / Math.max(1, PixelRatio.get()));
 
 const MarqueeText = ({ text, className, speedPerPx = 20 }) => {
   const animatedValue = useRef(new Animated.Value(0)).current;

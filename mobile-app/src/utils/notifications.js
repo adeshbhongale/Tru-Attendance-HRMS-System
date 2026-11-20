@@ -64,16 +64,18 @@ if (Notifications && typeof Notifications.setNotificationHandler === 'function')
   });
 }
 
-export async function registerPushToken() {
+export async function registerPushToken(requestIfUndetermined = true) {
   try {
     if (Platform.OS === 'web') return;
 
     if (isExpoGo || !Notifications) {
-      const simulatedToken = `expo_go_simulated_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
-      await api.post('/notifications/register-token', {
-        fcmToken: simulatedToken,
-        deviceType: Platform.OS.toUpperCase()
-      });
+      if (__DEV__) {
+        const simulatedToken = `expo_go_simulated_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
+        await api.post('/notifications/register-token', {
+          fcmToken: simulatedToken,
+          deviceType: Platform.OS.toUpperCase()
+        });
+      }
       return;
     }
 
@@ -91,21 +93,23 @@ export async function registerPushToken() {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
 
-    if (existingStatus !== 'granted') {
+    if (existingStatus !== 'granted' && requestIfUndetermined) {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }
 
     if (finalStatus !== 'granted') {
-      const simulatedToken = `sandbox_token_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
-      await api.post('/notifications/register-token', {
-        fcmToken: simulatedToken,
-        deviceType: Platform.OS.toUpperCase()
-      });
+      if (__DEV__) {
+        const simulatedToken = `sandbox_token_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
+        await api.post('/notifications/register-token', {
+          fcmToken: simulatedToken,
+          deviceType: Platform.OS.toUpperCase()
+        });
+      }
       return;
     }
 
-    let token;
+    let token = null;
     try {
       // Prioritize raw native device push tokens (FCM/APNs) required by firebase-admin SDK
       const deviceTokenObj = await Notifications.getDevicePushTokenAsync().catch(() => null);
@@ -116,27 +120,33 @@ export async function registerPushToken() {
         token = expoTokenObj ? expoTokenObj.data : null;
       }
 
-      if (!token) {
+      if (!token && __DEV__) {
         token = `expo_simulated_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
       }
     } catch (tokenErr) {
-      token = `expo_simulated_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
+      if (__DEV__) {
+        token = `expo_simulated_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
+      }
     }
+
+    if (!token) return;
 
     await api.post('/notifications/register-token', {
       fcmToken: token,
       deviceType: Platform.OS.toUpperCase()
     });
   } catch (err) {
-    console.log('Push registration failed. Running simulator fallback...', err.message);
-    try {
-      const simulatedToken = `fallback_token_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
-      await api.post('/notifications/register-token', {
-        fcmToken: simulatedToken,
-        deviceType: Platform.OS.toUpperCase()
-      });
-    } catch (fallbackErr) {
-      console.log('Push token fallback failed:', fallbackErr.message);
+    if (__DEV__) {
+      console.log('Push registration failed. Running simulator fallback...', err.message);
+      try {
+        const simulatedToken = `fallback_token_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
+        await api.post('/notifications/register-token', {
+          fcmToken: simulatedToken,
+          deviceType: Platform.OS.toUpperCase()
+        });
+      } catch (fallbackErr) {
+        console.log('Push token fallback failed:', fallbackErr.message);
+      }
     }
   }
 }
@@ -175,13 +185,55 @@ export async function showLocalNotification(title, body, data = {}) {
 }
 
 /**
+ * Resolve navigation screen & params for notification items / push payloads
+ */
+export function resolveNotificationTarget(data = {}) {
+  const meta = data?.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+  const autoType = String(data?.autoType || meta?.autoType || '').trim();
+  const title = String(data?.title || '').toLowerCase();
+  const leaveId = data?.leaveId || meta?.leaveId || data?.params?.leaveId || null;
+  const claimId = data?.claimId || meta?.claimId || null;
+  const requestId = data?.requestId || meta?.requestId || null;
+  const tab = data?.tab || meta?.tab || null;
+  let screen = data?.screen || meta?.screen || null;
+
+  if (!screen) {
+    if (autoType === 'Leave requested' || title.includes('new leave request')) {
+      screen = 'LeaveApprovals';
+    } else if (
+      autoType === 'Leave approved' ||
+      autoType === 'Leave rejected' ||
+      title.includes('leave request approved') ||
+      title.includes('leave request rejected')
+    ) {
+      screen = 'Leave';
+    }
+  }
+
+  if (screen && screen !== 'Main' && screen !== 'Home') {
+    return {
+      screen,
+      params: {
+        ...(data?.params && typeof data.params === 'object' ? data.params : {}),
+        ...(leaveId ? { leaveId: String(leaveId) } : {}),
+        ...(claimId ? { claimId: String(claimId) } : {}),
+        ...(requestId ? { requestId: String(requestId) } : {}),
+        ...(tab ? { tab: String(tab) } : {}),
+        timestamp: Date.now(),
+      },
+    };
+  }
+  return null;
+}
+
+/**
  * Handle routing when user taps a push notification
  */
 export function handleNotificationClick(data = {}) {
   try {
-    const screen = data?.screen;
-    if (screen && screen !== 'Main' && screen !== 'Home') {
-      navigateGlobal(screen, data?.params || {});
+    const target = resolveNotificationTarget(data);
+    if (target) {
+      navigateGlobal(target.screen, target.params);
     } else {
       // Default: navigate to Dashboard and open the Notification Drawer
       navigateGlobal('Main', { openNotifications: true, timestamp: Date.now() });
@@ -201,8 +253,9 @@ export function setupNotificationResponseListener() {
 
   try {
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      const data = response?.notification?.request?.content?.data || {};
-      handleNotificationClick(data);
+      const content = response?.notification?.request?.content || {};
+      const data = content.data || {};
+      handleNotificationClick({ ...data, title: content.title || data?.title || '' });
     });
 
     return () => {
@@ -226,8 +279,9 @@ export async function checkInitialNotificationResponse() {
   try {
     const lastResponse = await Notifications.getLastNotificationResponseAsync();
     if (lastResponse) {
-      const data = lastResponse?.notification?.request?.content?.data || {};
-      handleNotificationClick(data);
+      const content = lastResponse?.notification?.request?.content || {};
+      const data = content.data || {};
+      handleNotificationClick({ ...data, title: content.title || data?.title || '' });
     }
   } catch (err) {
     console.warn('[Notifications] checkInitialNotificationResponse error:', err?.message);

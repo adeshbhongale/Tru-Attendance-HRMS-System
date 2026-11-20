@@ -427,10 +427,12 @@ const ReportsScreen = ({ navigation, route }) => {
 
       const q = searchQuery.toLowerCase().trim();
       const typeStr = safeText(item.leaveType || item.type).toLowerCase();
-      const reasonStr = safeText(item.reason || item.adminNote).toLowerCase();
+      const reasonStr = safeText(item.reason).toLowerCase();
+      const decisionNoteStr = safeText(item.rejectionReason || item.adminNote).toLowerCase();
+      const approverStr = safeText(item.actionedByName || item.actionedBy?.fullName || item.actionedBy?.name || item.approverId?.fullName || item.approverId?.name).toLowerCase();
       const dateStr = formatDateDisplay(item.startDate || item.createdAt).toLowerCase();
 
-      const searchMatch = !q || typeStr.includes(q) || reasonStr.includes(q) || dateStr.includes(q);
+      const searchMatch = !q || typeStr.includes(q) || reasonStr.includes(q) || decisionNoteStr.includes(q) || approverStr.includes(q) || dateStr.includes(q);
 
       return statusMatch && searchMatch;
     });
@@ -1665,6 +1667,50 @@ const ReportsScreen = ({ navigation, route }) => {
                                 "{safeText(item.reason)}"
                               </Text>
                             ) : null}
+
+                            {(() => {
+                              const actorName = safeText(
+                                item.actionedByName ||
+                                item.actionedBy?.fullName ||
+                                item.actionedBy?.name ||
+                                item.approverId?.fullName ||
+                                item.approverId?.name
+                              );
+                              const decisionReason = isRej ? safeText(item.rejectionReason || item.adminNote).trim() : '';
+                              if (!actorName && !decisionReason) return null;
+                              return (
+                                <View
+                                  className={`p-2.5 rounded-xl border space-y-1 ${isRej
+                                    ? "bg-rose-50 border-rose-100"
+                                    : isApp
+                                      ? "bg-emerald-50 border-emerald-100"
+                                      : "bg-indigo-50/60 border-indigo-100"
+                                    }`}
+                                >
+                                  {actorName ? (
+                                    <Text
+                                      className={`text-[11px] font-bold ${isRej
+                                        ? "text-rose-700"
+                                        : isApp
+                                          ? "text-emerald-700"
+                                          : "text-indigo-700"
+                                        }`}
+                                    >
+                                      {isApp ? "Approved by: " : isRej ? "Rejected by: " : "Approver: "}
+                                      {actorName}
+                                    </Text>
+                                  ) : null}
+                                  {decisionReason ? (
+                                    <Text
+                                      className={`text-[11px] font-semibold ${isRej ? "text-rose-600" : "text-slate-700"}`}
+                                    >
+                                      {isRej ? "Rejection Reason: " : "Approval Note: "}
+                                      {decisionReason}
+                                    </Text>
+                                  ) : null}
+                                </View>
+                              );
+                            })()}
                           </View>
                         );
                       })
@@ -2156,13 +2202,14 @@ const ReportsScreen = ({ navigation, route }) => {
                 value={pickerMode === "start" ? tempStartDate : tempEndDate}
                 mode="date"
                 display={Platform.OS === "ios" ? "spinner" : "default"}
-                onChange={(event, selectedDate) => {
+                onValueChange={(event, selectedDate) => {
                   setShowNativePicker(false);
                   if (selectedDate) {
                     if (pickerMode === "start") setTempStartDate(selectedDate);
                     else setTempEndDate(selectedDate);
                   }
                 }}
+                onDismiss={() => setShowNativePicker(false)}
               />
             ) : null}
           </View>

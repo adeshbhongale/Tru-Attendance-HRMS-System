@@ -1,5 +1,8 @@
-import socket from '../socket';
+import NetInfo from '@react-native-community/netinfo';
 import * as Battery from 'expo-battery';
+import * as Location from 'expo-location';
+import { AppState } from 'react-native';
+import socket from '../socket';
 import { getLastGpsTimestamp, isTrackingActive, restartGpsWatcher } from './tracking.service';
 
 let heartbeatInterval = null;
@@ -14,14 +17,37 @@ const sendHeartbeat = async () => {
 
   try {
     let batteryLevel = 100;
+    let isCharging = false;
+    let lowPowerMode = false;
     try {
-      const level = await Battery.getBatteryLevelAsync();
+      const [level, state, powerSave] = await Promise.all([
+        Battery.getBatteryLevelAsync(),
+        Battery.getBatteryStateAsync().catch(() => null),
+        Battery.isLowPowerModeEnabledAsync().catch(() => false),
+      ]);
       if (level >= 0) {
         batteryLevel = Math.round(level * 100);
       }
+      isCharging = state === Battery.BatteryState.CHARGING || state === Battery.BatteryState.FULL;
+      lowPowerMode = Boolean(powerSave);
     } catch (batErr) {
       console.warn('[HeartbeatService] Failed to read battery level:', batErr.message);
     }
+
+    let networkType = socket && socket.connected ? 'online' : 'offline';
+    try {
+      const net = await NetInfo.fetch();
+      if (!net?.isConnected || net?.isInternetReachable === false) {
+        networkType = 'offline';
+      } else if (net.type) {
+        networkType = net.type;
+      }
+    } catch (_) {}
+
+    let gpsServicesEnabled = true;
+    try {
+      gpsServicesEnabled = await Location.hasServicesEnabledAsync();
+    } catch (_) {}
 
     const lastGps = getLastGpsTimestamp();
     const trackingRunning = isTrackingActive();
@@ -33,7 +59,12 @@ const sendHeartbeat = async () => {
       lastGpsTime: lastGps > 0 ? new Date(lastGps).toISOString() : null,
       trackingRunning,
       battery: batteryLevel,
-      network
+      isCharging,
+      lowPowerMode,
+      network,
+      networkType,
+      gpsServicesEnabled,
+      appState: AppState.currentState,
     };
 
     console.log('[HeartbeatService] Emitting heartbeat:', payload);
@@ -50,6 +81,13 @@ const handleRestartTracking = async (data) => {
   console.log('[HeartbeatService] Received restart_tracking event from backend:', data);
   try {
     if (data && data.userId === currentUserId) {
+      if (AppState.currentState !== 'active' && typeof Location.getBackgroundPermissionsAsync === 'function') {
+        const { status: bg } = await Location.getBackgroundPermissionsAsync().catch(() => ({ status: 'denied' }));
+        if (bg !== 'granted') {
+          console.log('[HeartbeatService] Skipping remote restart while backgrounded without background location permission.');
+          return;
+        }
+      }
       console.log('[HeartbeatService] Match found for current user. Restarting GPS watcher...');
       await restartGpsWatcher();
       

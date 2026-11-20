@@ -117,10 +117,27 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
             } catch (_) {}
             try {
               await clearTrackingSession();
-              await AsyncStorage.removeItem('token');
-              await AsyncStorage.removeItem('user');
-              await AsyncStorage.removeItem('userId');
-              await AsyncStorage.removeItem('activeTripId');
+              try {
+                const socket = require('../socket').default;
+                if (socket && typeof socket.disconnect === 'function') {
+                  socket.disconnect();
+                }
+              } catch (_) {}
+              const { removeSecureToken } = require('../utils/secureStorage');
+              await removeSecureToken();
+              await AsyncStorage.multiRemove([
+                'token',
+                'refreshToken',
+                'user',
+                'userId',
+                'activeTripId',
+                'lastActivityTime',
+                '@mobileAccessConfig',
+                '@dashboard_user_shortcuts',
+                '@offline_attendance_queue',
+                '@tracking_session_meta',
+                '@tracking_Active_State',
+              ]);
               if (navigationRef.isReady()) {
                 navigationRef.reset({
                   index: 0,
@@ -141,13 +158,6 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
     );
   };
 
-  const handleComingSoon = (featureName) => {
-    closeSidebar();
-    setTimeout(() => {
-      Alert.alert('Coming Soon', `${featureName} module will be available in the upcoming update.`);
-    }, 150);
-  };
-
   const hrScreens = [
     {
       key: 'home',
@@ -155,7 +165,7 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
       icon: Home,
       iconColor: '#1972e9',
       bgColor: '#ebf3fe',
-      onPress: () => handleNavigate('Home'),
+      onPress: () => handleNavigate('Main'),
     },
     {
       key: 'attendance',
@@ -315,19 +325,16 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
 
 
 
-              {/* Department */}
+              {/* Department / Org Chart */}
               <TouchableOpacity
                 activeOpacity={0.7}
-                onPress={() => handleComingSoon('Department')}
+                onPress={() => handleNavigate('OrgChartScreen')}
                 style={styles.itemRow}
               >
                 <View style={[styles.iconBox, { backgroundColor: '#f3e8ff' }]}>
                   <Building2 size={18} color="#9333ea" />
                 </View>
                 <Text style={styles.itemText}>Department</Text>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>Soon</Text>
-                </View>
               </TouchableOpacity>
 
               {/* Reports */}

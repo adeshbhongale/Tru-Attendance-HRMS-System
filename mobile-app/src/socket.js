@@ -59,14 +59,18 @@ const getSocketUrl = () => {
     let clean = socketUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
     clean = clean.replace(/\/api$/, '');
 
-    // STRICT SAFEGUARD: Never connect to deprecated Render backend under any circumstance
-    if (clean.includes('render.com') || clean.includes('onrender.com')) {
+    // STRICT SAFEGUARD: Never connect to deprecated backends under any circumstance
+    if (
+      clean.includes('render.com') ||
+      clean.includes('onrender.com') ||
+      clean.includes('gatimaan-production.up.railway.app')
+    ) {
       return PRODUCTION_SOCKET_URL;
     }
 
     // SAFEGUARD: In release/preview/production builds (!__DEV__), localhost is unreachable on physical devices
     if (!__DEV__ && isLocalOrLanHost(clean)) {
-      console.warn('[Socket] Localhost detected in release/preview build. Falling back to Railway production socket.');
+      console.warn('[Socket] Localhost detected in release/preview build. Falling back to production socket.');
       return PRODUCTION_SOCKET_URL;
     }
 
@@ -81,6 +85,10 @@ const getSocketUrl = () => {
     }
 
     clean = ensurePortIfLocal(clean);
+
+    if (!__DEV__ && clean.startsWith('http://') && !isLocalOrLanHost(clean)) {
+      clean = clean.replace(/^http:\/\//i, 'https://');
+    }
 
     if (clean.startsWith('http://') || clean.startsWith('https://')) {
       return clean;
@@ -112,8 +120,9 @@ const socket = io(SOCKET_URL, {
   forceNew: false,
   withCredentials: true,
   auth: (cb) => {
-    // Dynamic auth: fetch token from AsyncStorage on each connection attempt
-    AsyncStorage.getItem('token')
+    // Dynamic auth: fetch token from SecureStore / AsyncStorage on each connection attempt
+    const { getSecureToken } = require('./utils/secureStorage');
+    getSecureToken()
       .then(token => {
         authToken = token;
         cb({ token: token || '' });
@@ -124,7 +133,7 @@ const socket = io(SOCKET_URL, {
 
 // Connection state listeners
 socket.on('connect', async () => {
-  console.log('[Socket] Connected successfully to:', SOCKET_URL);
+  console.log('[Socket] Connected successfully');
   try {
     const userId = await AsyncStorage.getItem('userId');
     const userStr = await AsyncStorage.getItem('user');
@@ -170,9 +179,16 @@ socket.on('forceLogout', async (deletedUserId) => {
                       (typeof deletedUserId === 'object' && (deletedUserId?._id === myId || deletedUserId?.id === myId));
 
       if (isMatch) {
+        try {
+          const { clearTrackingSession } = require('./services/trackingManager');
+          await clearTrackingSession();
+        } catch (_) {}
+        try {
+          const { removeSecureToken } = require('./utils/secureStorage');
+          await removeSecureToken();
+        } catch (_) {}
         const companyCode = await AsyncStorage.getItem('companyCode');
         await AsyncStorage.multiRemove([
-          'token',
           'user',
           'userId',
           'activeTripId',

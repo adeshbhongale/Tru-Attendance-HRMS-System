@@ -2,7 +2,6 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import {
   Calendar,
   CheckCircle2,
-  Droplet,
   Eye,
   EyeOff,
   KeyRound,
@@ -30,8 +29,6 @@ import {
 } from "react-native";
 import api from "../api/axios";
 
-const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
-
 const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
   const [activeTab, setActiveTab] = useState("personal"); // 'personal' | 'password'
 
@@ -39,7 +36,6 @@ const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
   const [address, setAddress] = useState("");
   const [dob, setDob] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [bloodGroup, setBloodGroup] = useState("");
   const [referenceName1, setReferenceName1] = useState("");
   const [referenceNumber1, setReferenceNumber1] = useState("");
   const [referenceName2, setReferenceName2] = useState("");
@@ -60,7 +56,6 @@ const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
     if (user && visible) {
       setAddress(user.address || "");
       setDob(user.dob ? new Date(user.dob) : null);
-      setBloodGroup(user.bloodGroup || "");
       setReferenceName1(user.referenceName1 || "");
       setReferenceNumber1(user.referenceNumber1 || "");
       setReferenceName2(user.referenceName2 || "");
@@ -108,7 +103,6 @@ const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
       const payload = {
         address: address.trim(),
         dob: dob ? dob.toISOString() : null,
-        bloodGroup: bloodGroup.trim(),
         referenceName1: referenceName1.trim(),
         referenceNumber1: cleanRef1,
         referenceName2: referenceName2.trim(),
@@ -144,8 +138,8 @@ const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
       return;
     }
 
-    if (trimmedPass.length < 6) {
-      showToast("Password must be at least 6 characters long", "error");
+    if (trimmedPass.length < 8) {
+      showToast("Password must be at least 8 characters long", "error");
       return;
     }
 
@@ -188,7 +182,7 @@ const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
       const errorMsg =
         err.response?.data?.message ||
         (err.response?.status === 404
-          ? "Server endpoint not found (404). Please ensure backend updates are deployed to Railway."
+          ? "Service temporarily unavailable. Please try again later."
           : err.message || "Failed to update password");
       showToast(errorMsg, "error");
     } finally {
@@ -332,46 +326,12 @@ const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
                           display={Platform.OS === "ios" ? "spinner" : "default"}
                           minimumDate={new Date(1900, 0, 1)}
                           maximumDate={new Date()}
-                          onChange={handleDateChange}
+                          onValueChange={handleDateChange}
+                          onDismiss={() => setShowDatePicker(false)}
                         />
                       )}
                     </>
                   )}
-                </View>
-
-                {/* Blood Group */}
-                <View style={styles.inputGroup}>
-                  <View style={styles.labelWithIconRow}>
-                    <Droplet size={14} color="#e11d48" />
-                    <Text style={[styles.inputLabel, { marginLeft: 4, marginBottom: 0 }]}>
-                      BLOOD GROUP
-                    </Text>
-                  </View>
-                  <View style={styles.bloodGroupGrid}>
-                    {BLOOD_GROUPS.map((bg) => {
-                      const isSelected = bloodGroup === bg;
-                      return (
-                        <TouchableOpacity
-                          key={bg}
-                          onPress={() => setBloodGroup(isSelected ? "" : bg)}
-                          style={[
-                            styles.bloodGroupChip,
-                            isSelected && styles.bloodGroupChipSelected,
-                          ]}
-                          activeOpacity={0.7}
-                        >
-                          <Text
-                            style={[
-                              styles.bloodGroupText,
-                              isSelected && styles.bloodGroupTextSelected,
-                            ]}
-                          >
-                            {bg}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
                 </View>
 
                 {/* Emergency Reference 1 */}
@@ -483,7 +443,7 @@ const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
                     <Lock size={18} color="#64748b" style={styles.inputIcon} />
                     <TextInput
                       style={styles.textInput}
-                      placeholder="Enter new password (min 6 characters)"
+                      placeholder="Enter new password (min 8 characters)"
                       placeholderTextColor="#94a3b8"
                       value={newPassword}
                       onChangeText={setNewPassword}
@@ -758,34 +718,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: "#94a3b8",
-  },
-  bloodGroupGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  bloodGroupChip: {
-    width: "22%",
-    paddingVertical: 10,
-    borderRadius: 14,
-    backgroundColor: "#f8fafc",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  bloodGroupChipSelected: {
-    backgroundColor: "#fee2e2",
-    borderColor: "#f87171",
-  },
-  bloodGroupText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#475569",
-  },
-  bloodGroupTextSelected: {
-    color: "#b91c1c",
-    fontWeight: "800",
   },
   sectionCard: {
     backgroundColor: "#f8fafc",

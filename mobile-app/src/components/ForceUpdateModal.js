@@ -33,13 +33,32 @@ export default function ForceUpdateModal({
 
   if (!visible) return null;
 
+  const PLAY_STORE_PACKAGE = "com.adesh.trackflow";
+  const PLAY_STORE_MARKET_URL = `market://details?id=${PLAY_STORE_PACKAGE}`;
+  const PLAY_STORE_WEB_URL = `https://play.google.com/store/apps/details?id=${PLAY_STORE_PACKAGE}`;
+
+  const isAllowedPlayStoreUrl = (url) => {
+    if (!url || typeof url !== "string") return false;
+    const trimmed = url.trim();
+    return (
+      trimmed.startsWith("market://details") ||
+      trimmed.startsWith("https://play.google.com/store/apps/details")
+    );
+  };
+
   const handleDownload = async () => {
-    const apkUrl = updateInfo?.androidApkUrl;
-    if (!apkUrl) return;
+    const storeUrl = isAllowedPlayStoreUrl(updateInfo?.playStoreUrl)
+      ? updateInfo.playStoreUrl.trim()
+      : PLAY_STORE_WEB_URL;
     try {
-      await Linking.openURL(apkUrl);
+      const canOpenMarket = await Linking.canOpenURL(PLAY_STORE_MARKET_URL);
+      if (canOpenMarket && !isAllowedPlayStoreUrl(updateInfo?.playStoreUrl)) {
+        await Linking.openURL(PLAY_STORE_MARKET_URL);
+        return;
+      }
+      await Linking.openURL(storeUrl);
     } catch (e) {
-      console.warn("Failed to open update URL:", e);
+      console.warn("Failed to open Google Play Store URL:", e);
     }
   };
 
@@ -62,8 +81,8 @@ export default function ForceUpdateModal({
           {/* Title */}
           <Text style={styles.title}>Update Required</Text>
           <Text style={styles.subtitle}>
-            A newer version of the application is available. You must install the
-            latest APK update to continue using the system.
+            A newer version of Gatimaan is available on Google Play. Please update
+            the application to continue using the system.
           </Text>
 
           {/* Version Info Badge */}
@@ -93,7 +112,7 @@ export default function ForceUpdateModal({
             </View>
           )}
 
-          {/* Download & Install Button */}
+          {/* Update on Google Play Button */}
           <TouchableOpacity
             style={styles.downloadButton}
             onPress={handleDownload}
@@ -101,7 +120,7 @@ export default function ForceUpdateModal({
           >
             <Download size={20} color="#ffffff" style={{ marginRight: 8 }} />
             <Text style={styles.downloadButtonText}>
-              Download & Install Update
+              Update on Google Play
             </Text>
           </TouchableOpacity>
 
@@ -109,8 +128,7 @@ export default function ForceUpdateModal({
           <View style={styles.warningRow}>
             <AlertTriangle size={14} color="#94a3b8" />
             <Text style={styles.warningText}>
-              After downloading, open the downloaded APK from your notifications or
-              downloads folder to update.
+              Updates are delivered securely through the official Google Play Store.
             </Text>
           </View>
         </View>

@@ -103,7 +103,8 @@ export const syncPendingPoints = async (force = false) => {
           tripId: row.tripId,
           deviceId: row.deviceId,
           timestamp: row.timestamp,
-          isMock: row.isMock === 1
+          isMock: row.isMock === 1,
+          isOffline: row.isOffline === 1
         };
       })
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());

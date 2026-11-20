@@ -1,16 +1,23 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
+import * as ImagePicker from "expo-image-picker";
 import {
+  AlertTriangle,
   Calendar,
+  Camera,
   CheckCircle2,
   ChevronRight,
   Clock,
+  CornerUpLeft,
   FileText,
+  Image as ImageIcon,
   Inbox,
   ShieldAlert,
   ShieldCheck,
   Tag,
+  Trash2,
   User,
+  Wallet,
   XCircle,
   Zap,
 } from "lucide-react-native";
@@ -18,7 +25,9 @@ import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -30,6 +39,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { resolveProofImageUrl } from "../../../../utils/imageUrl";
 import expenseApi from "../api/expenseApi";
 import ExpenseHeader from "../components/ExpenseHeader";
 
@@ -40,6 +50,13 @@ const fmtDate = (d) => {
   const x = new Date(d);
   if (isNaN(x.getTime())) return "";
   return x.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+};
+
+const fmtTime = (d) => {
+  if (!d) return "—";
+  const x = new Date(d);
+  if (isNaN(x.getTime())) return "—";
+  return x.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
 };
 
 const KIND_META = {
@@ -102,6 +119,10 @@ const SECOND_APPROVAL_META = { label: "Awaiting 2nd Approval", color: "#b45309",
 const OtherApprovalsScreen = ({ navigation }) => {
   const [tab, setTab] = useState("PENDING");
   const [items, setItems] = useState([]);
+  const [pcRequests, setPcRequests] = useState([]);
+  const [pcReturnRequests, setPcReturnRequests] = useState([]);
+  const [earlyPunchOutRequests, setEarlyPunchOutRequests] = useState([]);
+  const [tlWalletSummary, setTlWalletSummary] = useState({ balance: 0, reservedAdvance: 0, availableForAdvance: 0, negative: false });
   const [pendingCount, setPendingCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -111,6 +132,25 @@ const OtherApprovalsScreen = ({ navigation }) => {
   // { mode: 'approve' | 'reject', claim }
   const [decision, setDecision] = useState(null);
   const [remark, setRemark] = useState("");
+
+  // Team Lead Petty Cash Advance modal state: { mode: 'submit' | 'reject', req }
+  const [pcModal, setPcModal] = useState(null);
+  const [pcAmount, setPcAmount] = useState("");
+  const [pcRemark, setPcRemark] = useState("");
+  const [pcProofs, setPcProofs] = useState([]);
+  const [pcUploading, setPcUploading] = useState(false);
+  const [pcBusy, setPcBusy] = useState(false);
+
+  // Team Lead Petty Cash Return modal state: { mode: 'approve' | 'reject', req }
+  const [pcRetModal, setPcRetModal] = useState(null);
+  const [pcRetAmount, setPcRetAmount] = useState("");
+  const [pcRetRemark, setPcRetRemark] = useState("");
+  const [pcRetBusy, setPcRetBusy] = useState(false);
+
+  // Reporting Manager Early Punch-Out modal state: { mode: 'APPROVE' | 'REJECT', rec }
+  const [epoModal, setEpoModal] = useState(null);
+  const [epoRemark, setEpoRemark] = useState("");
+  const [epoBusy, setEpoBusy] = useState(false);
 
   const load = useCallback(async (status, spinner = true) => {
     if (spinner) setLoading(true);
@@ -124,6 +164,9 @@ const OtherApprovalsScreen = ({ navigation }) => {
         if (config.blockedScreens?.includes('otherApprovals')) {
           setIsAccessBlocked(true);
           setItems([]);
+          setPcRequests([]);
+          setPcReturnRequests([]);
+          setEarlyPunchOutRequests([]);
           setPendingCount(0);
           setLoading(false);
           setRefreshing(false);
@@ -132,17 +175,50 @@ const OtherApprovalsScreen = ({ navigation }) => {
       }
     } catch (_) {}
 
-    const res = await expenseApi.getMyApprovals(status);
+    const [res, pcRes, pcRetRes, epoRes] = await Promise.all([
+      expenseApi.getMyApprovals(status),
+      expenseApi.getTeamLeadPettyCashRequests(status),
+      expenseApi.getTeamLeadPettyCashReturnRequests(status),
+      expenseApi.getEarlyPunchOutApprovals(status),
+    ]);
     if (res.success) {
       if (res.isAccessBlocked) {
         setIsAccessBlocked(true);
         setItems([]);
+        setPcRequests([]);
+        setPcReturnRequests([]);
+        setEarlyPunchOutRequests([]);
         setPendingCount(0);
       } else {
         setIsAccessBlocked(false);
         setItems(Array.isArray(res.data) ? res.data : []);
-        setPendingCount(res.pendingCount || 0);
+        const pcList = pcRes.success && Array.isArray(pcRes.data) ? pcRes.data : [];
+        const pcRetList = pcRetRes.success && Array.isArray(pcRetRes.data) ? pcRetRes.data : [];
+        const epoList = epoRes.success && Array.isArray(epoRes.data) ? epoRes.data : [];
+        setPcRequests(pcList);
+        setPcReturnRequests(pcRetList);
+        setEarlyPunchOutRequests(epoList);
+        if (pcRes.success && pcRes.walletSummary) {
+          setTlWalletSummary(pcRes.walletSummary);
+        }
+        const claimPending = res.claimPendingCount !== undefined ? res.claimPendingCount : (res.pendingCount || 0);
+        const pcAdvPending = pcRes.success ? (pcRes.pendingCount || 0) : (res.pettyCashAdvancePendingCount || 0);
+        const pcRetPending = pcRetRes.success ? (pcRetRes.pendingCount || 0) : (res.pettyCashReturnPendingCount || 0);
+        const epoPending = epoRes.success ? (epoRes.pendingCount || 0) : (res.earlyPunchOutPendingCount || 0);
+        setPendingCount(res.claimPendingCount !== undefined ? claimPending + pcAdvPending + pcRetPending + epoPending : (res.pendingCount || 0));
       }
+    } else if (pcRes.success || pcRetRes.success || epoRes.success) {
+      setIsAccessBlocked(false);
+      setItems([]);
+      setPcRequests(pcRes.success && Array.isArray(pcRes.data) ? pcRes.data : []);
+      setPcReturnRequests(pcRetRes.success && Array.isArray(pcRetRes.data) ? pcRetRes.data : []);
+      setEarlyPunchOutRequests(epoRes.success && Array.isArray(epoRes.data) ? epoRes.data : []);
+      if (pcRes.success && pcRes.walletSummary) setTlWalletSummary(pcRes.walletSummary);
+      setPendingCount(
+        (pcRes.success ? (pcRes.pendingCount || 0) : 0) +
+        (pcRetRes.success ? (pcRetRes.pendingCount || 0) : 0) +
+        (epoRes.success ? (epoRes.pendingCount || 0) : 0)
+      );
     } else {
       setError(res.message || "Unable to load approvals.");
     }
@@ -197,6 +273,628 @@ const OtherApprovalsScreen = ({ navigation }) => {
         : `${claim.claimNumber || "Claim"} rejected. The employee has been informed.`
     );
     load(tab, false);
+  };
+
+  // ── Team Lead Petty Cash Advance actions ──
+  const openPcModal = (mode, req) => {
+    const avail = Math.max(0, Number(tlWalletSummary?.availableForAdvance || 0));
+    const reqAmt = Number(req?.requestedAmount || 0);
+    setPcModal({ mode, req });
+    setPcRemark("");
+    setPcProofs([]);
+    if (mode === "submit") {
+      if (avail <= 0) {
+        setPcAmount("");
+      } else {
+        setPcAmount(String(reqAmt > avail ? avail : reqAmt));
+      }
+    } else {
+      setPcAmount("");
+    }
+  };
+
+  const closePcModal = () => {
+    setPcModal(null);
+    setPcAmount("");
+    setPcRemark("");
+    setPcProofs([]);
+  };
+
+  const handlePickPcProof = async (useCamera = false) => {
+    try {
+      let result;
+      if (useCamera) {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert(
+            "Permission Required",
+            "Camera permission is required to capture proof photos.",
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Open Settings", onPress: () => Linking.openSettings().catch(() => {}) },
+            ]
+          );
+          return;
+        }
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ["images"],
+          quality: 0.6,
+          base64: true,
+        });
+      } else {
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          quality: 0.6,
+          allowsMultipleSelection: true,
+          base64: true,
+        });
+      }
+      if (result.canceled || !result.assets || !result.assets.length) return;
+
+      setPcUploading(true);
+      for (const asset of result.assets) {
+        const localId = `tl_proof_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const fileName = asset.fileName || `AdvanceProof_${Date.now()}.jpg`;
+        setPcProofs((prev) => [
+          ...prev,
+          { localId, uri: asset.uri, url: "", name: fileName, isUploading: true, uploadFailed: false },
+        ]);
+        try {
+          const upRes = await expenseApi.uploadFile(
+            {
+              uri: asset.uri,
+              name: fileName,
+              type: asset.mimeType || "image/jpeg",
+              file: asset.file,
+              base64: asset.base64,
+            },
+            null,
+            "receipt"
+          );
+          const uploadedUrl = upRes?.data?.url || upRes?.url || "";
+          if (upRes?.success && uploadedUrl) {
+            setPcProofs((prev) =>
+              prev.map((p) => (p.localId === localId ? { ...p, url: uploadedUrl, isUploading: false } : p))
+            );
+          } else {
+            setPcProofs((prev) =>
+              prev.map((p) => (p.localId === localId ? { ...p, isUploading: false, uploadFailed: true } : p))
+            );
+            Alert.alert("Upload Failed", upRes?.message || "Could not upload proof photo.");
+          }
+        } catch {
+          setPcProofs((prev) =>
+            prev.map((p) => (p.localId === localId ? { ...p, isUploading: false, uploadFailed: true } : p))
+          );
+        }
+      }
+    } finally {
+      setPcUploading(false);
+    }
+  };
+
+  const handleSubmitPcAction = async () => {
+    if (!pcModal) return;
+    const { mode, req } = pcModal;
+    const text = pcRemark.trim();
+
+    if (mode === "reject") {
+      if (text.length < 3) {
+        Alert.alert("Reason Required", "Please enter a rejection reason (at least 3 characters).");
+        return;
+      }
+      setPcBusy(true);
+      try {
+        const res = await expenseApi.rejectTeamLeadPettyCashAdvance(req._id, text);
+        if (!res.success) {
+          Alert.alert("Failed", res.message || "Could not reject request.");
+          return;
+        }
+        closePcModal();
+        Alert.alert("Rejected", "Petty cash advance request rejected and moved to History. The employee has been notified.");
+        load(tab, false);
+      } finally {
+        setPcBusy(false);
+      }
+      return;
+    }
+
+    // Submit advance form (all 3 fields required + non-negative balance cap)
+    const avail = Math.max(0, Number(tlWalletSummary?.availableForAdvance || 0));
+    if (avail <= 0) {
+      Alert.alert("Transfer Blocked", "Your current petty cash balance is zero or negative. You cannot transfer an advance.");
+      return;
+    }
+    const amt = Number(pcAmount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid advance amount greater than zero.");
+      return;
+    }
+    if (amt > avail) {
+      Alert.alert(
+        "Exceeds Available Balance",
+        `You can only send up to your available petty cash balance (${inr(avail)}) so your balance does not go negative.`
+      );
+      return;
+    }
+    if (pcUploading || pcProofs.some((p) => p.isUploading)) {
+      Alert.alert("Uploading Proof", "Please wait until proof photo upload completes.");
+      return;
+    }
+    const uploadedUrls = pcProofs.filter((p) => p.url && !p.uploadFailed).map((p) => p.url);
+    if (uploadedUrls.length === 0) {
+      Alert.alert("Proof Required", "Please capture or upload at least one proof photo before submitting.");
+      return;
+    }
+    if (text.length < 3) {
+      Alert.alert("Remark Required", "Please enter a remark (at least 3 characters).");
+      return;
+    }
+
+    setPcBusy(true);
+    try {
+      const res = await expenseApi.submitTeamLeadPettyCashAdvance(req._id, {
+        amount: amt,
+        proofs: uploadedUrls,
+        remarks: text,
+      });
+      if (!res.success) {
+        Alert.alert("Submission Failed", res.message || "Unable to submit petty cash advance.");
+        return;
+      }
+      closePcModal();
+      Alert.alert(
+        "Advance Sent for Acceptance",
+        `${inr(amt)} advance submitted to ${req.employee?.name || "the employee"}. Your balance will be deducted once the employee accepts.`
+      );
+      load(tab, false);
+    } finally {
+      setPcBusy(false);
+    }
+  };
+
+  const renderPettyCashCard = (r) => {
+    const who = r.employee?.name || "Employee";
+    const empCode = r.employee?.employeeIdCode;
+    const empMeta = [r.employee?.designation, r.employee?.department].filter(Boolean).join(" • ");
+    const isPending = r.status === "PENDING";
+    const statusPill =
+      r.status === "FULFILLED"
+        ? { label: "Accepted & Transferred", color: "#059669", bg: "#d1fae5" }
+        : r.status === "REJECTED"
+          ? { label: "Rejected", color: "#dc2626", bg: "#fee2e2" }
+          : r.status === "AWAITING_EMPLOYEE_ACCEPTANCE"
+            ? { label: "Awaiting Employee Accept", color: "#4f46e5", bg: "#eef2ff" }
+            : { label: "Pending", color: "#d97706", bg: "#fef3c7" };
+    const avail = Math.max(0, Number(tlWalletSummary?.availableForAdvance || 0));
+
+    return (
+      <View key={`pc_${r._id}`} style={styles.card}>
+        <View style={[styles.cardAccent, { backgroundColor: "#7c3aed" }]} />
+        <View style={styles.cardBody}>
+          <View style={styles.rowBetween}>
+            <View style={[styles.kindPill, { backgroundColor: "#f3e8ff" }]}>
+              <Wallet size={12} color="#7c3aed" />
+              <Text style={[styles.kindText, { color: "#7c3aed" }]}>Petty Cash Advance</Text>
+            </View>
+            <View style={[styles.kindPill, { backgroundColor: statusPill.bg }]}>
+              <Text style={[styles.kindText, { color: statusPill.color }]}>{statusPill.label}</Text>
+            </View>
+          </View>
+
+          <View style={[styles.rowBetween, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.claimNo} numberOfLines={1}>{who}</Text>
+              <View style={styles.whoRow}>
+                <User size={12} color="#64748b" />
+                <Text style={styles.whoText} numberOfLines={1}>
+                  {empCode || "Employee"}{empMeta ? ` • ${empMeta}` : ""}
+                </Text>
+              </View>
+              <View style={[styles.whoRow, { marginTop: 2 }]}>
+                <Calendar size={11} color="#94a3b8" />
+                <Text style={[styles.dateText, { fontSize: 11, marginTop: 0 }]}>
+                  Requested: {fmtDate(r.createdAt)}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.amountRow}>
+            <View style={styles.amountBox}>
+              <Text style={styles.amountLabel}>Requested</Text>
+              <Text style={styles.amountValue}>{inr(r.requestedAmount)}</Text>
+            </View>
+            {isPending ? (
+              <View style={[styles.amountBox, { borderRightWidth: 0 }]}>
+                <Text style={styles.amountLabel}>Your Available</Text>
+                <Text style={[styles.amountValue, { color: avail <= 0 ? "#dc2626" : "#059669" }]}>
+                  {inr(tlWalletSummary?.balance < 0 ? tlWalletSummary.balance : avail)}
+                </Text>
+              </View>
+            ) : (
+              <View style={[styles.amountBox, { borderRightWidth: 0 }]}>
+                <Text style={styles.amountLabel}>Sent Amount</Text>
+                <Text style={[styles.amountValue, { color: "#7c3aed" }]}>
+                  {r.approvedAmount > 0 ? inr(r.approvedAmount) : "—"}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={styles.reasonText}>
+            <Text style={{ fontWeight: "800" }}>Reason: </Text>{r.reason}
+          </Text>
+
+          {r.tlRemarks ? (
+            <Text style={[styles.reasonText, { marginTop: 4, color: "#475569" }]}>
+              <Text style={{ fontWeight: "800" }}>Your Remark: </Text>{r.tlRemarks}
+            </Text>
+          ) : null}
+
+          {Array.isArray(r.tlProofs) && r.tlProofs.length > 0 ? (
+            <View style={styles.pcProofRow}>
+              {r.tlProofs.map((att, idx) => {
+                const url = resolveProofImageUrl(typeof att === "string" ? att : att?.url);
+                if (!url) return null;
+                return (
+                  <TouchableOpacity
+                    key={`${r._id}_p_${idx}`}
+                    onPress={() => Linking.openURL(url).catch(() => {})}
+                    style={styles.pcProofThumb}
+                  >
+                    <Image source={{ uri: url }} style={styles.pcProofImg} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
+
+          {isPending && (
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.rejectBtn]}
+                onPress={() => openPcModal("reject", r)}
+              >
+                <XCircle size={15} color="#dc2626" />
+                <Text style={[styles.actionText, { color: "#dc2626" }]}>Reject</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.approveBtn]}
+                onPress={() => openPcModal("submit", r)}
+              >
+                <CheckCircle2 size={15} color="#fff" />
+                <Text style={[styles.actionText, { color: "#fff" }]}>Accept & Send</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
+
+  // ── Team Lead Petty Cash Return actions ──
+  const openPcRetModal = (mode, req) => {
+    setPcRetModal({ mode, req });
+    setPcRetAmount(mode === "approve" ? String(req?.requestedAmount || "") : "");
+    setPcRetRemark("");
+  };
+
+  const closePcRetModal = () => {
+    setPcRetModal(null);
+    setPcRetAmount("");
+    setPcRetRemark("");
+  };
+
+  const handleSubmitPcRetAction = async () => {
+    if (!pcRetModal) return;
+    const { mode, req } = pcRetModal;
+    const text = pcRetRemark.trim();
+
+    if (mode === "reject") {
+      if (text.length < 3) {
+        Alert.alert("Reason Required", "Please enter a rejection reason (at least 3 characters).");
+        return;
+      }
+      setPcRetBusy(true);
+      try {
+        const res = await expenseApi.rejectTeamLeadPettyCashReturn(req._id, text);
+        if (!res.success) {
+          Alert.alert("Failed", res.message || "Could not reject return request.");
+          return;
+        }
+        closePcRetModal();
+        Alert.alert("Rejected", "Petty cash return request rejected and moved to History. The employee has been notified.");
+        load(tab, false);
+      } finally {
+        setPcRetBusy(false);
+      }
+      return;
+    }
+
+    const amt = Number(pcRetAmount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid accepted return amount greater than zero.");
+      return;
+    }
+    if (text.length < 3) {
+      Alert.alert("Remark Required", "Please enter a remark for accepting this return (at least 3 characters).");
+      return;
+    }
+    setPcRetBusy(true);
+    try {
+      const res = await expenseApi.approveTeamLeadPettyCashReturn(req._id, {
+        approvedAmount: amt,
+        remarks: text,
+      });
+      if (!res.success) {
+        Alert.alert("Failed", res.message || "Could not accept return request.");
+        return;
+      }
+      closePcRetModal();
+      Alert.alert(
+        "Return Accepted",
+        `${inr(amt)} has been deducted from ${req.employee?.name || "the employee"} and credited to your Petty Cash Wallet.`
+      );
+      load(tab, false);
+    } finally {
+      setPcRetBusy(false);
+    }
+  };
+
+  const renderPettyCashReturnCard = (r) => {
+    const who = r.employee?.name || "Employee";
+    const empCode = r.employee?.employeeIdCode;
+    const empMeta = [r.employee?.designation, r.employee?.department].filter(Boolean).join(" • ");
+    const displayStatus = r.status === "PROCESSED" ? "APPROVED" : r.status;
+    const isPending = displayStatus === "PENDING";
+    const statusPill =
+      displayStatus === "APPROVED"
+        ? { label: "Accepted & Received", color: "#059669", bg: "#d1fae5" }
+        : displayStatus === "REJECTED"
+          ? { label: "Rejected", color: "#dc2626", bg: "#fee2e2" }
+          : { label: "Pending", color: "#d97706", bg: "#fef3c7" };
+
+    return (
+      <View key={`pcret_${r._id}`} style={styles.card}>
+        <View style={[styles.cardAccent, { backgroundColor: "#e11d48" }]} />
+        <View style={styles.cardBody}>
+          <View style={styles.rowBetween}>
+            <View style={[styles.kindPill, { backgroundColor: "#ffe4e6" }]}>
+              <CornerUpLeft size={12} color="#be123c" />
+              <Text style={[styles.kindText, { color: "#be123c" }]}>Petty Cash Return</Text>
+            </View>
+            <View style={[styles.kindPill, { backgroundColor: statusPill.bg }]}>
+              <Text style={[styles.kindText, { color: statusPill.color }]}>{statusPill.label}</Text>
+            </View>
+          </View>
+
+          <View style={[styles.rowBetween, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.claimNo} numberOfLines={1}>{who}</Text>
+              <View style={styles.whoRow}>
+                <User size={12} color="#64748b" />
+                <Text style={styles.whoText} numberOfLines={1}>
+                  {empCode || "Employee"}{empMeta ? ` • ${empMeta}` : ""}
+                </Text>
+              </View>
+              <View style={[styles.whoRow, { marginTop: 2 }]}>
+                <Calendar size={11} color="#94a3b8" />
+                <Text style={[styles.dateText, { fontSize: 11, marginTop: 0 }]}>
+                  Submitted: {fmtDate(r.createdAt)}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.amountRow}>
+            <View style={[styles.amountBox, isPending && { borderRightWidth: 0 }]}>
+              <Text style={styles.amountLabel}>Return Amount</Text>
+              <Text style={[styles.amountValue, { color: "#be123c" }]}>{inr(r.requestedAmount)}</Text>
+            </View>
+            {!isPending && (
+              <View style={[styles.amountBox, { borderRightWidth: 0 }]}>
+                <Text style={styles.amountLabel}>Accepted Amount</Text>
+                <Text style={[styles.amountValue, { color: "#059669" }]}>
+                  {r.approvedAmount > 0 ? inr(r.approvedAmount) : "—"}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {(r.remarks || r.employeeRemarks || r.reason) ? (
+            <Text style={styles.reasonText}>
+              <Text style={{ fontWeight: "800" }}>Employee Remark: </Text>
+              {r.remarks || r.employeeRemarks || r.reason}
+            </Text>
+          ) : null}
+
+          {r.accountsRemarks ? (
+            <Text style={[styles.reasonText, { marginTop: 4, color: "#475569" }]}>
+              <Text style={{ fontWeight: "800" }}>Your Remark: </Text>{r.accountsRemarks}
+            </Text>
+          ) : null}
+
+          {Array.isArray(r.attachments) && r.attachments.length > 0 ? (
+            <View style={styles.pcProofRow}>
+              {r.attachments.map((att, idx) => {
+                const url = resolveProofImageUrl(typeof att === "string" ? att : att?.url);
+                if (!url) return null;
+                return (
+                  <TouchableOpacity
+                    key={`${r._id}_retp_${idx}`}
+                    onPress={() => Linking.openURL(url).catch(() => {})}
+                    style={styles.pcProofThumb}
+                  >
+                    <Image source={{ uri: url }} style={styles.pcProofImg} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
+
+          {isPending && (
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.rejectBtn]}
+                onPress={() => openPcRetModal("reject", r)}
+              >
+                <XCircle size={15} color="#dc2626" />
+                <Text style={[styles.actionText, { color: "#dc2626" }]}>Reject</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.approveBtn]}
+                onPress={() => openPcRetModal("approve", r)}
+              >
+                <CheckCircle2 size={15} color="#fff" />
+                <Text style={[styles.actionText, { color: "#fff" }]}>Accept & Receive</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
+
+  // ── Reporting Manager Early Punch-Out actions ──
+  const openEpoModal = (mode, rec) => {
+    setEpoModal({ mode, rec });
+    setEpoRemark("");
+  };
+
+  const closeEpoModal = () => {
+    setEpoModal(null);
+    setEpoRemark("");
+  };
+
+  const handleSubmitEpoDecision = async () => {
+    if (!epoModal) return;
+    const { mode, rec } = epoModal;
+    const text = epoRemark.trim();
+    if (text.length < 3) {
+      Alert.alert(
+        mode === "APPROVE" ? "Remark Required" : "Reason Required",
+        mode === "APPROVE"
+          ? "Please enter an approval remark (at least 3 characters)."
+          : "Please enter a rejection reason (at least 3 characters)."
+      );
+      return;
+    }
+    setEpoBusy(true);
+    try {
+      const res = await expenseApi.decideEarlyPunchOut(rec._id, mode, text);
+      if (!res.success) {
+        Alert.alert("Failed", res.message || "Could not process early punch-out decision.");
+        return;
+      }
+      closeEpoModal();
+      Alert.alert(
+        mode === "APPROVE" ? "Approved (Present)" : "Rejected (Half Day)",
+        mode === "APPROVE"
+          ? `${rec.user?.name || "Employee"}'s early punch-out approved. Attendance status is now Present.`
+          : `${rec.user?.name || "Employee"}'s early punch-out rejected. Attendance status is marked Half Day.`
+      );
+      load(tab, false);
+    } finally {
+      setEpoBusy(false);
+    }
+  };
+
+  const renderEarlyPunchOutCard = (a) => {
+    const epo = a.earlyPunchOutRequest || {};
+    const who = a.user?.name || "Employee";
+    const empCode = a.user?.employeeIdCode;
+    const empMeta = [a.user?.designation, a.user?.department].filter(Boolean).join(" • ");
+    const isPending = epo.status === "PENDING";
+    const statusPill =
+      epo.status === "APPROVED"
+        ? { label: "Approved • Present", color: "#059669", bg: "#d1fae5" }
+        : epo.status === "REJECTED"
+          ? { label: "Rejected • Half Day", color: "#dc2626", bg: "#fee2e2" }
+          : { label: "Pending", color: "#d97706", bg: "#fef3c7" };
+
+    return (
+      <View key={`epo_${a._id}`} style={styles.card}>
+        <View style={[styles.cardAccent, { backgroundColor: "#ea580c" }]} />
+        <View style={styles.cardBody}>
+          <View style={styles.rowBetween}>
+            <View style={[styles.kindPill, { backgroundColor: "#ffedd5" }]}>
+              <Clock size={12} color="#c2410c" />
+              <Text style={[styles.kindText, { color: "#c2410c" }]}>Early Punch-Out</Text>
+            </View>
+            <View style={[styles.kindPill, { backgroundColor: statusPill.bg }]}>
+              <Text style={[styles.kindText, { color: statusPill.color }]}>{statusPill.label}</Text>
+            </View>
+          </View>
+
+          <View style={[styles.rowBetween, { marginTop: 10 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.claimNo} numberOfLines={1}>{who}</Text>
+              <View style={styles.whoRow}>
+                <User size={12} color="#64748b" />
+                <Text style={styles.whoText} numberOfLines={1}>
+                  {empCode || "Employee"}{empMeta ? ` • ${empMeta}` : ""}
+                </Text>
+              </View>
+              <View style={[styles.whoRow, { marginTop: 2 }]}>
+                <Calendar size={11} color="#94a3b8" />
+                <Text style={[styles.dateText, { fontSize: 11, marginTop: 0 }]}>
+                  Date: {fmtDate(a.date || a.createdAt)}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.amountRow}>
+            <View style={styles.amountBox}>
+              <Text style={styles.amountLabel}>Punch In</Text>
+              <Text style={styles.amountValue}>{fmtTime(a.punchIn?.time)}</Text>
+            </View>
+            <View style={styles.amountBox}>
+              <Text style={styles.amountLabel}>Punch Out</Text>
+              <Text style={[styles.amountValue, { color: "#c2410c" }]}>{fmtTime(a.punchOut?.time)}</Text>
+            </View>
+            <View style={[styles.amountBox, { borderRightWidth: 0 }]}>
+              <Text style={styles.amountLabel}>Shift End</Text>
+              <Text style={styles.amountValue}>
+                {epo.shiftEndTime ? fmtTime(epo.shiftEndTime) : (a.shiftInfo?.endTime || "—")}
+              </Text>
+            </View>
+          </View>
+
+          {epo.reason ? (
+            <Text style={styles.reasonText}>
+              <Text style={{ fontWeight: "800" }}>Employee Reason: </Text>{epo.reason}
+            </Text>
+          ) : null}
+
+          {epo.remarks ? (
+            <Text style={[styles.reasonText, { marginTop: 4, color: "#475569" }]}>
+              <Text style={{ fontWeight: "800" }}>Your Remark: </Text>{epo.remarks}
+            </Text>
+          ) : null}
+
+          {isPending && (
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.rejectBtn]}
+                onPress={() => openEpoModal("REJECT", a)}
+              >
+                <XCircle size={15} color="#dc2626" />
+                <Text style={[styles.actionText, { color: "#dc2626" }]}>Reject</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.approveBtn]}
+                onPress={() => openEpoModal("APPROVE", a)}
+              >
+                <CheckCircle2 size={15} color="#fff" />
+                <Text style={[styles.actionText, { color: "#fff" }]}>Approve</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </View>
+    );
   };
 
   const renderCard = (c) => {
@@ -575,7 +1273,7 @@ const OtherApprovalsScreen = ({ navigation }) => {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ExpenseHeader
         title="Other Approvals"
-        subtitle="Full payment, stock purchase & other expense requests"
+        subtitle="Expense claims & petty cash advance requests"
         navigation={navigation}
       />
 
@@ -641,7 +1339,7 @@ const OtherApprovalsScreen = ({ navigation }) => {
             </View>
           ) : null}
 
-          {!error && items.length === 0 ? (
+          {!error && items.length === 0 && pcRequests.length === 0 && pcReturnRequests.length === 0 && earlyPunchOutRequests.length === 0 ? (
             <View style={styles.empty}>
               <View style={styles.emptyIcon}>
                 <Inbox size={30} color="#6366f1" />
@@ -651,12 +1349,15 @@ const OtherApprovalsScreen = ({ navigation }) => {
               </Text>
               <Text style={styles.emptySub}>
                 {tab === "PENDING"
-                  ? "Claims where you are selected as approver will appear here."
-                  : "Claims you approve or reject will be listed here."}
+                  ? "Claims, petty cash, or early punch-out requests assigned to you will appear here."
+                  : "Requests you approve or reject will be listed here."}
               </Text>
             </View>
           ) : null}
 
+          {earlyPunchOutRequests.map(renderEarlyPunchOutCard)}
+          {pcRequests.map(renderPettyCashCard)}
+          {pcReturnRequests.map(renderPettyCashReturnCard)}
           {items.map(renderCard)}
         </ScrollView>
       )}
@@ -703,6 +1404,370 @@ const OtherApprovalsScreen = ({ navigation }) => {
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <Text style={[styles.actionText, { color: "#fff" }]}>{isReject ? "Reject" : "Approve"}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+      {/* Team Lead Petty Cash Advance Submit / Reject Modal */}
+      <Modal visible={!!pcModal} transparent animationType="fade" onRequestClose={closePcModal}>
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={[styles.modalCard, { alignItems: "stretch", maxHeight: "88%" }]}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={{ alignItems: "center" }}>
+                <View
+                  style={[
+                    styles.modalIcon,
+                    { backgroundColor: pcModal?.mode === "reject" ? "#fee2e2" : "#f3e8ff" },
+                  ]}
+                >
+                  {pcModal?.mode === "reject" ? (
+                    <XCircle size={26} color="#dc2626" />
+                  ) : (
+                    <Wallet size={26} color="#7c3aed" />
+                  )}
+                </View>
+                <Text style={styles.modalTitle}>
+                  {pcModal?.mode === "reject" ? "Reject Petty Cash Request" : "Send Petty Cash Advance"}
+                </Text>
+                <Text style={styles.modalSub}>
+                  {pcModal?.req?.employee?.name || "Employee"} requested {inr(pcModal?.req?.requestedAmount)}
+                </Text>
+              </View>
+
+              {pcModal?.mode === "submit" ? (
+                <>
+                  {/* Team Lead live available balance banner */}
+                  {(() => {
+                    const avail = Math.max(0, Number(tlWalletSummary?.availableForAdvance || 0));
+                    const reqAmt = Number(pcModal?.req?.requestedAmount || 0);
+                    const bal = Number(tlWalletSummary?.balance || 0);
+                    const isBlocked = avail <= 0;
+                    const isCapped = !isBlocked && reqAmt > avail;
+                    return (
+                      <View
+                        style={[
+                          styles.pcBalBanner,
+                          isBlocked
+                            ? { backgroundColor: "#fef2f2", borderColor: "#fecaca" }
+                            : isCapped
+                              ? { backgroundColor: "#fffbeb", borderColor: "#fde68a" }
+                              : { backgroundColor: "#ecfdf5", borderColor: "#a7f3d0" },
+                        ]}
+                      >
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                          {isBlocked || isCapped ? (
+                            <AlertTriangle size={14} color={isBlocked ? "#dc2626" : "#b45309"} />
+                          ) : (
+                            <Wallet size={14} color="#059669" />
+                          )}
+                          <Text
+                            style={{
+                              fontSize: 12,
+                              fontWeight: "800",
+                              color: isBlocked ? "#991b1b" : isCapped ? "#92400e" : "#065f46",
+                            }}
+                          >
+                            Your Balance: {inr(bal)}
+                            {tlWalletSummary?.reservedAdvance > 0
+                              ? ` (Available: ${inr(avail)})`
+                              : ""}
+                          </Text>
+                        </View>
+                        {isBlocked ? (
+                          <Text style={{ fontSize: 11, color: "#b91c1c", marginTop: 4 }}>
+                            Transfer blocked: your petty cash balance is zero or negative. You cannot send an advance.
+                          </Text>
+                        ) : isCapped ? (
+                          <Text style={{ fontSize: 11, color: "#b45309", marginTop: 4 }}>
+                            Requested {inr(reqAmt)} exceeds your available balance. You can send at most {inr(avail)} so your balance does not go negative.
+                          </Text>
+                        ) : null}
+                      </View>
+                    );
+                  })()}
+
+                  <Text style={styles.pcFieldLabel}>
+                    Amount to Send (₹) * (Max {inr(Math.max(0, Number(tlWalletSummary?.availableForAdvance || 0)))})
+                  </Text>
+                  <TextInput
+                    style={styles.pcAmountInput}
+                    value={pcAmount}
+                    onChangeText={setPcAmount}
+                    keyboardType="numeric"
+                    editable={Number(tlWalletSummary?.availableForAdvance || 0) > 0}
+                    placeholder="Enter advance amount"
+                    placeholderTextColor="#94a3b8"
+                  />
+
+                  <Text style={styles.pcFieldLabel}>Proof Photo (Camera / Upload) *</Text>
+                  <View style={styles.pcPickerRow}>
+                    <TouchableOpacity
+                      style={styles.pcPickerBtn}
+                      onPress={() => handlePickPcProof(true)}
+                      disabled={pcUploading || Number(tlWalletSummary?.availableForAdvance || 0) <= 0}
+                    >
+                      <Camera size={15} color="#4f46e5" />
+                      <Text style={styles.pcPickerBtnText}>Camera</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.pcPickerBtn}
+                      onPress={() => handlePickPcProof(false)}
+                      disabled={pcUploading || Number(tlWalletSummary?.availableForAdvance || 0) <= 0}
+                    >
+                      <ImageIcon size={15} color="#4f46e5" />
+                      <Text style={styles.pcPickerBtnText}>Gallery</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {pcProofs.length > 0 && (
+                    <View style={styles.pcProofRow}>
+                      {pcProofs.map((p) => (
+                        <View key={p.localId} style={styles.pcProofWrap}>
+                          <Image source={{ uri: p.uri || resolveProofImageUrl(p.url) }} style={styles.pcProofImg} />
+                          {p.isUploading && (
+                            <View style={styles.pcUploadingOverlay}>
+                              <ActivityIndicator size="small" color="#fff" />
+                            </View>
+                          )}
+                          <TouchableOpacity
+                            style={styles.pcRemoveBtn}
+                            onPress={() => setPcProofs((prev) => prev.filter((x) => x.localId !== p.localId))}
+                          >
+                            <Trash2 size={10} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  <Text style={styles.pcFieldLabel}>Remark *</Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    placeholder="Enter remark for this advance (required)"
+                    placeholderTextColor="#94a3b8"
+                    value={pcRemark}
+                    onChangeText={setPcRemark}
+                    multiline
+                    maxLength={500}
+                  />
+                </>
+              ) : (
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Reason for rejecting request (required)"
+                  placeholderTextColor="#94a3b8"
+                  value={pcRemark}
+                  onChangeText={setPcRemark}
+                  multiline
+                  maxLength={500}
+                />
+              )}
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity style={[styles.modalBtn, styles.modalCancel]} onPress={closePcModal} disabled={pcBusy}>
+                  <Text style={[styles.actionText, { color: "#475569" }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.modalBtn,
+                    {
+                      backgroundColor: pcModal?.mode === "reject" ? "#dc2626" : "#059669",
+                      opacity:
+                        pcBusy ||
+                        (pcModal?.mode === "submit" && Number(tlWalletSummary?.availableForAdvance || 0) <= 0)
+                          ? 0.45
+                          : 1,
+                    },
+                  ]}
+                  onPress={handleSubmitPcAction}
+                  disabled={
+                    pcBusy ||
+                    (pcModal?.mode === "submit" && Number(tlWalletSummary?.availableForAdvance || 0) <= 0)
+                  }
+                >
+                  {pcBusy ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={[styles.actionText, { color: "#fff" }]}>
+                      {pcModal?.mode === "reject" ? "Confirm Reject" : "Submit to Employee"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+      {/* Team Lead Petty Cash Return Accept / Reject Modal */}
+      <Modal visible={!!pcRetModal} transparent animationType="fade" onRequestClose={closePcRetModal}>
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={[styles.modalCard, { alignItems: "stretch", maxHeight: "86%" }]}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={{ alignItems: "center" }}>
+                <View
+                  style={[
+                    styles.modalIcon,
+                    { backgroundColor: pcRetModal?.mode === "reject" ? "#fee2e2" : "#d1fae5" },
+                  ]}
+                >
+                  {pcRetModal?.mode === "reject" ? (
+                    <XCircle size={26} color="#dc2626" />
+                  ) : (
+                    <CornerUpLeft size={26} color="#059669" />
+                  )}
+                </View>
+                <Text style={styles.modalTitle}>
+                  {pcRetModal?.mode === "reject" ? "Reject Petty Cash Return" : "Accept Petty Cash Return"}
+                </Text>
+                <Text style={styles.modalSub}>
+                  {pcRetModal?.req?.employee?.name || "Employee"} is returning {inr(pcRetModal?.req?.requestedAmount)}
+                </Text>
+              </View>
+
+              {pcRetModal?.mode === "approve" && (
+                <>
+                  {Array.isArray(pcRetModal?.req?.attachments) && pcRetModal.req.attachments.length > 0 && (
+                    <View style={{ marginBottom: 8 }}>
+                      <Text style={styles.pcFieldLabel}>Employee Payment Proof (Tap to view)</Text>
+                      <View style={styles.pcProofRow}>
+                        {pcRetModal.req.attachments.map((att, idx) => {
+                          const url = resolveProofImageUrl(typeof att === "string" ? att : att?.url);
+                          if (!url) return null;
+                          return (
+                            <TouchableOpacity
+                              key={`modal_retp_${idx}`}
+                              onPress={() => Linking.openURL(url).catch(() => {})}
+                              style={styles.pcProofThumb}
+                            >
+                              <Image source={{ uri: url }} style={styles.pcProofImg} />
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  )}
+
+                  <Text style={styles.pcFieldLabel}>Accepted Return Amount (₹) *</Text>
+                  <TextInput
+                    style={styles.pcAmountInput}
+                    value={pcRetAmount}
+                    onChangeText={setPcRetAmount}
+                    keyboardType="numeric"
+                    placeholder="Enter accepted return amount"
+                    placeholderTextColor="#94a3b8"
+                  />
+                </>
+              )}
+
+              <Text style={styles.pcFieldLabel}>
+                {pcRetModal?.mode === "reject" ? "Rejection Reason *" : "Remark *"}
+              </Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder={
+                  pcRetModal?.mode === "reject"
+                    ? "Reason for rejecting return request (required)"
+                    : "Enter remark confirming receipt of petty cash (required)"
+                }
+                placeholderTextColor="#94a3b8"
+                value={pcRetRemark}
+                onChangeText={setPcRetRemark}
+                multiline
+                maxLength={500}
+              />
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity style={[styles.modalBtn, styles.modalCancel]} onPress={closePcRetModal} disabled={pcRetBusy}>
+                  <Text style={[styles.actionText, { color: "#475569" }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.modalBtn,
+                    { backgroundColor: pcRetModal?.mode === "reject" ? "#dc2626" : "#059669" },
+                  ]}
+                  onPress={handleSubmitPcRetAction}
+                  disabled={pcRetBusy}
+                >
+                  {pcRetBusy ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={[styles.actionText, { color: "#fff" }]}>
+                      {pcRetModal?.mode === "reject" ? "Confirm Reject" : "Accept & Receive"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+      {/* Reporting Manager Early Punch-Out Approve / Reject Modal */}
+      <Modal visible={!!epoModal} transparent animationType="fade" onRequestClose={closeEpoModal}>
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={styles.modalCard}>
+            <View
+              style={[
+                styles.modalIcon,
+                { backgroundColor: epoModal?.mode === "REJECT" ? "#fee2e2" : "#d1fae5" },
+              ]}
+            >
+              {epoModal?.mode === "REJECT" ? (
+                <XCircle size={26} color="#dc2626" />
+              ) : (
+                <CheckCircle2 size={26} color="#059669" />
+              )}
+            </View>
+            <Text style={styles.modalTitle}>
+              {epoModal?.mode === "REJECT" ? "Reject Early Punch-Out" : "Approve Early Punch-Out"}
+            </Text>
+            <Text style={styles.modalSub}>
+              {epoModal?.rec?.user?.name || "Employee"} ({fmtDate(epoModal?.rec?.date)})
+              {epoModal?.mode === "REJECT"
+                ? " — Rejecting will mark attendance status as Half Day."
+                : " — Approving will mark attendance status as Present (not Half Day)."}
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder={
+                epoModal?.mode === "REJECT"
+                  ? "Reason for rejection (required)"
+                  : "Approval remark (required)"
+              }
+              placeholderTextColor="#94a3b8"
+              value={epoRemark}
+              onChangeText={setEpoRemark}
+              multiline
+              maxLength={500}
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity style={[styles.modalBtn, styles.modalCancel]} onPress={closeEpoModal} disabled={epoBusy}>
+                <Text style={[styles.actionText, { color: "#475569" }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalBtn,
+                  { backgroundColor: epoModal?.mode === "REJECT" ? "#dc2626" : "#059669" },
+                ]}
+                onPress={handleSubmitEpoDecision}
+                disabled={epoBusy}
+              >
+                {epoBusy ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={[styles.actionText, { color: "#fff" }]}>
+                    {epoModal?.mode === "REJECT" ? "Reject (Half Day)" : "Approve (Present)"}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -878,6 +1943,81 @@ const styles = StyleSheet.create({
   modalActions: { flexDirection: "row", gap: 10, marginTop: 16, width: "100%" },
   modalBtn: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 12, borderRadius: 12 },
   modalCancel: { backgroundColor: "#f1f5f9" },
+  pcBalBanner: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+  },
+  pcFieldLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#334155",
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  pcAmountInput: {
+    width: "100%",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#0f172a",
+    backgroundColor: "#f8fafc",
+  },
+  pcPickerRow: { flexDirection: "row", gap: 10, marginTop: 2 },
+  pcPickerBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+    backgroundColor: "#eef2ff",
+  },
+  pcPickerBtnText: { fontSize: 12, fontWeight: "700", color: "#4f46e5" },
+  pcProofRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
+  pcProofThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+  },
+  pcProofWrap: {
+    width: 58,
+    height: 58,
+    borderRadius: 10,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    position: "relative",
+  },
+  pcProofImg: { width: "100%", height: "100%", resizeMode: "cover" },
+  pcUploadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(15,23,42,0.5)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pcRemoveBtn: {
+    position: "absolute",
+    top: 3,
+    right: 3,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(220,38,38,0.9)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });
 
 export default OtherApprovalsScreen;

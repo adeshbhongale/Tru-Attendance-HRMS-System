@@ -14,6 +14,8 @@ import {
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
+  Linking,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -48,7 +50,8 @@ const LoginScreen = ({ navigation }) => {
   useEffect(() => {
     const checkLogin = async () => {
       try {
-        const token = await AsyncStorage.getItem("token");
+        const { getSecureToken, removeSecureToken } = require("../utils/secureStorage");
+        const token = await getSecureToken();
         const user = await AsyncStorage.getItem("user");
         const savedCompanyCode = await AsyncStorage.getItem("companyCode");
 
@@ -61,6 +64,7 @@ const LoginScreen = ({ navigation }) => {
             // Verify session with backend before navigating to Main
             const meRes = await api.get("/auth/me");
             if (meRes.data?.data) {
+              registerPushToken(true).catch(() => {});
               navigation.reset({
                 index: 0,
                 routes: [{ name: "Main" }],
@@ -70,10 +74,12 @@ const LoginScreen = ({ navigation }) => {
           } catch (verifyErr) {
             if (verifyErr?.response?.status === 401) {
               console.log("[LoginScreen] Session invalid or employee data gone. Resetting to login.");
-              await AsyncStorage.multiRemove(["token", "user", "userId", "@mobileAccessConfig"]);
+              await removeSecureToken();
+              await AsyncStorage.multiRemove(["user", "userId", "@mobileAccessConfig"]);
               return;
             }
             // If offline / network timeout, allow access with cached session
+            registerPushToken(true).catch(() => {});
             navigation.reset({
               index: 0,
               routes: [{ name: "Main" }],
@@ -157,7 +163,8 @@ const LoginScreen = ({ navigation }) => {
       });
       const { token, user } = res.data;
 
-      await AsyncStorage.setItem("token", token);
+      const { setSecureToken } = require("../utils/secureStorage");
+      await setSecureToken(token);
       await AsyncStorage.setItem("user", JSON.stringify(user));
       await AsyncStorage.setItem("userId", user._id || user.id);
       await AsyncStorage.setItem("companyCode", trimmedCode);
@@ -176,7 +183,7 @@ const LoginScreen = ({ navigation }) => {
       // Store mobile access config for DashboardScreen, HRScreen, App.js
       await AsyncStorage.setItem("@mobileAccessConfig", JSON.stringify(mobileAccess));
 
-      registerPushToken().catch(() => { });
+      registerPushToken(true).catch(() => { });
 
       // Only initialize tracking if it's enabled for this user
       if (mobileAccess.trackingEnabled !== false) {
@@ -247,9 +254,7 @@ const LoginScreen = ({ navigation }) => {
         <View className="flex-1 justify-between py-4">
           <View>
             <View className="mb-6 items-center justify-center">
-              <View className="w-16 h-16 rounded-[22px] bg-indigo-600 justify-center items-center mb-4 shadow-lg shadow-indigo-200">
-                <ShieldCheck size={32} color="white" />
-              </View>
+              <Image source={require("../../assets/favicon.png")} style={{ width: 88, height: 88, marginBottom: 12 }} resizeMode="contain" />
               <Text className="text-3xl font-extrabold text-slate-900 tracking-tight text-center">
                 Sign In
               </Text>
@@ -365,17 +370,24 @@ const LoginScreen = ({ navigation }) => {
             </View>
           </View>
 
-          <TouchableOpacity
-            onPress={() => setShowAdminModal(true)}
-            className="items-center pt-8 pb-4 active:opacity-70"
-          >
-            <Text className="text-slate-400 font-bold text-sm">
-              Need help? Contact Admin
-            </Text>
+          <View className="items-center pt-8 pb-4">
+            <TouchableOpacity
+              onPress={() => setShowAdminModal(true)}
+              className="items-center active:opacity-70"
+            >
+              <Text className="text-slate-400 font-bold text-sm">
+                Need help? Contact Admin
+              </Text>
+            </TouchableOpacity>
+            <View className="flex-row items-center justify-center mt-3">
+              <TouchableOpacity onPress={() => Linking.openURL("https://www.gatimaan.io/privacy-policy")}>
+                <Text className="text-indigo-600 text-[11px] font-bold underline">Privacy Policy</Text>
+              </TouchableOpacity>
+            </View>
             <Text className="text-slate-300 text-[10px] mt-2 font-bold tracking-widest">
-              Trucode ERP Systems © 2026 v{require("expo-constants").default?.expoConfig?.version || "1.0.1"}
+              Gatimaan © 2026 v{require("expo-constants").default?.expoConfig?.version || "1.0.1"}
             </Text>
-          </TouchableOpacity>
+          </View>
         </View>
       </ScrollView>
 
@@ -413,7 +425,7 @@ const LoginScreen = ({ navigation }) => {
                     Support Email
                   </Text>
                   <Text className="text-slate-800 font-bold text-sm">
-                    trucodehr@gmail.com
+                    sales@trucode.in
                   </Text>
                 </View>
               </View>
@@ -427,7 +439,7 @@ const LoginScreen = ({ navigation }) => {
                     Contact Number
                   </Text>
                   <Text className="text-slate-800 font-bold text-sm">
-                    +91 9156189595
+                    +91 9665749595
                   </Text>
                 </View>
               </View>

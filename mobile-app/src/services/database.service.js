@@ -244,3 +244,15 @@ export const getPointsByTrip = async (tripId) => {
     return [];
   }
 };
+
+/**
+ * Purge all local tracking points (called on logout / forceLogout to prevent multi-user data leakage)
+ */
+export const clearAllPoints = async () => {
+  try {
+    const database = await initDatabase();
+    await database.runAsync(`DELETE FROM tracking_points`);
+  } catch (err) {
+    console.warn('[DatabaseService] Clear all points notice:', err?.message);
+  }
+};

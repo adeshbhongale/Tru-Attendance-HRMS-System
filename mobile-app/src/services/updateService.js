@@ -37,7 +37,8 @@ export async function checkForAppUpdates(promptUser = true) {
         // If running old embedded/fallback bundle or user is not logged in, auto-reload immediately!
         let token = null;
         try {
-          token = await AsyncStorage.getItem("token");
+          const { getSecureToken } = require("../utils/secureStorage");
+          token = await getSecureToken();
         } catch (_) {}
 
         if (Updates.isEmergencyLaunch || Updates.isEmbeddedLaunch || !token) {

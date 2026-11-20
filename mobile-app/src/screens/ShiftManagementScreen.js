@@ -313,10 +313,11 @@ const ShiftManagementScreen = ({ navigation }) => {
             mode="date"
             display="default"
             maximumDate={new Date()}
-            onChange={(event, selectedDate) => {
+            onValueChange={(event, selectedDate) => {
               setShowDatePicker(false);
               if (selectedDate) setDateFilter(selectedDate);
             }}
+            onDismiss={() => setShowDatePicker(false)}
           />
         )}
 

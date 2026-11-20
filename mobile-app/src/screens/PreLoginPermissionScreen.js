@@ -1,48 +1,32 @@
-import { requestIgnoreBatteryOptimizations, isBatteryOptimizationIgnored } from '../services/batteryOptimization';
 import * as Location from 'expo-location';
 import {
-  BatteryCharging,
-  Bell,
   CheckCircle2,
   MapPin,
   Navigation,
   Settings,
   ShieldCheck,
-  Zap
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
   Alert,
-  Dimensions,
+  Image,
   Linking,
-  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
-
-let Notifications = null;
-try {
-  Notifications = require('expo-notifications');
-} catch (e) {
-  // Graceful fallback if expo-notifications is not available
-}
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) => {
   const [checking, setChecking] = useState(true);
   const [requestingAll, setRequestingAll] = useState(false);
   const [fgStatus, setFgStatus] = useState('undetermined');
   const [bgStatus, setBgStatus] = useState('undetermined');
-  const [notifStatus, setNotifStatus] = useState('undetermined');
   const [gpsServicesEnabled, setGpsServicesEnabled] = useState(false);
-  const [batteryIgnored, setBatteryIgnored] = useState(false);
 
   const checkStatus = async () => {
     try {
@@ -77,24 +61,8 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
         setGpsServicesEnabled(curGps);
       }
 
-      // 4. Notifications
-      if (Notifications && typeof Notifications.getPermissionsAsync === 'function') {
-        try {
-          const notif = await Notifications.getPermissionsAsync();
-          setNotifStatus(notif?.status || 'undetermined');
-        } catch (e) {
-          setNotifStatus('undetermined');
-        }
-      } else {
-        setNotifStatus('granted');
-      }
-
-      // 5. Battery Optimization Status
-      const isBatIgnored = await isBatteryOptimizationIgnored();
-      setBatteryIgnored(isBatIgnored);
-
-      // If all required permissions are granted (especially on return from settings)
-      if (curFg === 'granted' && (curBg === 'granted' || Platform.OS !== 'android') && curGps) {
+      // Auto-advance if required foreground location permission and GPS are granted
+      if (curFg === 'granted' && curGps) {
         if (onPermissionsComplete) {
           onPermissionsComplete();
         }
@@ -109,7 +77,6 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
   useEffect(() => {
     checkStatus();
 
-    // Re-verify immediately whenever app returns to foreground from Settings
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         checkStatus();
@@ -121,12 +88,13 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
     };
   }, []);
 
-  // Master handler: Directly request all permissions sequentially
+  // Request foreground location permission after user accepts the standalone Location Prominent Disclosure.
+  // Background location ("Allow all the time") is requested only after login when starting an active shift or field route.
   const handleGrantAllPermissions = async () => {
     try {
       setRequestingAll(true);
 
-      // 1. Request Foreground Location
+      // 1. Request Foreground Location first
       let fgResult = null;
       try {
         fgResult = await Location.requestForegroundPermissionsAsync();
@@ -135,64 +103,36 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
         console.warn('[PreLoginPermissionScreen] FG request failed:', e?.message);
       }
 
-      // 2. Request Background Location ("Allow all the time")
-      let bgResult = null;
-      if (typeof Location.requestBackgroundPermissionsAsync === 'function') {
-        try {
-          bgResult = await Location.requestBackgroundPermissionsAsync();
-          setBgStatus(bgResult?.status || 'denied');
-        } catch (bgErr) {
-          console.warn('[PreLoginPermissionScreen] BG request note:', bgErr?.message);
-        }
-      }
-
-      // 3. Request Notifications
-      if (Notifications && typeof Notifications.requestPermissionsAsync === 'function') {
-        try {
-          const notifResult = await Notifications.requestPermissionsAsync();
-          setNotifStatus(notifResult?.status || 'denied');
-        } catch (notifErr) {
-          console.warn('[PreLoginPermissionScreen] Notif request error:', notifErr?.message);
-        }
-      }
-
-      // 4. Check Location Services
+      // 2. Check Location Services
       if (typeof Location.hasServicesEnabledAsync === 'function') {
         const gps = await Location.hasServicesEnabledAsync();
         setGpsServicesEnabled(!!gps);
       }
 
-      // Re-verify latest status
       await checkStatus();
 
-      // If foreground is granted, auto-advance or prompt for background if needed
       if (fgResult?.status === 'granted') {
-        if (bgResult?.status === 'granted' || Platform.OS !== 'android') {
-          if (onPermissionsComplete) {
-            onPermissionsComplete();
-          }
-        } else {
-          Alert.alert(
-            'Background Location Required',
-            'Company policy requires setting Location to "Allow all the time" in App Settings to track attendance and outstation travel.',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Open Settings', onPress: () => Linking.openSettings() },
-            ]
-          );
+        if (onPermissionsComplete) {
+          onPermissionsComplete();
         }
       } else {
         Alert.alert(
           'Location Permission Required',
-          'Attendance tracking requires location access. Please tap "Open Settings" and enable Location permission.',
+          'Gatimaan requires location access to verify attendance punch-in/out within your office geofence.',
           [
-            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Not Now',
+              style: 'cancel',
+              onPress: () => {
+                if (onContinueAnyway) onContinueAnyway();
+              },
+            },
             { text: 'Open Settings', onPress: () => Linking.openSettings() },
           ]
         );
       }
     } catch (err) {
-      console.warn('[PreLoginPermissionScreen] Grant all error:', err?.message);
+      console.warn('[PreLoginPermissionScreen] Consent error:', err?.message);
     } finally {
       setRequestingAll(false);
     }
@@ -202,27 +142,29 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
     try {
       Linking.openSettings();
     } catch (e) {
-      Alert.alert('Settings', 'Please open your device Settings ➔ Apps ➔ Geo-Track HRMS.');
+      Alert.alert('Settings', 'Please open your device Settings ➔ Apps ➔ Gatimaan.');
     }
   };
 
   const isForegroundGranted = fgStatus === 'granted';
   const isBackgroundGranted = bgStatus === 'granted';
-  const isAllGranted = isForegroundGranted && isBackgroundGranted && gpsServicesEnabled;
+  const isAllGranted = isForegroundGranted && gpsServicesEnabled;
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
 
-      {/* Header Banner */}
+      {/* Header Banner — Prominent Disclosure */}
       <View style={styles.header}>
-        <View style={styles.headerIconContainer}>
-          <ShieldCheck size={32} color="#ffffff" />
-        </View>
-        <Text style={styles.headerTitle}>Permissions &amp; Services</Text>
-        <Text style={styles.headerSubtitle}>Geo-Track HRMS Enterprise</Text>
+        <Image
+          source={require('../../assets/favicon.png')}
+          style={{ width: 72, height: 72, marginBottom: 8 }}
+          resizeMode="contain"
+        />
+        <Text style={styles.headerTitle}>Location Disclosure</Text>
+        <Text style={styles.headerSubtitle}>Gatimaan Enterprise</Text>
         <Text style={styles.headerDesc}>
-          Grant the required permissions below to enable continuous real-time GPS tracking and instant attendance sync.
+          Gatimaan collects location data to enable attendance geofence verification, live field route tracking, and customer visit logging even when the app is closed or not in use.
         </Text>
       </View>
 
@@ -232,9 +174,8 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Permission Feature Cards */}
         <View style={styles.cardsContainer}>
-          {/* Card 1: Precise GPS Location */}
+          {/* Card 1: Foreground GPS Location */}
           <View style={styles.permissionCard}>
             <View style={[styles.iconBox, { backgroundColor: '#eef2ff' }]}>
               <MapPin size={22} color="#4f46e5" />
@@ -253,83 +194,31 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
                 )}
               </View>
               <Text style={styles.cardDesc}>
-                Captures accurate GPS coordinates during punch in/out and customer visits.
+                Captures accurate GPS coordinates during attendance punch-in/out and customer visits.
               </Text>
             </View>
           </View>
 
-          {/* Card 2: Background "Allow All The Time" */}
+          {/* Card 2: Background Location Disclosure */}
           <View style={styles.permissionCard}>
             <View style={[styles.iconBox, { backgroundColor: '#f0fdf4' }]}>
               <Navigation size={22} color="#059669" />
             </View>
             <View style={styles.cardContent}>
               <View style={styles.cardHeaderRow}>
-                <Text style={styles.cardTitle}>Background GPS Tracking</Text>
+                <Text style={styles.cardTitle}>Background Location</Text>
                 {isBackgroundGranted ? (
                   <View style={styles.badgeSuccess}>
-                    <Text style={styles.badgeSuccessText}>Always Active</Text>
+                    <Text style={styles.badgeSuccessText}>Granted</Text>
                   </View>
                 ) : (
                   <View style={styles.badgeWarning}>
-                    <Text style={styles.badgeWarningText}>Pending</Text>
+                    <Text style={styles.badgeWarningText}>Required for Duty</Text>
                   </View>
                 )}
               </View>
               <Text style={styles.cardDesc}>
-                Maintains continuous tracking while on duty even when the phone screen is locked.
-              </Text>
-            </View>
-          </View>
-
-          {/* Card 3: Battery & Background Sync */}
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={async () => {
-              await requestIgnoreBatteryOptimizations();
-            }}
-            style={styles.permissionCard}
-          >
-            <View style={[styles.iconBox, { backgroundColor: '#fff7ed' }]}>
-              <BatteryCharging size={22} color="#ea580c" />
-            </View>
-            <View style={styles.cardContent}>
-              <View style={styles.cardHeaderRow}>
-                <Text style={styles.cardTitle}>Battery Optimization</Text>
-                <View style={batteryIgnored ? styles.badgeSuccess : styles.badgeInfo}>
-                  <Text style={batteryIgnored ? styles.badgeSuccessText : styles.badgeInfoText}>
-                    {batteryIgnored ? 'Unrestricted' : 'Tap to Configure'}
-                  </Text>
-                </View>
-              </View>
-              <Text style={styles.cardDesc}>
-                {batteryIgnored
-                  ? '✓ Battery optimizations are disabled. GPS tracking runs without OS interruption.'
-                  : 'Tap to set to "Unrestricted" so Android never puts GPS background sync to sleep.'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-
-          {/* Card 4: Push Notifications */}
-          <View style={styles.permissionCard}>
-            <View style={[styles.iconBox, { backgroundColor: '#f5f3ff' }]}>
-              <Bell size={22} color="#7c3aed" />
-            </View>
-            <View style={styles.cardContent}>
-              <View style={styles.cardHeaderRow}>
-                <Text style={styles.cardTitle}>Real-Time Notifications</Text>
-                {notifStatus === 'granted' ? (
-                  <View style={styles.badgeSuccess}>
-                    <Text style={styles.badgeSuccessText}>Enabled</Text>
-                  </View>
-                ) : (
-                  <View style={styles.badgeNeutral}>
-                    <Text style={styles.badgeNeutralText}>Optional</Text>
-                  </View>
-                )}
-              </View>
-              <Text style={styles.cardDesc}>
-                Displays persistent duty status notification and shift/leave approval alerts.
+                Gatimaan collects location data in the background while you are punched in on duty to record field routes and geofence compliance even when the app is closed or not in use. Tracking stops automatically when you punch out.
               </Text>
             </View>
           </View>
@@ -337,7 +226,6 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
 
         {/* Action Buttons */}
         <View style={styles.bottomSection}>
-          {/* Master Grant All Button */}
           <TouchableOpacity
             activeOpacity={0.85}
             onPress={handleGrantAllPermissions}
@@ -353,13 +241,12 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
               </>
             ) : (
               <>
-                <Zap size={20} color="#ffffff" />
-                <Text style={styles.primaryActionBtnText}>Grant All Permissions</Text>
+                <ShieldCheck size={20} color="#ffffff" />
+                <Text style={styles.primaryActionBtnText}>Accept &amp; Continue</Text>
               </>
             )}
           </TouchableOpacity>
 
-          {/* Open App Settings Button */}
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={handleOpenAppSettings}
@@ -369,34 +256,25 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
             <Text style={styles.settingsBtnText}>Open Device App Settings</Text>
           </TouchableOpacity>
 
-          {/* Proceed to Login */}
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={() => {
-              if (Platform.OS === 'android' && bgStatus !== 'granted') {
-                Alert.alert(
-                  'Background Location Recommended',
-                  'Without "Allow all the time", live route tracking will pause when your screen is locked. Do you want to configure Settings or proceed to login anyway?',
-                  [
-                    { text: 'Open Settings', onPress: () => Linking.openSettings() },
-                    {
-                      text: 'Proceed Anyway',
-                      style: 'cancel',
-                      onPress: () => {
-                        if (onContinueAnyway) onContinueAnyway();
-                        else if (onPermissionsComplete) onPermissionsComplete();
-                      }
-                    }
-                  ]
-                );
-                return;
-              }
               if (onContinueAnyway) onContinueAnyway();
               else if (onPermissionsComplete) onPermissionsComplete();
             }}
             style={styles.skipBtn}
           >
-            <Text style={styles.skipBtnText}>Proceed to Login Screen →</Text>
+            <Text style={styles.skipBtnText}>Not Now — Proceed to Login Screen →</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => Linking.openURL('https://www.gatimaan.io/privacy-policy')}
+            style={{ alignItems: 'center', paddingVertical: 4 }}
+          >
+            <Text style={{ color: '#4f46e5', fontSize: 11, fontWeight: '700', textDecorationLine: 'underline' }}>
+              Read Privacy Policy
+            </Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -418,20 +296,6 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 28,
     alignItems: 'center',
   },
-  headerIconContainer: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#4f46e5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-    shadowColor: '#4f46e5',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 5,
-  },
   headerTitle: {
     fontSize: 21,
     fontWeight: '900',
@@ -447,7 +311,7 @@ const styles = StyleSheet.create({
   headerDesc: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#94a3b8',
+    color: '#cbd5e1',
     textAlign: 'center',
     marginTop: 8,
     lineHeight: 18,
@@ -525,17 +389,6 @@ const styles = StyleSheet.create({
   },
   badgeWarningText: {
     color: '#b45309',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  badgeInfo: {
-    backgroundColor: '#e0e7ff',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  badgeInfoText: {
-    color: '#4338ca',
     fontSize: 10,
     fontWeight: '800',
   },

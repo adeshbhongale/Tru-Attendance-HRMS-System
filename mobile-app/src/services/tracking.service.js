@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 import * as Application from 'expo-application';
 import * as Battery from 'expo-battery';
 import * as Location from 'expo-location';
 import { Platform } from 'react-native';
 import { initDatabase, insertTrackingPoint } from './database.service';
+import { validateTrackingPoint } from './livenessService';
 import { syncPendingPoints } from './sync.service';
 
 /**
@@ -22,12 +24,6 @@ let deviceId = null;
 let isCollecting = false;
 let isTrackingFlag = false;
 let savedOnPointCollected = null;
-
-// Validation thresholds
-const ACCURACY_THRESHOLD = 100; // meters — points above this are marked 'weak' but NOT discarded
-const MIN_MOVEMENT_METERS = 0;  // ignore stationary drift
-const MAX_SPEED_KMH = 150;     // reject teleportation jumps
-
 let lastPoint = null;
 
 /**
@@ -69,30 +65,8 @@ const haversineDistance = (lat1, lon1, lat2, lon2) => {
  * @param {Object} point - GPS point
  * @returns {Object} { valid: boolean, status: string, reason: string }
  */
-const validatePoint = (point) => {
-  // 1. Null coordinate check
-  if (!point.latitude || !point.longitude ||
-    isNaN(point.latitude) || isNaN(point.longitude)) {
-    return { valid: false, status: 'rejected', reason: 'Null or invalid coordinates' };
-  }
-
-  // 2. Range check
-  if (Math.abs(point.latitude) > 90 || Math.abs(point.longitude) > 180) {
-    return { valid: false, status: 'rejected', reason: 'Coordinates out of range' };
-  }
-
-  // 3. Null island check
-  if (point.latitude === 0 && point.longitude === 0) {
-    return { valid: false, status: 'rejected', reason: 'Null island coordinate' };
-  }
-
-  // 4. Accuracy check — don't reject, mark as weak
-  if (point.accuracy && point.accuracy > 100) {
-    return { valid: true, status: 'weak', reason: `Weak GPS signal (accuracy: ${point.accuracy}m)` };
-  }
-
-  return { valid: true, status: 'valid', reason: null };
-};
+export const validatePoint = (point, prevPoint = lastPoint, now = Date.now()) =>
+  validateTrackingPoint(point, prevPoint, now);
 
 /**
  * Collect a single GPS point, validate, and store to SQLite.
@@ -123,6 +97,12 @@ export const collectPoint = async (loc = null) => {
       console.warn('[LocationService] Failed to read battery level:', batErr.message);
     }
 
+    let isOffline = false;
+    try {
+      const net = await NetInfo.fetch();
+      isOffline = !(net?.isConnected && net?.isInternetReachable !== false);
+    } catch (_) {}
+
     const point = {
       tripId: currentTripId,
       deviceId: devId,
@@ -134,14 +114,15 @@ export const collectPoint = async (loc = null) => {
       altitude: altitude || 0,
       battery: batteryLevel,
       timestamp: locationData.timestamp || Date.now(),
-      isMock: mocked || false
+      isMock: Boolean(locationData.mocked || mocked),
+      isOffline,
     };
 
     // Validate the point
-    const validation = validatePoint(point);
+    const validation = validatePoint(point, lastPoint);
 
     if (!validation.valid) {
-      console.log(`[LocationService] Point ${validation.status}: ${validation.reason}`);
+      console.log(`[LocationService] Point ${validation.status} [${validation.code}]: ${validation.reason}`);
       return null;
     }
 
@@ -205,10 +186,10 @@ export const startTracking = async (tripId, onPointCollected = null) => {
     // Initialize SQLite
     await initDatabase();
 
-    // Request permissions
-    const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
+    // Verify permissions without triggering unexpected OS dialogs from background/service context
+    const { status: fgStatus } = await Location.getForegroundPermissionsAsync();
     if (fgStatus !== 'granted') {
-      console.error('[LocationService] Foreground permission denied');
+      console.error('[LocationService] Foreground permission not granted');
       return false;
     }
 

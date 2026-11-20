@@ -54,13 +54,18 @@ class ErrorBoundary extends React.Component {
   };
 
   handleManualRestart = async () => {
+    this.setState({ hasError: false, error: null, checkingUpdate: false, updateStatus: null });
     try {
+      if (typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
+        window.location.reload();
+        return;
+      }
       const Updates = require('expo-updates');
       if (Updates.reloadAsync) {
         await Updates.reloadAsync();
       }
     } catch (e) {
-      Alert.alert('Restart App', 'Please close the app from your recent apps screen and reopen it.');
+      // State already reset above so children re-render cleanly
     }
   };
 
@@ -112,7 +117,9 @@ class ErrorBoundary extends React.Component {
             </TouchableOpacity>
 
             <Text style={styles.errorDetails}>
-              {String(this.state.error?.message || this.state.error || 'Unknown error')}
+              {__DEV__
+                ? String(this.state.error?.message || this.state.error || 'Unknown error')
+                : 'An unexpected application error occurred. Please tap Restart App to continue.'}
             </Text>
           </View>
         </ScrollView>

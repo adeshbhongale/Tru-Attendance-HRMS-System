@@ -8,32 +8,37 @@
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://tru-attendance-hrms-system-production.up.railway.app/api",
-        "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI"
+        "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app"
       }
     },
     "preview": {
       "android": {
         "buildType": "apk"
       },
-      "channel": "preview",
+      "channel": "production",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://tru-attendance-hrms-system-production.up.railway.app/api",
-        "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI",
-        "GOOGLE_SERVICES_JSON": "@secret:GOOGLE_SERVICES_JSON"
+        "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app"
       }
     },
-    "production": {
+    "production-apk": {
       "android": {
         "buildType": "apk"
       },
       "channel": "production",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://tru-attendance-hrms-system-production.up.railway.app/api",
-        "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI",
-        "GOOGLE_SERVICES_JSON": "@secret:GOOGLE_SERVICES_JSON"
+        "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://tru-attendance-hrms-system-production.up.railway.app/api",
+        "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app"
       }
     }
   },

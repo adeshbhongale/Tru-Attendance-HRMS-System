@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../api/axios';
 import {
   Alert,
@@ -128,6 +129,8 @@ const INITIAL_ROTATION = 0;
  * @param {string} props.currentScreen - Key of current screen
  */
 const GlobalAppFooter = ({ navigation, currentScreen }) => {
+  const insets = useSafeAreaInsets();
+  const bottomPadding = Math.max(insets?.bottom || 0, 14);
   const [menuOpen, setMenuOpen] = useState(false);
   const [rotationAngle, setRotationAngle] = useState(INITIAL_ROTATION);
 
@@ -377,12 +380,6 @@ const GlobalAppFooter = ({ navigation, currentScreen }) => {
   };
 
   const handleItemPress = (item) => {
-    if (item.comingSoon) {
-      closeMenu(() =>
-        Alert.alert('Coming Soon', `${item.label.replace('\n', ' ')} will be available soon.`)
-      );
-      return;
-    }
     if (item.screen) {
       closeMenu(() => navigation.navigate(item.screen, item.params || {}));
     }
@@ -453,7 +450,6 @@ const GlobalAppFooter = ({ navigation, currentScreen }) => {
                     <Text style={styles.bubbleLabel} numberOfLines={2}>
                       {item.label}
                     </Text>
-                    {item.comingSoon && <Text style={styles.bubbleSoon}>Soon</Text>}
                   </TouchableOpacity>
                 </Animated.View>
               );
@@ -481,7 +477,7 @@ const GlobalAppFooter = ({ navigation, currentScreen }) => {
       </Modal>
 
       {/* ── UNIFIED FIXED 4-TAB FOOTER BAR ── */}
-      <View style={styles.footer}>
+      <View style={[styles.footer, { paddingBottom: bottomPadding }]}>
         {/* TAB 1 (FIXED POSITION 1 - LEFT): HOME */}
         <View style={styles.tabContainer}>
           <TouchableOpacity
@@ -557,21 +553,31 @@ const GlobalAppFooter = ({ navigation, currentScreen }) => {
           </Text>
         </View>
 
-        {/* TAB 4 (FIXED POSITION 4 - RIGHT): DEPARTMENT */}
+        {/* TAB 4 (FIXED POSITION 4 - RIGHT): DEPARTMENT / ORG CHART */}
         <View style={styles.tabContainer}>
           <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.footerTab}
-            onPress={() =>
-              Alert.alert('Coming Soon', 'Department module will be available soon.')
-            }
+            activeOpacity={0.85}
+            onPress={() => {
+              if (currentScreen !== 'OrgChartScreen' && currentScreen !== 'orgChart') {
+                navigation.navigate('OrgChartScreen');
+              }
+            }}
+            style={[
+              styles.fabButton,
+              styles.matFab,
+              (currentScreen === 'OrgChartScreen' || currentScreen === 'orgChart') && styles.fabActive,
+            ]}
           >
-            <View style={styles.footerIconBg}>
-              <Building2 size={18} color="#8a97a8" />
-            </View>
-            <Text style={styles.footerLabel}>Dept.</Text>
-            <Text style={styles.soonBadge}>SOON</Text>
+            <Building2 size={20} color="white" />
           </TouchableOpacity>
+          <Text
+            style={[
+              styles.footerLabel,
+              (currentScreen === 'OrgChartScreen' || currentScreen === 'orgChart') && { color: '#0d9488', fontWeight: '800' },
+            ]}
+          >
+            Dept.
+          </Text>
         </View>
       </View>
     </>
@@ -625,15 +631,6 @@ const styles = StyleSheet.create({
     color: '#64748b',
     textAlign: 'center',
     letterSpacing: 0.1,
-  },
-
-  soonBadge: {
-    fontSize: 7.5,
-    fontWeight: '800',
-    color: '#f59e0b',
-    marginTop: 1,
-    textAlign: 'center',
-    letterSpacing: 0.5,
   },
 
   // ── FAB Buttons ─────────────────────────────────────────────
@@ -719,17 +716,6 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     textAlign: 'center',
     lineHeight: 11,
-    textShadowColor: 'rgba(0,0,0,0.85)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
-  },
-
-  bubbleSoon: {
-    marginTop: 1,
-    fontSize: 8,
-    fontWeight: '800',
-    color: '#ffcf6b',
-    textAlign: 'center',
     textShadowColor: 'rgba(0,0,0,0.85)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,

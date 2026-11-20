@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   Modal,
   ScrollView,
   StatusBar,
@@ -82,7 +83,11 @@ const ProfileScreen = ({ navigation }) => {
     try {
       setLoading(true);
       const res = await api.get("/auth/me");
-      const freshUser = res.data.data;
+      const rawUser = res.data.data || {};
+      const freshUser = {
+        ...rawUser,
+        employeeId: rawUser.employeeId || rawUser.employeeIdCode || user?.employeeId || "",
+      };
       setUser(freshUser);
       await AsyncStorage.setItem("user", JSON.stringify(freshUser));
     } catch (err) {
@@ -124,7 +129,14 @@ const ProfileScreen = ({ navigation }) => {
       if (useCamera) {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== "granted") {
-          Alert.alert("Permission Required", "Camera permission is required to take a profile photo.");
+          Alert.alert(
+            "Permission Required",
+            "Camera permission is required to take a profile photo.",
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Open Settings", onPress: () => Linking.openSettings().catch(() => {}) },
+            ]
+          );
           return;
         }
         const result = await ImagePicker.launchCameraAsync({
@@ -137,13 +149,9 @@ const ProfileScreen = ({ navigation }) => {
           await uploadNewPhoto(`data:image/jpeg;base64,${result.assets[0].base64}`);
         }
       } else {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== "granted") {
-          Alert.alert("Permission Required", "Gallery access is required to select a profile photo.");
-          return;
-        }
+        // Android 13+ system Photo Picker requires zero runtime storage permissions
         const result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          mediaTypes: ["images"],
           allowsEditing: true,
           aspect: [1, 1],
           quality: 0.6,
@@ -204,7 +212,28 @@ const ProfileScreen = ({ navigation }) => {
               trackingErr.message,
             );
           }
-          await AsyncStorage.clear();
+          try {
+            if (socket && typeof socket.disconnect === "function") {
+              socket.disconnect();
+            }
+          } catch (_) {}
+          try {
+            const { removeSecureToken } = require("../utils/secureStorage");
+            await removeSecureToken();
+          } catch (_) {}
+          await AsyncStorage.multiRemove([
+            "token",
+            "refreshToken",
+            "user",
+            "userId",
+            "activeTripId",
+            "lastActivityTime",
+            "@mobileAccessConfig",
+            "@dashboard_user_shortcuts",
+            "@offline_attendance_queue",
+            "@tracking_session_meta",
+            "@tracking_Active_State",
+          ]);
           navigation.reset({ index: 0, routes: [{ name: "Login" }] });
         },
       },
@@ -306,7 +335,7 @@ const ProfileScreen = ({ navigation }) => {
           {/* User Role / Designation Tag */}
           <View className="bg-indigo-50 px-4 py-1.5 rounded-full">
             <Text className="text-[#1972e9] font-bold text-xs tracking-wide">
-              {user?.designation || user?.role || "Employee"}
+              {(typeof user?.designation === 'object' ? user?.designation?.name : user?.designation) || user?.role || "Employee"}
             </Text>
           </View>
         </View>
@@ -376,15 +405,6 @@ const ProfileScreen = ({ navigation }) => {
                     }
                   })()
                   : "—"}
-              </Text>
-            </View>
-
-            <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
-                BLOOD GROUP
-              </Text>
-              <Text className="text-rose-600 font-extrabold text-base">
-                {user?.bloodGroup || "—"}
               </Text>
             </View>
 
@@ -488,17 +508,29 @@ const ProfileScreen = ({ navigation }) => {
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={handleLogout}
-          className="w-full bg-rose-50 border border-rose-200 py-4 rounded-2xl items-center mb-6"
+          className="w-full bg-rose-50 border border-rose-200 py-4 rounded-2xl items-center mb-4"
         >
           <Text className="text-rose-600 font-extrabold text-base tracking-wide">
             Sign Out Account
           </Text>
         </TouchableOpacity>
 
+        {/* Privacy Policy Link (Google Play Compliance) */}
+        <View className="flex-row justify-center items-center mb-5">
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => Linking.openURL("https://www.gatimaan.io/privacy-policy")}
+          >
+            <Text className="text-xs font-bold text-[#1972e9] underline">
+              Privacy Policy
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         {/* System Info & OTA Update Checker */}
         <View className="items-center py-3 mb-2">
           <Text className="text-[11px] font-bold text-slate-500 tracking-widest uppercase">
-            Trucode ERP System
+            Gatimaan
           </Text>
           <Text className="text-[10px] font-medium text-slate-400 mt-0.5 mb-3">
             Version {require("expo-constants").default?.expoConfig?.version || "1.0.1"} • Mobile Application

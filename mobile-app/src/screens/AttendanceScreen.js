@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import {
   Camera,
@@ -20,6 +19,7 @@ import {
   Alert,
   AppState,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -27,12 +27,21 @@ import {
   ScrollView,
   StatusBar,
   Text,
+  TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
 import api from '../api/axios';
 // import { useSidebar } from '../context/SidebarContext'; // SIDEBAR COMMENTED OUT
 import HRModuleFooter from '../components/HRModuleFooter';
+import LivenessCameraModal from '../components/LivenessCameraModal';
+import {
+  haversineDistance,
+  MOBILE_CODES,
+  SELFIE_MAX_AGE_MS,
+  startLivenessVerification,
+  validatePunchLocationInput,
+} from '../services/livenessService';
 import socket from '../socket';
 import { formatWorkingHours } from '../utils/timeFormat';
 
@@ -67,7 +76,11 @@ const getSelfieUri = (s) => {
   if (typeof s === 'string') {
     const str = s.trim();
     if (str.startsWith('http://') || str.startsWith('https://') || str.startsWith('file://') || str.startsWith('data:image/')) {
-      return str;
+      const upgraded = str.replace(/^http:\/\/res\.cloudinary\.com\//, 'https://res.cloudinary.com/');
+      if (!__DEV__ && upgraded.startsWith('http://')) {
+        return upgraded.replace(/^http:\/\//i, 'https://');
+      }
+      return upgraded;
     }
     if (str.length > 30) {
       return str.startsWith('data:') ? str : `data:image/jpeg;base64,${str}`;
@@ -79,22 +92,13 @@ const getSelfieUri = (s) => {
 
 const AttendanceScreen = ({ navigation }) => {
   // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
-  const requestCameraPermission = async () => {
-    try {
-      await ImagePicker.requestCameraPermissionsAsync();
-    } catch (e) {
-      console.warn('[AttendanceScreen] Failed to request camera permission on mount:', e.message);
-    }
-  };
 
   useEffect(() => {
     const fetchData = () => {
       verifyBackgroundPermission();
-      getLocation();
-      requestCameraPermission();
+      getLocation(true);
       fetchUser();
       fetchOfficeSettings();
-      fetchLeaves();
     };
 
     fetchData();
@@ -103,31 +107,12 @@ const AttendanceScreen = ({ navigation }) => {
     const appStateSub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         verifyBackgroundPermission();
-        getLocation();
+        getLocation(true);
       }
     });
 
-    // Android: Recover pending image if Android OS killed MainActivity during camera capture
-    const checkPendingCameraResult = async () => {
-      try {
-        if (typeof ImagePicker.getPendingResultAsync === 'function') {
-          const res = await ImagePicker.getPendingResultAsync();
-          if (res && !res.canceled && res.assets && res.assets.length > 0) {
-            const asset = res.assets[0];
-            if (asset && (asset.uri || asset.base64)) {
-              setSelfie(asset);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('[AttendanceScreen] Error checking pending camera result:', e.message);
-      }
-    };
-    checkPendingCameraResult();
-
     const unsubscribe = navigation.addListener('focus', () => {
       fetchData();
-      checkPendingCameraResult();
     });
 
     return () => {
@@ -139,6 +124,10 @@ const AttendanceScreen = ({ navigation }) => {
   const [user, setUser] = useState(null);
 
   const [selfie, setSelfie] = useState(null);
+  const [selfieCapturedAt, setSelfieCapturedAt] = useState(null);
+  const [livenessVerified, setLivenessVerified] = useState(false);
+  const [livenessBusy, setLivenessBusy] = useState(false);
+  const [webLivenessVisible, setWebLivenessVisible] = useState(false);
   const [location, setLocation] = useState(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [punchLoading, setPunchLoading] = useState(false);
@@ -150,12 +139,14 @@ const AttendanceScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [mapFull, setMapFull] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
-  const [myLeaves, setMyLeaves] = useState([]);
   const [apiError, setApiError] = useState(null);
 
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
   const [backendShiftStatus, setBackendShiftStatus] = useState(null);
-  const [hasBackgroundPermission, setHasBackgroundPermission] = useState(null);
+  const [hasBackgroundPermission, setHasBackgroundPermission] = useState(Platform.OS !== 'android');
+  const [earlyPunchOutModal, setEarlyPunchOutModal] = useState(false);
+  const [earlyPunchOutReason, setEarlyPunchOutReason] = useState('');
+  const [earlyShiftEndLabel, setEarlyShiftEndLabel] = useState('');
 
   const verifyBackgroundPermission = async () => {
     if (Platform.OS === 'android') {
@@ -165,7 +156,8 @@ const AttendanceScreen = ({ navigation }) => {
         setHasBackgroundPermission(granted);
         return granted;
       } catch (_) {
-        return true;
+        setHasBackgroundPermission(false);
+        return false;
       }
     }
     return true;
@@ -197,15 +189,6 @@ const AttendanceScreen = ({ navigation }) => {
     }
   };
 
-  const fetchLeaves = async () => {
-    try {
-      const res = await api.get('/leaves/my-leaves');
-      setMyLeaves(res.data?.data?.data || []);
-    } catch (err) {
-      console.warn('[AttendanceScreen] fetchLeaves error:', err.message);
-    }
-  };
-
   const fetchOfficeSettings = async () => {
     try {
       const res = await api.get('/settings/office');
@@ -215,18 +198,15 @@ const AttendanceScreen = ({ navigation }) => {
     }
   };
 
-  const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371e3; // meters
-    const dLat = ((lat2 - lat1) * Math.PI) / 180;
-    const dLon = ((lon2 - lon1) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+  const calculateDistance = haversineDistance;
+
+  const extractLocationFix = (locObj) => {
+    if (!locObj?.coords || typeof locObj.coords.latitude !== 'number') return null;
+    return {
+      ...locObj.coords,
+      mocked: Boolean(locObj.mocked || locObj.coords.mocked),
+      timestamp: locObj.timestamp || Date.now(),
+    };
   };
 
   useEffect(() => {
@@ -281,7 +261,8 @@ const AttendanceScreen = ({ navigation }) => {
             distanceInterval: 0,
           },
           (loc) => {
-            if (loc?.coords) finish(loc.coords, 'watchPositionAsync');
+            const fix = extractLocationFix(loc);
+            if (fix) finish(fix, 'watchPositionAsync');
           }
         );
       } catch (watchErr) {
@@ -290,13 +271,13 @@ const AttendanceScreen = ({ navigation }) => {
 
       // 2. Parallel Fast High Accuracy (Direct GPS / Mock GPS hardware fix)
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-        .then(res => { if (res?.coords) finish(res.coords, 'getCurrentPosition(High)'); })
-        .catch(() => {});
+        .then(res => { const fix = extractLocationFix(res); if (fix) finish(fix, 'getCurrentPosition(High)'); })
+        .catch(() => { });
 
       // 3. Parallel Balanced accuracy (Fast Network fix, silently handled)
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-        .then(res => { if (res?.coords) finish(res.coords, 'getCurrentPosition(Balanced)'); })
-        .catch(() => {});
+        .then(res => { const fix = extractLocationFix(res); if (fix) finish(fix, 'getCurrentPosition(Balanced)'); })
+        .catch(() => { });
 
       // 4. Safety timeout: if nothing resolved in 4 seconds, finish
       setTimeout(() => {
@@ -311,47 +292,29 @@ const AttendanceScreen = ({ navigation }) => {
     });
   };
 
-  // Dedicated Actual Address Resolver
+  // Dedicated Actual Address Resolver (Native OS Reverse Geocoding primary; optional env key fallback)
   const resolveActualAddress = async (coords) => {
     if (!coords || typeof coords.latitude !== 'number' || typeof coords.longitude !== 'number') return null;
     let addr = null;
 
-    // 1. Google Maps Geocoding API
+    // Native OS reverse geocoding (zero API key exposure)
     try {
-      const MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || 'AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI';
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3500);
-      const geoRes = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coords.latitude},${coords.longitude}&key=${MAPS_KEY}`,
-        { signal: controller.signal }
-      );
-      clearTimeout(timer);
-      const geoData = await geoRes.json();
-      if (geoData.status === 'OK' && geoData.results.length > 0) {
-        addr = geoData.results[0].formatted_address;
-      }
-    } catch (e) { }
-
-    // 2. Native reverse geocoding fallback
-    if (!addr) {
-      try {
-        const geocode = await Location.reverseGeocodeAsync({
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-        });
-        if (geocode && geocode[0]) {
-          const g = geocode[0];
-          const parts = [g.name, g.street, g.city || g.subregion, g.region].filter(Boolean);
-          if (parts.length > 0) {
-            addr = parts.join(', ');
-          }
+      const geocode = await Location.reverseGeocodeAsync({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+      });
+      if (geocode && geocode[0]) {
+        const g = geocode[0];
+        const parts = [g.name, g.street, g.city || g.subregion, g.region].filter(Boolean);
+        if (parts.length > 0) {
+          addr = parts.join(', ');
         }
-      } catch (geoErr) { }
-    }
+      }
+    } catch (geoErr) { }
     return addr;
   };
 
-  const getLocation = async () => {
+  const getLocation = async (silentOnMount = false) => {
     console.log('[AttendanceScreen] getLocation called');
     try {
       setLocationLoading(true);
@@ -360,44 +323,69 @@ const AttendanceScreen = ({ navigation }) => {
       try {
         const hasServices = await Location.hasServicesEnabledAsync();
         if (!hasServices) {
-          try {
-            await Location.enableNetworkProviderAsync();
-          } catch (enableErr) { }
+          if (!silentOnMount) {
+            try {
+              await Location.enableNetworkProviderAsync();
+            } catch (enableErr) { }
+          }
 
           const recheck = await Location.hasServicesEnabledAsync();
           if (!recheck) {
-            setToast({ show: true, message: 'Please turn on GPS/Location on your device.', type: 'error' });
-            setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
+            if (!silentOnMount) {
+              setToast({ show: true, message: 'Please turn on GPS/Location on your device.', type: 'error' });
+              setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
+            }
             setLocationLoading(false);
-            return;
+            return null;
           }
         }
       } catch (svcErr) { }
 
-      // 2. Check and request foreground permissions
+      // 2. Check and request foreground permissions with Prominent Disclosure if not yet granted
       let { status: fgStatus } = await Location.getForegroundPermissionsAsync();
       if (fgStatus !== 'granted') {
-        const req = await Location.requestForegroundPermissionsAsync();
-        fgStatus = req.status;
+        if (silentOnMount) {
+          setLocationLoading(false);
+          return null;
+        }
+        const userAcceptedDisclosure = await new Promise((resolve) => {
+          Alert.alert(
+            'Location Access Disclosure',
+            'Gatimaan collects your location to verify workplace geofence compliance during attendance punch-in and punch-out.',
+            [
+              { text: 'Not Now', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continue', onPress: () => resolve(true) },
+            ],
+            { cancelable: false }
+          );
+        });
+        if (userAcceptedDisclosure) {
+          const req = await Location.requestForegroundPermissionsAsync();
+          fgStatus = req.status;
+        }
       }
 
       if (fgStatus !== 'granted') {
         setToast({ show: true, message: 'Location permission is required to mark attendance.', type: 'error' });
         setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
         setLocationLoading(false);
-        return;
+        return null;
       }
+
+      let resolvedCoords = null;
 
       // 3. STEP 0: Check OS / Hardware Last Known Position (0ms) & Immediately Update Range
       try {
-        const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown && lastKnown.coords) {
-          setLocation({
-            ...lastKnown.coords,
+        const lastKnown = await Location.getLastKnownPositionAsync({ maxAge: 60000 });
+        const lastFix = extractLocationFix(lastKnown);
+        if (lastFix) {
+          resolvedCoords = {
+            ...lastFix,
             address: 'Detecting address...',
-          });
+          };
+          setLocation(resolvedCoords);
           if (office && office.latitude && office.longitude) {
-            const d = calculateDistance(lastKnown.coords.latitude, lastKnown.coords.longitude, office.latitude, office.longitude);
+            const d = calculateDistance(lastFix.latitude, lastFix.longitude, office.latitude, office.longitude);
             setDistance(d);
           }
           setLocationLoading(false);
@@ -408,6 +396,10 @@ const AttendanceScreen = ({ navigation }) => {
       const fastCoords = await fetchFastLocationFix();
 
       if (fastCoords) {
+        resolvedCoords = {
+          ...fastCoords,
+          address: resolvedCoords?.address && resolvedCoords.address !== 'Detecting address...' ? resolvedCoords.address : 'Detecting address...',
+        };
         setLocation(prev => ({
           ...fastCoords,
           address: prev?.address && prev.address !== 'Detecting address...' ? prev.address : 'Detecting address...',
@@ -417,17 +409,19 @@ const AttendanceScreen = ({ navigation }) => {
           setDistance(d);
         }
         setLocationLoading(false);
-      } else if (!location) {
+      } else if (!resolvedCoords && !location) {
         // Fallback: try High accuracy as reliable GPS fix
         try {
           const fallbackLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-          if (fallbackLoc?.coords) {
-            setLocation({
-              ...fallbackLoc.coords,
+          const fbFix = extractLocationFix(fallbackLoc);
+          if (fbFix) {
+            resolvedCoords = {
+              ...fbFix,
               address: 'Detecting address...',
-            });
+            };
+            setLocation(resolvedCoords);
             if (office && office.latitude && office.longitude) {
-              const d = calculateDistance(fallbackLoc.coords.latitude, fallbackLoc.coords.longitude, office.latitude, office.longitude);
+              const d = calculateDistance(fbFix.latitude, fbFix.longitude, office.latitude, office.longitude);
               setDistance(d);
             }
           }
@@ -437,7 +431,7 @@ const AttendanceScreen = ({ navigation }) => {
       setLocationLoading(false);
 
       // 5. STEP 2: Background Reverse Geocoding for clean actual address
-      const targetLoc = fastCoords || location;
+      const targetLoc = resolvedCoords || fastCoords || location;
       if (targetLoc && targetLoc.latitude && targetLoc.longitude) {
         const geocodeId = ++geocodeRef.current;
         (async () => {
@@ -448,11 +442,13 @@ const AttendanceScreen = ({ navigation }) => {
           }
         })();
       }
+      return targetLoc || null;
     } catch (err) {
       console.error('[AttendanceScreen] getLocation top-level error:', err);
       setLocationLoading(false);
       setToast({ show: true, message: 'Could not detect location. Please tap retry.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+      return null;
     } finally {
       setLocationLoading(false);
     }
@@ -473,7 +469,7 @@ const AttendanceScreen = ({ navigation }) => {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([getLocation(), fetchUser(), fetchOfficeSettings(), fetchLeaves()]);
+    await Promise.all([verifyBackgroundPermission(), getLocation(), fetchUser(), fetchOfficeSettings()]);
     setRefreshing(false);
   };
 
@@ -487,60 +483,97 @@ const AttendanceScreen = ({ navigation }) => {
     }
   }, [todayAttendance]);
 
+  const clearSelfieState = () => {
+    setSelfie(null);
+    setSelfieCapturedAt(null);
+    setLivenessVerified(false);
+  };
+
+  const applyLivenessResult = (result) => {
+    if (
+      !result ||
+      result.code === MOBILE_CODES.LIVENESS_CANCELLED ||
+      result.code === MOBILE_CODES.LIVENESS_ALREADY_OPEN
+    ) {
+      return;
+    }
+
+    if (!result.verified || !result.photo) {
+      setToast({ show: true, message: result.message || 'Live verification failed. Please try again.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+      return;
+    }
+
+    setSelfie(result.photo);
+    setSelfieCapturedAt(result.capturedAt || Date.now());
+    setLivenessVerified(true);
+    setToast({ show: true, message: 'Verified ✓ Photo captured!', type: 'success' });
+    setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+  };
+
   const takeSelfie = async () => {
+    if (livenessBusy || webLivenessVisible || punchLoading) return;
+    let openedWebModal = false;
     try {
-      // Check existing permission first
-      const { status: currentStatus } = await ImagePicker.getCameraPermissionsAsync();
-      let status = currentStatus;
-      if (status !== 'granted') {
-        const { status: newStatus } = await ImagePicker.requestCameraPermissionsAsync();
-        status = newStatus;
-      }
-      if (status !== 'granted') {
-        setToast({ show: true, message: 'Camera access is required for verification.', type: 'error' });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      setLivenessBusy(true);
+      clearSelfieState();
+      const result = await startLivenessVerification(alreadyPunchedIn ? 'punchOut' : 'punchIn');
+
+      if (result.code === MOBILE_CODES.CAMERA_PERMISSION_DENIED) {
+        Alert.alert(
+          'Camera Permission Required',
+          'Camera access is required to verify live attendance.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings().catch(() => {}) },
+          ]
+        );
         return;
       }
 
-      const cameraTypeFront = ImagePicker.CameraType?.front || 'front';
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
-        quality: 0.35, // 0.35 gives crisp facial clarity while keeping payload under ~120KB for instant transfer
-        base64: true,
-        cameraType: cameraTypeFront,
-        preferFrontCamera: true,
-      });
-
-      if (!result) return;
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const asset = result.assets[0];
-        if (asset && (asset.uri || asset.base64)) {
-          setSelfie(asset);
-        } else {
-          setToast({ show: true, message: 'Could not capture image. Please try again.', type: 'error' });
-          setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-        }
+      if (result.useWebModal) {
+        openedWebModal = true;
+        setWebLivenessVisible(true);
+        return;
       }
+
+      applyLivenessResult(result);
     } catch (err) {
       console.warn('[AttendanceScreen] takeSelfie error:', err);
-      setToast({ show: true, message: `Camera error: ${err.message || 'Could not capture selfie'}`, type: 'error' });
+      setToast({ show: true, message: `Camera error: ${err.message || 'Could not open camera'}`, type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+    } finally {
+      if (!openedWebModal) {
+        setLivenessBusy(false);
+      }
     }
+  };
+
+  const clearExpiredSelfie = () => {
+    if (selfie && (!livenessVerified || !selfieCapturedAt || Date.now() - selfieCapturedAt > SELFIE_MAX_AGE_MS)) {
+      clearSelfieState();
+      setToast({ show: true, message: 'Verified photo expired — reopening live check...', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+      takeSelfie();
+      return true;
+    }
+    return false;
   };
 
   // Helper: get current location quickly (for use when punching without pre-loaded location)
   const getQuickLocation = async () => {
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
+      const existingPerm = await Location.getForegroundPermissionsAsync();
+      if (existingPerm.status !== 'granted') {
+        return await getLocation();
+      }
 
-      // 1. Instantaneous cached OS position (0ms)
+      // 1. Instantaneous cached OS position (<=60s)
       try {
-        const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown?.coords) {
-          const quickLoc = { ...lastKnown.coords, address: location?.address || 'Detecting address...' };
+        const lastKnown = await Location.getLastKnownPositionAsync({ maxAge: 60000 });
+        const lastFix = extractLocationFix(lastKnown);
+        if (lastFix) {
+          const quickLoc = { ...lastFix, address: location?.address || 'Detecting address...' };
           setLocation(quickLoc);
           return quickLoc;
         }
@@ -557,6 +590,51 @@ const AttendanceScreen = ({ navigation }) => {
       console.warn('[AttendanceScreen] Quick location failed:', e.message);
     }
     return null;
+  };
+
+  const ensureValidatedPunchLocation = async () => {
+    let candidate = location;
+    if (!candidate || typeof candidate.latitude !== 'number') {
+      setPunchLoading(true);
+      candidate = await getQuickLocation();
+    }
+
+    let check = validatePunchLocationInput(candidate);
+    if (
+      !check.valid &&
+      (check.code === MOBILE_CODES.GPS_FIX_STALE ||
+        check.code === MOBILE_CODES.GPS_ACCURACY_TOO_LOW ||
+        check.code === MOBILE_CODES.COORD_INVALID)
+    ) {
+      setPunchLoading(true);
+      const freshFix = await fetchFastLocationFix();
+      if (freshFix) {
+        candidate = {
+          ...freshFix,
+          address: candidate?.address || location?.address || 'Detecting address...',
+        };
+        setLocation(candidate);
+        check = validatePunchLocationInput(candidate);
+      }
+    }
+
+    if (!check.valid) {
+      setPunchLoading(false);
+      if (check.code === MOBILE_CODES.MOCK_LOCATION_DETECTED) {
+        Alert.alert('Mock Location Detected', check.message);
+      } else {
+        setToast({ show: true, message: check.message, type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+      }
+      return null;
+    }
+
+    let actualAddress = candidate.address;
+    if (!actualAddress || actualAddress === 'Detecting address...' || actualAddress.includes('Detecting')) {
+      actualAddress = office?.name || `GPS: ${candidate.latitude.toFixed(5)}, ${candidate.longitude.toFixed(5)}`;
+      candidate = { ...candidate, address: actualAddress };
+    }
+    return candidate;
   };
 
   // Helper: Extract selfie payload for API submission
@@ -578,7 +656,7 @@ const AttendanceScreen = ({ navigation }) => {
         console.warn('[AttendanceScreen] FileSystem readAsStringAsync error:', e.message);
       }
     }
-    return 'skipped';
+    return null;
   };
 
   // Helper: Extract selfie URI for local preview
@@ -588,23 +666,88 @@ const AttendanceScreen = ({ navigation }) => {
   };
 
   const handlePunchIn = async (bypassBgCheck = false) => {
-    // 0. Check background location permission on Android (Warn & guide, allow bypass)
-    if (Platform.OS === 'android' && !bypassBgCheck) {
+    if (clearExpiredSelfie()) return;
+    // 1. Verify Foreground Location permission FIRST (Android 11-16 requires foreground location to be granted before requesting background location)
+    try {
+      let fgPerm = await Location.getForegroundPermissionsAsync();
+      if (fgPerm?.status !== 'granted') {
+        setPunchLoading(false);
+        const acceptedFg = await new Promise((resolve) => {
+          Alert.alert(
+            'Location Access Disclosure',
+            'Gatimaan collects your location to verify workplace geofence compliance during attendance punch-in and punch-out.',
+            [
+              { text: 'Not Now', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continue', onPress: () => resolve(true) },
+            ],
+            { cancelable: false }
+          );
+        });
+        if (!acceptedFg) {
+          return;
+        }
+        fgPerm = await Location.requestForegroundPermissionsAsync();
+        if (fgPerm?.status !== 'granted') {
+          Alert.alert(
+            'Location Permission Required',
+            'Location permission is required to mark attendance within your office geofence.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => Linking.openSettings().catch(() => {}) },
+            ]
+          );
+          return;
+        }
+      }
+    } catch (fgErr) {
+      console.warn('[AttendanceScreen] Foreground permission check error:', fgErr?.message);
+    }
+
+    // 2. Check background location permission on Android ONLY after foreground location is granted and employee has live route tracking enabled
+    const requiresBackgroundTracking = user?.trackingEnabled !== false;
+    if (Platform.OS === 'android' && requiresBackgroundTracking && !bypassBgCheck) {
       try {
         const bgPerm = await Location.getBackgroundPermissionsAsync();
         if (bgPerm?.status !== 'granted') {
           setHasBackgroundPermission(false);
           setPunchLoading(false);
           Alert.alert(
-            'Background Location Recommended',
-            'Location is set to "While using app". Live route tracking when your phone is locked requires "Allow all the time".\n\nConfigure in Settings or punch in anyway?',
+            'Background Location Disclosure',
+            'Gatimaan collects location data in the background to enable live field route tracking and attendance geofence compliance while you are punched in, even when the app is closed or not in use.\n\nPlease enable "Allow all the time" location access to punch in.',
             [
-              { text: 'Open Settings', onPress: () => Linking.openSettings() },
               {
-                text: 'Punch In Anyway',
+                text: 'Not Now',
                 style: 'cancel',
-                onPress: () => handlePunchIn(true)
-              }
+              },
+              {
+                text: 'Grant Background Access',
+                onPress: async () => {
+                  try {
+                    const reqBg = await Location.requestBackgroundPermissionsAsync();
+                    if (reqBg?.status === 'granted') {
+                      setHasBackgroundPermission(true);
+                    } else {
+                      Alert.alert(
+                        'Background Location Permission',
+                        'Select "Allow all the time" in App Settings to unlock Punch In.',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                        ]
+                      );
+                    }
+                  } catch (_) {
+                    Alert.alert(
+                      'Background Location Permission',
+                      'Select "Allow all the time" in App Settings to unlock Punch In.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                      ]
+                    );
+                  }
+                }
+              },
             ]
           );
           return;
@@ -612,34 +755,20 @@ const AttendanceScreen = ({ navigation }) => {
         setHasBackgroundPermission(true);
       } catch (permErr) {
         console.warn('[AttendanceScreen] Background permission check error:', permErr?.message);
-      }
-    }
-
-    // 1. Ensure GPS Location Coordinates are ready
-    let punchLocation = location;
-    if (!punchLocation || typeof punchLocation.latitude !== 'number') {
-      setPunchLoading(true);
-      punchLocation = await getQuickLocation();
-      if (!punchLocation || typeof punchLocation.latitude !== 'number') {
-        setPunchLoading(false);
-        setToast({ show: true, message: 'Could not detect GPS location. Please try again.', type: 'error' });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+        setHasBackgroundPermission(false);
         return;
       }
     }
 
-    // 2. Fast Non-blocking address resolution (Uses fast cached address or coordinates fallback for instant submission)
-    let actualAddress = punchLocation.address;
-    if (!actualAddress || actualAddress === 'Detecting address...' || actualAddress.includes('Detecting')) {
-      actualAddress = office?.name || `GPS: ${punchLocation.latitude.toFixed(5)}, ${punchLocation.longitude.toFixed(5)}`;
-      punchLocation = { ...punchLocation, address: actualAddress };
-    }
-
-    if (!selfie) {
-      setToast({ show: true, message: 'Selfie is required for verification.', type: 'error' });
+    if (!selfie || !livenessVerified) {
+      setToast({ show: true, message: 'Live face verification is required before punching in.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
+
+    // 3. Ensure live, unspoofed GPS coordinates are ready
+    const punchLocation = await ensureValidatedPunchLocation();
+    if (!punchLocation) return;
 
     // Background location permission verified at top of handlePunchIn
 
@@ -648,6 +777,14 @@ const AttendanceScreen = ({ navigation }) => {
     setToast({ show: true, message: 'Verifying & Punching in...', type: 'info' });
 
     const capturedSelfiePayload = await getSelfiePayload(selfie);
+    if (!capturedSelfiePayload) {
+      setPunchLoading(false);
+      setPunchLoadingMessage('');
+      clearSelfieState();
+      setToast({ show: true, message: 'Could not read verified photo. Please reopen camera.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+      return;
+    }
     const capturedSelfieUri = getSelfieUriForPreview(selfie);
 
     try {
@@ -666,7 +803,7 @@ const AttendanceScreen = ({ navigation }) => {
         }
         setTodayAttendance(updated);
       }
-      setSelfie(null); // Clear selfie after punch
+      clearSelfieState(); // Clear selfie after punch
       setToast({ show: true, message: 'Punched In successfully!', type: 'success' });
       setTimeout(() => {
         setToast(prev => ({ ...prev, show: false }));
@@ -680,85 +817,156 @@ const AttendanceScreen = ({ navigation }) => {
     }
   };
 
+  const getEarlyPunchOutInfo = () => {
+    const liveShift = (user?.shift && typeof user.shift === 'object' && user.shift.startTime && user.shift.endTime) ? user.shift : null;
+    const shift = liveShift || todayAttendance?.shiftInfo;
+    if (!shift || typeof shift !== 'object' || !shift.startTime || !shift.endTime) {
+      return { isEarly: false, endLabel: '' };
+    }
+    const halfDaySession = todayAttendance?.halfDaySession || null;
+    let startStr = shift.startTime;
+    let endStr = shift.endTime;
+    if (halfDaySession === 'Session 1') {
+      startStr = shift.secondSession?.startTime || '14:00';
+      endStr = shift.secondSession?.endTime || shift.endTime || '18:00';
+    } else if (halfDaySession === 'Session 2') {
+      startStr = shift.firstSession?.startTime || shift.startTime || '09:30';
+      endStr = shift.firstSession?.endTime || '14:00';
+    }
+    const [sH, sM] = String(startStr).split(':').map(Number);
+    const [eH, eM] = String(endStr).split(':').map(Number);
+    if (isNaN(sH) || isNaN(eH)) return { isEarly: false, endLabel: '' };
+
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const refDate = todayAttendance?.date ? new Date(todayAttendance.date) : new Date();
+    const refIST = new Date(refDate.getTime() + IST_OFFSET_MS);
+    const y = refIST.getUTCFullYear();
+    const m = refIST.getUTCMonth();
+    const d = refIST.getUTCDate();
+
+    const makeISTDate = (yr, mo, dy, hr, mi) => new Date(Date.UTC(yr, mo, dy, hr, mi, 0, 0) - IST_OFFSET_MS);
+    let shiftEnd = makeISTDate(y, m, d, eH, eM || 0);
+    if (eH < sH || (eH === sH && (eM || 0) < (sM || 0))) {
+      shiftEnd = makeISTDate(y, m, d + 1, eH, eM || 0);
+    }
+    const isEarly = Date.now() < shiftEnd.getTime();
+    return { isEarly, endLabel: endStr };
+  };
+
+  const executePunchOut = async (earlyReason = '') => {
+    if (clearExpiredSelfie()) return;
+    if (!selfie || !livenessVerified) {
+      setToast({ show: true, message: 'Live face verification is required before punching out.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      return;
+    }
+
+    const punchLocation = await ensureValidatedPunchLocation();
+    if (!punchLocation) return;
+
+    setPunchLoading(true);
+    setPunchLoadingMessage('Verifying & Punching out...');
+    setToast({ show: true, message: 'Verifying & Punching out...', type: 'info' });
+
+    const capturedSelfiePayload = await getSelfiePayload(selfie);
+    if (!capturedSelfiePayload) {
+      setPunchLoading(false);
+      setPunchLoadingMessage('');
+      clearSelfieState();
+      setToast({ show: true, message: 'Could not read verified photo. Please reopen camera.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+      return;
+    }
+    const capturedSelfieUri = getSelfieUriForPreview(selfie);
+
+    try {
+      const payload = {
+        latitude: punchLocation.latitude,
+        longitude: punchLocation.longitude,
+        address: punchLocation.address,
+        selfie: capturedSelfiePayload,
+      };
+      if (earlyReason && earlyReason.trim()) {
+        payload.earlyPunchOutReason = earlyReason.trim();
+      }
+      // 1. Record punch-out session (Sends selfie directly; backend uploads to Cloudinary asynchronously in background)
+      const res = await api.post('/attendance/punch-out', payload);
+
+      const updated = res.data?.data;
+      if (updated) {
+        if (updated.punchOut && !updated.punchOut.selfie && capturedSelfieUri) {
+          updated.punchOut.selfie = capturedSelfieUri;
+        }
+        setTodayAttendance(updated);
+      }
+      setEarlyPunchOutModal(false);
+      setEarlyPunchOutReason('');
+      clearSelfieState(); // Clear selfie after punch
+      // Clear persistent tracking session upon punch out
+      try {
+        const { clearTrackingSession } = require('../services/trackingManager');
+        await clearTrackingSession();
+      } catch (clearErr) {
+        console.warn('Failed to clear tracking session:', clearErr);
+      }
+
+      const sentForApproval = updated?.earlyPunchOutRequest?.status === 'PENDING';
+      setToast({
+        show: true,
+        message: sentForApproval
+          ? 'Punched Out! Early punch-out request sent to Reporting Manager.'
+          : 'Punched Out successfully!',
+        type: 'success',
+      });
+      setTimeout(() => {
+        setToast(prev => ({ ...prev, show: false }));
+      }, 2500);
+    } catch (err) {
+      if (err.response?.data?.requireEarlyReason) {
+        setEarlyShiftEndLabel(err.response?.data?.shiftEndLabel || '');
+        setEarlyPunchOutModal(true);
+      }
+      setToast({ show: true, message: err.response?.data?.message || 'Could not punch out. Please try again.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+    } finally {
+      setPunchLoading(false);
+      setPunchLoadingMessage('');
+    }
+  };
+
   const handlePunchOut = async () => {
+    if (clearExpiredSelfie()) return;
+    if (!selfie || !livenessVerified) {
+      setToast({ show: true, message: 'Live face verification is required before punching out.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      return;
+    }
+
+    const earlyInfo = getEarlyPunchOutInfo();
+    if (earlyInfo.isEarly) {
+      setEarlyShiftEndLabel(earlyInfo.endLabel);
+      setEarlyPunchOutReason('');
+      setEarlyPunchOutModal(true);
+      return;
+    }
+
     Alert.alert('Confirm Punch Out', 'Are you sure you want to end your shift?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Punch Out',
         style: 'destructive',
-        onPress: async () => {
-          if (!selfie) {
-            setToast({ show: true, message: 'Selfie is required for verification.', type: 'error' });
-            setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-            return;
-          }
-
-          // 1. Ensure GPS Location Coordinates are ready
-          let punchLocation = location;
-          if (!punchLocation || typeof punchLocation.latitude !== 'number') {
-            setPunchLoading(true);
-            punchLocation = await getQuickLocation();
-            if (!punchLocation || typeof punchLocation.latitude !== 'number') {
-              setPunchLoading(false);
-              setToast({ show: true, message: 'Could not detect GPS location. Please try again.', type: 'error' });
-              setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-              return;
-            }
-          }
-
-          // 2. Fast Non-blocking address resolution (Uses fast cached address or coordinates fallback for instant submission)
-          let actualAddress = punchLocation.address;
-          if (!actualAddress || actualAddress === 'Detecting address...' || actualAddress.includes('Detecting')) {
-            actualAddress = office?.name || `GPS: ${punchLocation.latitude.toFixed(5)}, ${punchLocation.longitude.toFixed(5)}`;
-            punchLocation = { ...punchLocation, address: actualAddress };
-          }
-
-          setPunchLoading(true);
-          setPunchLoadingMessage('Verifying & Punching out...');
-          setToast({ show: true, message: 'Verifying & Punching out...', type: 'info' });
-
-          const capturedSelfiePayload = await getSelfiePayload(selfie);
-          const capturedSelfieUri = getSelfieUriForPreview(selfie);
-
-          try {
-            // 1. Record punch-out session (Sends selfie directly; backend uploads to Cloudinary asynchronously in background)
-            const res = await api.post('/attendance/punch-out', {
-              latitude: punchLocation.latitude,
-              longitude: punchLocation.longitude,
-              address: punchLocation.address,
-              selfie: capturedSelfiePayload,
-            });
-
-            const updated = res.data?.data;
-            if (updated) {
-              if (updated.punchOut && !updated.punchOut.selfie && capturedSelfieUri) {
-                updated.punchOut.selfie = capturedSelfieUri;
-              }
-              setTodayAttendance(updated);
-            }
-            setSelfie(null); // Clear selfie after punch
-            // Clear persistent tracking session upon punch out
-            try {
-              const { clearTrackingSession } = require('../services/trackingManager');
-              await clearTrackingSession();
-            } catch (clearErr) {
-              console.warn('Failed to clear tracking session:', clearErr);
-            }
-
-            setToast({ show: true, message: 'Punched Out successfully!', type: 'success' });
-            setTimeout(() => {
-              setToast(prev => ({ ...prev, show: false }));
-            }, 2000);
-          } catch (err) {
-            setToast({ show: true, message: err.response?.data?.message || 'Could not punch out. Please try again.', type: 'error' });
-            setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-          } finally {
-            setPunchLoading(false);
-            setPunchLoadingMessage('');
-          }
-        },
+        onPress: () => executePunchOut(''),
       },
     ]);
+  };
+
+  const handleSubmitEarlyPunchOut = () => {
+    const trimmed = earlyPunchOutReason.trim();
+    if (trimmed.length < 3) {
+      Alert.alert('Reason Required', 'Please enter a valid reason for punching out before shift end time (at least 3 characters).');
+      return;
+    }
+    executePunchOut(trimmed);
   };
 
   const executeToggleBreak = async () => {
@@ -843,7 +1051,6 @@ const AttendanceScreen = ({ navigation }) => {
                 getLocation();
                 fetchUser();
                 fetchOfficeSettings();
-                fetchLeaves();
               }}
               className="bg-rose-600 px-3.5 py-2 rounded-xl flex-row items-center shadow-sm"
               activeOpacity={0.8}
@@ -931,7 +1138,7 @@ const AttendanceScreen = ({ navigation }) => {
           const selfieUri = selfie?.uri || (selfie?.base64 ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`) : (typeof selfie === 'string' ? selfie : null));
           return (
             <View className="mb-5 items-center">
-              <View className="w-48 h-48 rounded-3xl bg-slate-100 border-2 border-dashed border-emerald-400 overflow-hidden shadow-sm relative">
+              <View className="w-48 h-48 rounded-3xl bg-slate-100 border-2 border-emerald-500 overflow-hidden shadow-sm relative">
                 {selfieUri ? (
                   <Image
                     source={{ uri: selfieUri }}
@@ -943,7 +1150,7 @@ const AttendanceScreen = ({ navigation }) => {
                   />
                 ) : null}
 
-                {/* Top Left Eye (Preview) & Top Right X (Cancel/Retake) */}
+                {/* Top Left Eye (Preview) & Top Right Reopen Liveness Camera */}
                 <TouchableOpacity
                   onPress={() => setPreviewImage(selfieUri)}
                   className="absolute top-2.5 left-2.5 w-8 h-8 rounded-full bg-black/60 justify-center items-center shadow-sm"
@@ -952,38 +1159,111 @@ const AttendanceScreen = ({ navigation }) => {
                   <Eye size={16} color="white" />
                 </TouchableOpacity>
                 <TouchableOpacity
-                  onPress={() => setSelfie(null)}
-                  className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-rose-500 justify-center items-center shadow-sm"
+                  onPress={takeSelfie}
+                  disabled={punchLoading || livenessBusy}
+                  className="absolute top-2.5 right-2.5 w-8 h-8 rounded-full bg-indigo-600 justify-center items-center shadow-sm"
                   activeOpacity={0.7}
                 >
-                  <X size={16} color="white" />
+                  <RotateCcw size={15} color="white" />
                 </TouchableOpacity>
               </View>
-              <Text className="text-[10px] font-bold text-slate-400 mt-1.5">Selfie captured</Text>
+
+              <View className="flex-row items-center mt-2.5 gap-2">
+                <View className="flex-row items-center bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-full">
+                  <CheckCircle size={13} color="#059669" />
+                  <Text className="text-[11px] font-extrabold text-emerald-700 ml-1.5">Liveness Verified ✓</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={takeSelfie}
+                  disabled={punchLoading || livenessBusy}
+                  className="flex-row items-center bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-full"
+                  activeOpacity={0.8}
+                >
+                  <RotateCcw size={12} color="#4f46e5" />
+                  <Text className="text-[11px] font-extrabold text-indigo-600 ml-1.5">Reopen Camera</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           );
         })()}
 
-        {/* Background Location Required Notice */}
-        {Platform.OS === 'android' && !hasBackgroundPermission && !alreadyPunchedOut && (
+        {/* Background Location Disclosure Notice (shown if background location is revoked while punched in) */}
+        {Platform.OS === 'android' && user?.trackingEnabled !== false && !hasBackgroundPermission && alreadyPunchedIn && !alreadyPunchedOut && (
           <View className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 flex-row items-center justify-between">
             <View className="flex-1 mr-3">
               <View className="flex-row items-center mb-1">
                 <ShieldAlert size={16} color="#d97706" />
-                <Text className="text-amber-800 font-bold text-xs ml-1.5 uppercase tracking-wide">
-                  Background Location Required
+                <Text className="text-amber-800 font-bold text-xs ml-1.5 tracking-wide">
+                  Background Location Disclosure
                 </Text>
               </View>
               <Text className="text-amber-700 text-xs">
-                Location is set to "While using app". Company policy requires "Allow all the time" to punch in.
+                Gatimaan collects location data in the background for live field route tracking while punched in, even when the app is closed or not in use.
               </Text>
             </View>
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={() => Linking.openSettings()}
+              onPress={async () => {
+                try {
+                  let fg = await Location.getForegroundPermissionsAsync();
+                  if (fg?.status !== 'granted') {
+                    Alert.alert(
+                      'Location Access Disclosure',
+                      'Gatimaan requires foreground location access first to verify your attendance punch-in/out location.',
+                      [
+                        { text: 'Not Now', style: 'cancel' },
+                        {
+                          text: 'Continue',
+                          onPress: async () => {
+                            const reqFg = await Location.requestForegroundPermissionsAsync();
+                            if (reqFg?.status === 'granted') {
+                              getLocation(true);
+                            } else {
+                              Alert.alert(
+                                'Location Permission Required',
+                                'Please enable Location permission in App Settings to continue.',
+                                [
+                                  { text: 'Cancel', style: 'cancel' },
+                                  { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                                ]
+                              );
+                            }
+                          },
+                        },
+                      ]
+                    );
+                    return;
+                  }
+                  Alert.alert(
+                    'Background Location Disclosure',
+                    'Gatimaan collects location data in the background to enable live field route tracking and attendance geofence compliance while you are punched in, even when the app is closed or not in use.',
+                    [
+                      { text: 'Not Now', style: 'cancel' },
+                      {
+                        text: 'Continue',
+                        onPress: async () => {
+                          const reqBg = await Location.requestBackgroundPermissionsAsync();
+                          if (reqBg?.status === 'granted') {
+                            setHasBackgroundPermission(true);
+                          } else {
+                            Alert.alert(
+                              'Background Location Permission',
+                              'Select "Allow all the time" in App Settings to enable background route tracking while on duty.',
+                              [
+                                { text: 'Cancel', style: 'cancel' },
+                                { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                              ]
+                            );
+                          }
+                        },
+                      },
+                    ]
+                  );
+                } catch (_) { }
+              }}
               className="bg-amber-600 px-3 py-2 rounded-xl"
             >
-              <Text className="text-white font-bold text-xs">Settings</Text>
+              <Text className="text-white font-bold text-xs">Allow</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1011,6 +1291,88 @@ const AttendanceScreen = ({ navigation }) => {
             );
           }
 
+          // Hide Punch In button until "Allow all the time" background location is enabled for tracked employees
+          if (!alreadyPunchedIn && Platform.OS === 'android' && user?.trackingEnabled !== false && hasBackgroundPermission !== true) {
+            return (
+              <View className="rounded-3xl p-6 items-center border bg-amber-50/70 border-amber-200">
+                <View className="w-14 h-14 rounded-2xl justify-center items-center mb-3 bg-amber-100">
+                  <ShieldAlert size={28} color="#d97706" />
+                </View>
+                <Text className="font-extrabold text-base text-slate-800 text-center">
+                  Enable "Allow all the time" Location
+                </Text>
+                <Text className="text-slate-600 font-semibold text-xs mt-1.5 text-center leading-relaxed">
+                  Punch In becomes available once Location permission is set to "Allow all the time" for active duty route tracking.
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={async () => {
+                    try {
+                      let fg = await Location.getForegroundPermissionsAsync();
+                      if (fg?.status !== 'granted') {
+                        Alert.alert(
+                          'Location Access Disclosure',
+                          'Gatimaan requires foreground location access first to verify your attendance punch-in/out location.',
+                          [
+                            { text: 'Not Now', style: 'cancel' },
+                            {
+                              text: 'Continue',
+                              onPress: async () => {
+                                const reqFg = await Location.requestForegroundPermissionsAsync();
+                                if (reqFg?.status === 'granted') {
+                                  getLocation(true);
+                                } else {
+                                  Alert.alert(
+                                    'Location Permission Required',
+                                    'Please enable Location permission in App Settings to continue.',
+                                    [
+                                      { text: 'Cancel', style: 'cancel' },
+                                      { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                                    ]
+                                  );
+                                }
+                              },
+                            },
+                          ]
+                        );
+                        return;
+                      }
+                      Alert.alert(
+                        'Background Location Disclosure',
+                        'Gatimaan collects location data in the background to enable live field route tracking and attendance geofence compliance while you are punched in, even when the app is closed or not in use.',
+                        [
+                          { text: 'Not Now', style: 'cancel' },
+                          {
+                            text: 'Continue',
+                            onPress: async () => {
+                              const reqBg = await Location.requestBackgroundPermissionsAsync();
+                              if (reqBg?.status === 'granted') {
+                                setHasBackgroundPermission(true);
+                              } else {
+                                Alert.alert(
+                                  'Background Location Permission',
+                                  'Select "Allow all the time" in App Settings to unlock Punch In.',
+                                  [
+                                    { text: 'Cancel', style: 'cancel' },
+                                    { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                                  ]
+                                );
+                              }
+                            },
+                          },
+                        ]
+                      );
+                    } catch (_) { }
+                  }}
+                  className="mt-4 w-full bg-amber-600 rounded-2xl py-3.5 px-5 flex-row justify-center items-center shadow-sm"
+                >
+                  <Text className="text-white font-bold text-sm">Enable Background Location</Text>
+                  <ChevronRight size={18} color="white" className="ml-1.5" />
+                </TouchableOpacity>
+              </View>
+            );
+          }
+
           return (
             <TouchableOpacity
               className={`h-18 rounded-2xl justify-center items-center shadow-lg ${alreadyPunchedIn
@@ -1019,48 +1381,26 @@ const AttendanceScreen = ({ navigation }) => {
                 }`}
               style={{ height: 64 }}
               onPress={async () => {
-                if (Platform.OS === 'android' && !alreadyPunchedIn) {
-                  const isBgOk = await verifyBackgroundPermission();
-                  if (!isBgOk) {
-                    Alert.alert(
-                      'Background Location Recommended',
-                      'Location is set to "While using app". Live route tracking when your phone is locked requires "Allow all the time".\n\nConfigure in Settings or punch in anyway?',
-                      [
-                        { text: 'Open Settings', onPress: () => Linking.openSettings() },
-                        {
-                          text: 'Punch In Anyway',
-                          style: 'cancel',
-                          onPress: () => {
-                            if (!selfie) {
-                              takeSelfie();
-                            } else {
-                              handlePunchIn(true);
-                            }
-                          }
-                        }
-                      ]
-                    );
-                    return;
-                  }
-                }
                 if (!selfie) {
                   takeSelfie();
                 } else {
                   if (alreadyPunchedIn) {
                     handlePunchOut();
                   } else {
-                    handlePunchIn();
+                    handlePunchIn(false);
                   }
                 }
               }}
-              disabled={punchLoading}
+              disabled={punchLoading || livenessBusy}
               activeOpacity={0.85}
             >
-              {punchLoading ? (
+              {punchLoading || livenessBusy ? (
                 <View className="flex-row items-center justify-center">
                   <ActivityIndicator color="white" className="mr-2" />
                   <Text className="text-white font-bold text-base">
-                    {punchLoadingMessage || (alreadyPunchedIn ? 'Verifying & Punching out...' : 'Verifying & Punching in...')}
+                    {livenessBusy
+                      ? 'Opening Live Check...'
+                      : punchLoadingMessage || (alreadyPunchedIn ? 'Verifying & Punching out...' : 'Verifying & Punching in...')}
                   </Text>
                 </View>
               ) : (
@@ -1241,6 +1581,87 @@ const AttendanceScreen = ({ navigation }) => {
 
 
       </ScrollView>
+
+      {/* Expo Go / Cross-Platform On-Device Live Verification Camera Modal */}
+      <LivenessCameraModal
+        visible={webLivenessVisible}
+        purpose={alreadyPunchedIn ? 'punchOut' : 'punchIn'}
+        onComplete={(res) => {
+          setWebLivenessVisible(false);
+          setLivenessBusy(false);
+          applyLivenessResult(res);
+        }}
+      />
+
+      {/* Early Punch-Out Reason Modal (shown when punching out before shift end time) */}
+      <Modal
+        visible={earlyPunchOutModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !punchLoading && setEarlyPunchOutModal(false)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1, backgroundColor: 'rgba(15,23,42,0.55)', justifyContent: 'center', alignItems: 'center', padding: 20 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={{ width: '100%', maxWidth: 420, backgroundColor: '#ffffff', borderRadius: 22, padding: 20 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a' }}>Early Punch-Out Request</Text>
+              <TouchableOpacity
+                disabled={punchLoading}
+                onPress={() => setEarlyPunchOutModal(false)}
+              >
+                <X size={20} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 12, color: '#64748b', lineHeight: 18, marginBottom: 12 }}>
+              You are punching out before your shift end time{earlyShiftEndLabel ? ` (${earlyShiftEndLabel})` : ''}. Your request will be sent to your Reporting Manager — if approved, your attendance will be marked Present; if rejected, it will be marked Half Day.
+            </Text>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: '#334155', marginBottom: 6 }}>
+              Reason for Early Punch-Out *
+            </Text>
+            <TextInput
+              value={earlyPunchOutReason}
+              onChangeText={setEarlyPunchOutReason}
+              placeholder="Enter reason for leaving early (required)"
+              placeholderTextColor="#94a3b8"
+              multiline
+              maxLength={500}
+              style={{
+                borderWidth: 1,
+                borderColor: '#cbd5e1',
+                borderRadius: 12,
+                padding: 12,
+                minHeight: 84,
+                fontSize: 13,
+                color: '#0f172a',
+                backgroundColor: '#f8fafc',
+                textAlignVertical: 'top',
+              }}
+            />
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <TouchableOpacity
+                disabled={punchLoading}
+                onPress={() => setEarlyPunchOutModal(false)}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 12, backgroundColor: '#f1f5f9', alignItems: 'center' }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={punchLoading}
+                onPress={handleSubmitEarlyPunchOut}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: 12, backgroundColor: '#ea580c', alignItems: 'center' }}
+              >
+                {punchLoading ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#ffffff' }}>Submit & Punch Out</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* Full Screen Image Preview Modal */}
       <Modal visible={!!previewImage} transparent={true} animationType="fade">

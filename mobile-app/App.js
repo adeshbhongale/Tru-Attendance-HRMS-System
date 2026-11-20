@@ -4,7 +4,7 @@ import { createStackNavigator } from "@react-navigation/stack";
 import * as Battery from "expo-battery";
 import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -40,32 +40,6 @@ import LeaveApprovalsScreen from "./src/screens/LeaveApprovalsScreen";
 import ReportsScreen from "./src/screens/ReportsScreen";
 import { navigationRef } from "./src/utils/navigation";
 import { setupNotificationResponseListener, checkInitialNotificationResponse } from "./src/utils/notifications";
-import * as Application from "expo-application";
-import ForceUpdateModal from "./src/components/ForceUpdateModal";
-import api from "./src/api/axios";
-
-// Material Management Module Screens
-import MaterialDashboardScreen from "./src/modules/material/screens/MaterialDashboardScreen";
-import MaterialRequestScreen from "./src/modules/material/screens/MaterialRequestScreen";
-import MaterialListScreen from "./src/modules/material/screens/MaterialListScreen";
-import MaterialDetailScreen from "./src/modules/material/screens/MaterialDetailScreen";
-import BarcodeViewAllScreen from "./src/modules/material/screens/BarcodeViewAllScreen";
-import BarcodeDetailScreen from "./src/modules/material/screens/BarcodeDetailScreen";
-import TransferMaterialScreen from "./src/modules/material/screens/TransferMaterialScreen";
-import ReturnMaterialScreen from "./src/modules/material/screens/ReturnMaterialScreen";
-import SplitMaterialScreen from "./src/modules/material/screens/SplitMaterialScreen";
-import ConvertMaterialScreen from "./src/modules/material/screens/ConvertMaterialScreen";
-import HandlerAssignmentScreen from "./src/modules/material/screens/HandlerAssignmentScreen";
-import StoreDispatchScreen from "./src/modules/material/screens/StoreDispatchScreen";
-import ReceivingFormScreen from "./src/modules/material/screens/ReceivingFormScreen";
-import ExchangeBarcodeScreen from "./src/modules/material/screens/ExchangeBarcodeScreen";
-import MaterialsTreeScreen from "./src/modules/material/screens/MaterialsTreeScreen";
-import TransferListScreen from "./src/modules/material/screens/TransferListScreen";
-import ReturnListScreen from "./src/modules/material/screens/ReturnListScreen";
-import PendingTransactionsScreen from "./src/modules/material/screens/PendingTransactionsScreen";
-import MaterialMovementHubScreen from "./src/modules/material/screens/MaterialMovementHubScreen";
-import MergeMaterialScreen from "./src/modules/material/screens/MergeMaterialScreen";
-import ReturnMultipleScreen from "./src/modules/material/screens/ReturnMultipleScreen";
 
 // Expense Management (HR Module) Screens
 import ExpenseDashboardScreen from "./src/modules/hr/expense/screens/ExpenseDashboardScreen";
@@ -104,6 +78,12 @@ try {
             await initDatabase();
 
             const activeTripId = await AsyncStorage.getItem("activeTripId");
+            if (!activeTripId) {
+              if (typeof Location.stopLocationUpdatesAsync === "function") {
+                await Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK).catch(() => {});
+              }
+              return;
+            }
             const deviceId = await AsyncStorage.getItem("deviceId");
 
             let batteryLevel = 100;
@@ -120,6 +100,7 @@ try {
             }
 
             for (const loc of locations) {
+              if (!loc?.coords) continue;
               const {
                 latitude,
                 longitude,
@@ -159,11 +140,14 @@ try {
           } catch (enterpriseErr) {
             // Fallback to legacy offlineQueue
             try {
+              const activeTripId = await AsyncStorage.getItem("activeTripId");
+              if (!activeTripId) return;
               const {
                 addPointToQueue,
                 syncQueue,
               } = require("./src/utils/offlineQueue");
               for (const loc of locations) {
+                if (!loc?.coords) continue;
                 const {
                   latitude,
                   longitude,
@@ -171,7 +155,6 @@ try {
                   speed,
                   heading,
                   mocked,
-                  timestamp,
                 } = loc.coords;
                 await addPointToQueue({
                   latitude,
@@ -180,7 +163,7 @@ try {
                   speed: speed || 0,
                   heading,
                   isMock: mocked,
-                  timestamp: timestamp || Date.now(),
+                  timestamp: loc.timestamp || loc.coords.timestamp || Date.now(),
                 });
               }
               await syncQueue();
@@ -205,50 +188,7 @@ import PreLoginPermissionScreen from "./src/screens/PreLoginPermissionScreen";
 export default function App() {
   const [permissionsGranted, setPermissionsGranted] = useState(false);
   const [checkingPermissions, setCheckingPermissions] = useState(true);
-  const [updateRequired, setUpdateRequired] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState(null);
-  const [installedVersion, setInstalledVersion] = useState("1.0.0");
-  const [installedBuild, setInstalledBuild] = useState("1");
-
-  const checkAppVersion = async () => {
-    try {
-      const currentVer = Application.nativeApplicationVersion || "1.0.0";
-      const currentBld = Application.nativeBuildVersion || "1";
-      setInstalledVersion(currentVer);
-      setInstalledBuild(currentBld);
-
-      const res = await api.get("/settings/public-version").catch(() => null);
-      if (res?.data?.success && res?.data?.data) {
-        const info = res.data.data;
-        const requiredBuild = Number(info.minAndroidVersionCode || 1);
-        const currentBuildNum = Number(currentBld || 1);
-
-        const isVerOutdated = (cur, req) => {
-          if (!req) return false;
-          const cParts = String(cur).split(".").map((n) => parseInt(n, 10) || 0);
-          const rParts = String(req).split(".").map((n) => parseInt(n, 10) || 0);
-          for (let i = 0; i < Math.max(cParts.length, rParts.length); i++) {
-            const c = cParts[i] || 0;
-            const r = rParts[i] || 0;
-            if (c < r) return true;
-            if (c > r) return false;
-          }
-          return false;
-        };
-
-        const isOutdated = currentBuildNum < requiredBuild || isVerOutdated(currentVer, info.minAndroidVersion);
-
-        if (info.forceUpdateEnabled && isOutdated) {
-          setUpdateInfo(info);
-          setUpdateRequired(true);
-        } else {
-          setUpdateRequired(false);
-        }
-      }
-    } catch (e) {
-      console.warn("[App] Version check error:", e?.message);
-    }
-  };
+  const permissionSkippedRef = useRef(false);
 
   const checkAllPermissions = async () => {
     try {
@@ -256,34 +196,40 @@ export default function App() {
 
       // Check Foreground Permission
       const fgStatus = await Location.getForegroundPermissionsAsync();
-      const bgStatus = await Location.getBackgroundPermissionsAsync().catch(() => ({ status: 'undetermined' }));
 
-      if (Platform.OS === 'android') {
-        // If foreground location is granted, allow user into the app.
-        // Background permission is checked and guided during punch-in/out.
-        if (fgStatus.status === "granted") {
-          setPermissionsGranted(true);
-          setCheckingPermissions(false);
-          return true;
-        }
-        setPermissionsGranted(false);
-        setCheckingPermissions(false);
-        return false;
-      }
-
-      // Non-Android platforms
       if (fgStatus.status === "granted") {
         setPermissionsGranted(true);
         setCheckingPermissions(false);
         return true;
       }
 
+      // Preserve navigation state if the user explicitly chose "Not Now" on PreLoginPermissionScreen
+      // or already has an active authenticated session.
+      if (permissionSkippedRef.current) {
+        setPermissionsGranted(true);
+        setCheckingPermissions(false);
+        return true;
+      }
+
+      try {
+        const { getSecureToken } = require("./src/utils/secureStorage");
+        const existingToken = await getSecureToken();
+        if (existingToken) {
+          permissionSkippedRef.current = true;
+          setPermissionsGranted(true);
+          setCheckingPermissions(false);
+          return true;
+        }
+      } catch (_) {}
+
       setPermissionsGranted(false);
       setCheckingPermissions(false);
       return false;
     } catch (e) {
       console.warn("[Permissions] Failed to check permissions:", e);
-      setPermissionsGranted(false);
+      if (!permissionSkippedRef.current) {
+        setPermissionsGranted(false);
+      }
       setCheckingPermissions(false);
       return false;
     }
@@ -296,14 +242,12 @@ export default function App() {
       checkForAppUpdates(false);
     } catch (_) {}
 
-    checkAppVersion();
     checkAllPermissions();
 
     // Listen for AppState changes to check permissions and re-check updates on app resume
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (nextAppState === "active") {
         checkAllPermissions();
-        checkAppVersion();
         try {
           const { checkForAppUpdates } = require("./src/services/updateService");
           checkForAppUpdates(false);
@@ -311,11 +255,11 @@ export default function App() {
       }
     });
 
-    // If running in emergency fallback or embedded launch, periodically check for new updates
+    // If running in emergency fallback launch, periodically check for recovery updates
     const pollInterval = setInterval(async () => {
       try {
         const Updates = require("expo-updates");
-        if (Updates.isEmergencyLaunch || Updates.isEmbeddedLaunch) {
+        if (Updates.isEmergencyLaunch) {
           const { checkForAppUpdates } = require("./src/services/updateService");
           await checkForAppUpdates(false);
         }
@@ -393,6 +337,7 @@ export default function App() {
                 setPermissionsGranted(true);
               }}
               onContinueAnyway={() => {
+                permissionSkippedRef.current = true;
                 setPermissionsGranted(true);
               }}
             />
@@ -434,92 +379,6 @@ export default function App() {
                     component={OrgChartScreen}
                   />
 
-                  {/* Material Management Module */}
-                  <RootStack.Screen
-                    name="MaterialDashboard"
-                    component={MaterialDashboardScreen}
-                  />
-                  <RootStack.Screen
-                    name="MaterialRequestScreen"
-                    component={MaterialRequestScreen}
-                  />
-                  <RootStack.Screen
-                    name="MaterialListScreen"
-                    component={MaterialListScreen}
-                  />
-                  <RootStack.Screen
-                    name="MaterialDetailScreen"
-                    component={MaterialDetailScreen}
-                  />
-                  <RootStack.Screen
-                    name="BarcodeViewAllScreen"
-                    component={BarcodeViewAllScreen}
-                  />
-                  <RootStack.Screen
-                    name="BarcodeDetailScreen"
-                    component={BarcodeDetailScreen}
-                  />
-                  <RootStack.Screen
-                    name="TransferMaterialScreen"
-                    component={TransferMaterialScreen}
-                  />
-                  <RootStack.Screen
-                    name="ReturnMaterialScreen"
-                    component={ReturnMaterialScreen}
-                  />
-                  <RootStack.Screen
-                    name="SplitMaterialScreen"
-                    component={SplitMaterialScreen}
-                  />
-                  <RootStack.Screen
-                    name="ConvertMaterialScreen"
-                    component={ConvertMaterialScreen}
-                  />
-                  <RootStack.Screen
-                    name="StoreDispatchScreen"
-                    component={StoreDispatchScreen}
-                  />
-                  <RootStack.Screen
-                    name="ReceivingFormScreen"
-                    component={ReceivingFormScreen}
-                  />
-                  <RootStack.Screen
-                    name="ExchangeBarcodeScreen"
-                    component={ExchangeBarcodeScreen}
-                  />
-                  <RootStack.Screen
-                    name="MaterialsTreeScreen"
-                    component={MaterialsTreeScreen}
-                  />
-                  <RootStack.Screen
-                    name="TransferListScreen"
-                    component={TransferListScreen}
-                  />
-                  <RootStack.Screen
-                    name="ReturnListScreen"
-                    component={ReturnListScreen}
-                  />
-                  <RootStack.Screen
-                    name="PendingTransactionsScreen"
-                    component={PendingTransactionsScreen}
-                  />
-                  <RootStack.Screen
-                    name="MaterialMovementHub"
-                    component={MaterialMovementHubScreen}
-                  />
-                  <RootStack.Screen
-                    name="MergeMaterialScreen"
-                    component={MergeMaterialScreen}
-                  />
-                  <RootStack.Screen
-                    name="ReturnMultipleScreen"
-                    component={ReturnMultipleScreen}
-                  />
-                  <RootStack.Screen
-                    name="HandlerAssignmentScreen"
-                    component={HandlerAssignmentScreen}
-                  />
-
                   {/* Expense Management Module */}
                   <RootStack.Screen
                     name="ExpenseDashboard"
@@ -556,12 +415,6 @@ export default function App() {
               </NavigationContainer>
             </SidebarProvider>
           )}
-          <ForceUpdateModal
-            visible={updateRequired}
-            updateInfo={updateInfo}
-            currentVersion={installedVersion}
-            currentBuild={installedBuild}
-          />
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

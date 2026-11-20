@@ -16,6 +16,8 @@ import {
   CarTaxiFront,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Eye,
   FileCheck,
   FileText,
@@ -56,6 +58,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { resolveProofImageUrl } from "../../../../utils/imageUrl";
 import expenseApi, { newRequestId } from "../api/expenseApi";
+import { getLivePhotoGeoTag } from "../api/geoTag";
+import ZoomableImage from "../components/ZoomableImage";
 import ExpenseHeader from "../components/ExpenseHeader";
 
 const NORMAL_EXPENSE_TYPES = [
@@ -64,6 +68,12 @@ const NORMAL_EXPENSE_TYPES = [
   { code: "CONVEYANCE", name: "Local Conveyance", icon: MapPin },
   { code: "STOCK_PURCHASE", name: "Stock Purchase", icon: ShoppingBag },
   { code: "OTHER", name: "Other", icon: FileText },
+];
+
+const CLAIM_CAL_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const CLAIM_CAL_MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ];
 
 /** Conveyance Modes (Car, Bike, E-Bike, E-Car) as configured in Admin Website */
@@ -338,9 +348,28 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
   // Normal vs Lodging Date fields (start empty, chosen by employee)
   const [claimDate, setClaimDate] = useState("");
+  const [originalClaimDate, setOriginalClaimDate] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [activeDatePicker, setActiveDatePicker] = useState(null); // 'claimDate' | 'fromDate' | 'toDate'
+  const [claimCalendarViewDate, setClaimCalendarViewDate] = useState(() => new Date());
+  const [claimsEnabled, setClaimsEnabled] = useState(true);
+  const [normalClaimMaxPastDays, setNormalClaimMaxPastDays] = useState(2);
+
+  const getMinNormalClaimDate = () => {
+    if (normalClaimMaxPastDays === null) return null;
+    const days = Number.isInteger(normalClaimMaxPastDays) && normalClaimMaxPastDays >= 0 ? normalClaimMaxPastDays : 2;
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() - days);
+  };
+  const getMinNormalClaimDateStr = () => {
+    const minD = getMinNormalClaimDate();
+    if (!minD) return null;
+    const y = minD.getFullYear();
+    const m = String(minD.getMonth() + 1).padStart(2, "0");
+    const d = String(minD.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  };
 
   // Employee Selection - Pre-populated with current user immediately
   const [numberOfEmployees, setNumberOfEmployees] = useState(1);
@@ -986,9 +1015,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [approvalLimitRules, setApprovalLimitRules] = useState([]);
   const [serverDirectLimit, setServerDirectLimit] = useState(null);
 
-  // Full Payment (Optional)
+  // Full Payment (Optional — visible only when claim has excess > 0)
   const [fullPaymentRequested, setFullPaymentRequested] = useState(false);
   const [fullPaymentReason, setFullPaymentReason] = useState("");
+  const [liveExcessAmount, setLiveExcessAmount] = useState(0);
+  const effectiveExcessAmount = previewData
+    ? Number(
+        previewData.standardExcessAmount !== undefined
+          ? previewData.standardExcessAmount
+          : (previewData.excessAmount || 0)
+      )
+    : liveExcessAmount;
+  // Full Payment option appears only after "Calculate & Preview Breakdown" shows an excess (Normal & Lodging forms)
+  const showFullPaymentOption = !isRelativeStay && Boolean(previewData) && effectiveExcessAmount > 0;
 
   // Selected employee IDs on the claim (slot 0 = self, slots 1..N-1 = tagged employees)
   const selectedEmployeeIds = useMemo(() => {
@@ -1833,6 +1872,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           }
           // Do not auto-set default destinationCity - employee must choose
           if (pol) {
+            setClaimsEnabled(pol?.claimRules?.claimsEnabled !== false);
+            const rawMaxPast = pol?.claimRules?.normalClaimMaxPastDays;
+            if (rawMaxPast === null) {
+              setNormalClaimMaxPastDays(null);
+            } else if (rawMaxPast !== undefined && Number.isInteger(Number(rawMaxPast)) && Number(rawMaxPast) >= 0) {
+              setNormalClaimMaxPastDays(Number(rawMaxPast));
+            }
             setRelativeStayPercent(typeof pol.relativeStayPercent === "number" ? pol.relativeStayPercent : null);
             if (Array.isArray(pol.approvalLimitRules)) {
               setApprovalLimitRules(pol.approvalLimitRules);
@@ -1908,7 +1954,11 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             setRejectionReasonText(rejReason);
             const mode = c.claimMode || (c.fromDate && c.toDate ? "LODGING" : "NORMAL");
             setClaimMode(mode);
-            if (c.claimDate) setClaimDate(String(c.claimDate).slice(0, 10));
+            if (c.claimDate) {
+              const origDateStr = String(c.claimDate).slice(0, 10);
+              setClaimDate(origDateStr);
+              setOriginalClaimDate(origDateStr);
+            }
             if (c.fromDate) setFromDate(String(c.fromDate).slice(0, 10));
             if (c.toDate) setToDate(String(c.toDate).slice(0, 10));
             setStayType(mode === "LODGING" && ["IN_HOTEL", "WITH_RELATIVE"].includes(c.stayType) ? c.stayType : "");
@@ -2199,8 +2249,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             // Pre-populate Full Payment Info
             const fp = c.fullPayment || {};
             const isFpRequested = !!(fp.requested || c.fullPaymentRequested);
-            setFullPaymentRequested(isFpRequested);
-            setFullPaymentReason(isFpRequested ? (fp.reason || c.fullPaymentReason || "") : "");
+            const loadedExcess = Math.max(
+              0,
+              Number(
+                c.standardExcessAmount ??
+                c.excessAmount ??
+                c.grandExcess ??
+                (Number(c.grandPolicyLimit || 0) > 0 && Number(c.grandRequested || 0) > Number(c.grandPolicyLimit || 0)
+                  ? Number(c.grandRequested) - Number(c.grandPolicyLimit)
+                  : 0)
+              ) || 0
+            );
+            setLiveExcessAmount(loadedExcess);
+            const keepFp = isFpRequested && loadedExcess > 0;
+            setFullPaymentRequested(keepFp);
+            setFullPaymentReason(keepFp ? (fp.reason || c.fullPaymentReason || "") : "");
 
             // Pre-populate selected approver
             const isUserMgmt = isManagementFiler(cachedCurrentUser);
@@ -2366,10 +2429,18 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const handlePickAttachment = async (useCamera = false, _legacyFullPayment = false, targetEntryIndex = null, targetField = "attachments") => {
     try {
       let result;
+      let geoTag = null;
       if (useCamera) {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== "granted") {
-          Alert.alert("Permission Required", "Camera permission is required to capture documents.");
+          Alert.alert(
+            "Permission Required",
+            "Camera permission is required to capture documents.",
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Open Settings", onPress: () => Linking.openSettings().catch(() => {}) },
+            ]
+          );
           return;
         }
         result = await ImagePicker.launchCameraAsync({
@@ -2377,12 +2448,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           quality: 0.6,
           base64: true,
         });
+        if (result.canceled || !result.assets || !result.assets.length) return;
+        // Geo-tag the live photo (stamped on the image by the server on upload)
+        geoTag = await getLivePhotoGeoTag();
+        if (!geoTag) return;
       } else {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== "granted") {
-          Alert.alert("Permission Required", "Gallery permission is required to select documents.");
-          return;
-        }
+        // Android system Photo Picker requires no runtime media library permissions
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ["images"],
           quality: 0.6,
@@ -2409,6 +2480,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           size: asset.fileSize || 0,
           isUploading: true,
           uploadFailed: false,
+          ...(geoTag ? { geoTag } : {}),
         };
 
         if (targetField === "food_attachments" && typeof targetEntryIndex === "number") {
@@ -2450,6 +2522,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 type: asset.mimeType || "image/jpeg",
                 file: asset.file,
                 base64: asset.base64,
+                geoTag,
               },
               null,
               uploadPurpose
@@ -2611,7 +2684,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       if (sourceType === "camera") {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== "granted") {
-          Alert.alert("Permission Required", "Camera permission is required to capture live photo of service report.");
+          Alert.alert(
+            "Permission Required",
+            "Camera permission is required to capture live photo of service report.",
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Open Settings", onPress: () => Linking.openSettings().catch(() => {}) },
+            ]
+          );
           return;
         }
         const result = await ImagePicker.launchCameraAsync({
@@ -2620,19 +2700,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           base64: true,
         });
         if (result.canceled || !result.assets || !result.assets.length) return;
+        // Geo-tag the live photo (stamped on the image by the server on upload)
+        const geoTag = await getLivePhotoGeoTag();
+        if (!geoTag) return;
         assets = result.assets.map((a) => ({
           uri: a.uri,
           name: a.fileName || `Service_Report_Live_${Date.now()}.jpg`,
           type: a.mimeType || "image/jpeg",
           size: a.fileSize || 0,
           base64: a.base64,
+          geoTag,
         }));
       } else if (sourceType === "gallery") {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== "granted") {
-          Alert.alert("Permission Required", "Gallery permission is required to select service report images.");
-          return;
-        }
+        // Android system Photo Picker requires no runtime media library permissions
         const result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ["images"],
           quality: 0.6,
@@ -2665,6 +2745,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           size: asset.size,
           isUploading: true,
           uploadFailed: false,
+          ...(asset.geoTag ? { geoTag: asset.geoTag } : {}),
         };
 
         if (typeof targetEntryIndex === "number") {
@@ -2692,6 +2773,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 type: asset.type,
                 file: asset.file,
                 base64: asset.base64,
+                geoTag: asset.geoTag || null,
               },
               null,
               "serviceReport"
@@ -3059,6 +3141,124 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relativeAllowedKey]);
 
+  // Live excess amount check so Full Payment option appears ONLY when the claim has an excess amount (> 0)
+  const excessCheckKey = useMemo(() => {
+    const entriesSig = !isLodging
+      ? entries
+          .map((e) =>
+            [
+              e.expenseType,
+              e.requestedAmount,
+              e.distanceKm,
+              e.vehicle,
+              e.travelModeId,
+              e.travelSubtypeId,
+              e.startKm,
+              e.endKm,
+            ].join(":")
+          )
+          .join("|")
+      : "";
+    const foodSig = isLodging && includeFood
+      ? foodEntries.map((fe) => `${fe.date || ""}:${fe.requestedAmount || ""}`).join("|")
+      : "";
+    return [
+      isLodging ? "L" : "N",
+      claimDate,
+      fromDate,
+      toDate,
+      stayType,
+      isRelativeStay ? "1" : "0",
+      includeFood ? "1" : "0",
+      destinationCity.trim(),
+      numberOfEmployees,
+      selectedEmployeeIdsKey,
+      requestedAmount,
+      entriesSig,
+      foodSig,
+    ].join("~");
+  }, [
+    isLodging,
+    claimDate,
+    fromDate,
+    toDate,
+    stayType,
+    isRelativeStay,
+    includeFood,
+    destinationCity,
+    numberOfEmployees,
+    selectedEmployeeIdsKey,
+    requestedAmount,
+    entries,
+    foodEntries,
+  ]);
+
+  useEffect(() => {
+    const hasValidAmount = isLodging
+      ? Boolean(
+          fromDate &&
+          toDate &&
+          toDate > fromDate &&
+          ((!isRelativeStay && parseFloat(requestedAmount) > 0) ||
+            (includeFood && foodEntries.some((fe) => parseFloat(fe.requestedAmount) > 0)))
+        )
+      : Boolean(
+          claimDate &&
+          entries.some(
+            (e) =>
+              e.expenseType &&
+              (parseFloat(e.requestedAmount) > 0 ||
+                (e.expenseType === "CONVEYANCE" && parseFloat(e.distanceKm) > 0) ||
+                (e.expenseType === "TRAVEL" && parseFloat(e.endKm) > parseFloat(e.startKm)))
+          )
+        );
+
+    if (!hasValidAmount || isRelativeStay) {
+      setLiveExcessAmount(0);
+      if (fullPaymentRequested) {
+        setFullPaymentRequested(false);
+        setFullPaymentReason("");
+      }
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const basePayload = buildPayload(false);
+        const res = await expenseApi.previewClaim({
+          ...basePayload,
+          claimId: editClaimId || undefined,
+          fullPaymentRequested: false,
+          fullPaymentReason: "",
+          fullPayment: { requested: false, reason: "" },
+        });
+        if (cancelled) return;
+        if (res?.success && res?.data) {
+          const stdEx = Number(
+            res.data.standardExcessAmount !== undefined
+              ? res.data.standardExcessAmount
+              : (res.data.excessAmount || 0)
+          );
+          const nextExcess = stdEx > 0 ? stdEx : 0;
+          setLiveExcessAmount(nextExcess);
+          if (nextExcess <= 0) {
+            setFullPaymentRequested(false);
+            setFullPaymentReason("");
+          }
+        }
+      } catch {
+        // Ignore transient network errors during silent excess calculation
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [excessCheckKey]);
+
   // Helper to verify if all required (*) fields are currently filled
   const isAllRequiredFilled = useCallback(() => {
     const now = new Date();
@@ -3092,7 +3292,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       }
       if (!serviceReports || serviceReports.length === 0 || serviceReports.some((s) => s.isUploading)) return false;
     } else {
-      if (!claimDate || claimDate > todayStr) return false;
+      const minNormalStr = getMinNormalClaimDateStr();
+      if (!claimDate || claimDate > todayStr || (minNormalStr && claimDate < minNormalStr && !(editClaimId && claimDate === originalClaimDate))) return false;
       if (!normalVisitType) return false;
       if (!entries || entries.length === 0) return false;
       const anyInvalid = entries.some((ent) => {
@@ -3208,10 +3409,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     isCurrentUserManagement,
     fullPaymentRequested,
     fullPaymentReason,
+    claimsEnabled,
+    normalClaimMaxPastDays,
   ]);
 
   // Validation: Strictly validates that all required (*) fields are filled before previewing calculation, saving draft, or submitting
   const validateForm = () => {
+    if (!claimsEnabled) {
+      Alert.alert("Claims Temporarily Off", "Expense claim applications are currently turned off by Super Admin. Please try again later.");
+      return false;
+    }
     const now = new Date();
     const todayY = now.getFullYear();
     const todayM = String(now.getMonth() + 1).padStart(2, "0");
@@ -3253,6 +3460,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       }
       if (claimDate > todayStr) {
         Alert.alert("Invalid Date", "Claim Date cannot be a future date.");
+        return false;
+      }
+      const minNormalStr = getMinNormalClaimDateStr();
+      if (minNormalStr && claimDate < minNormalStr && !(editClaimId && claimDate === originalClaimDate)) {
+        const dayMsg = normalClaimMaxPastDays === 0
+          ? "For a normal claim, you can only select today's date."
+          : `For a normal claim, you can only select a date within the previous ${normalClaimMaxPastDays} day${normalClaimMaxPastDays === 1 ? "" : "s"}.`;
+        Alert.alert("Invalid Date", dayMsg);
         return false;
       }
     }
@@ -3502,6 +3717,17 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       const payload = buildPayload(false);
       const res = await expenseApi.previewClaim(payload);
       if (res && res.success && res.data) {
+        const stdEx = Number(
+          res.data.standardExcessAmount !== undefined
+            ? res.data.standardExcessAmount
+            : (res.data.excessAmount || 0)
+        );
+        const nextExcess = stdEx > 0 ? stdEx : 0;
+        setLiveExcessAmount(nextExcess);
+        if (nextExcess <= 0 && fullPaymentRequested) {
+          setFullPaymentRequested(false);
+          setFullPaymentReason("");
+        }
         setPreviewData(res.data);
         setServerErrors(res.data.errors || []);
         setServerWarnings(res.data.warnings || []);
@@ -3581,6 +3807,15 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     if (submitting || savingDraft || previewing) return;
 
     if (!validateForm()) return;
+
+    // Claim can be submitted only after the employee has calculated & reviewed the breakdown
+    if (!previewData) {
+      Alert.alert(
+        "Calculate & Preview Required",
+        "Please tap \"Calculate & Preview Breakdown\" to review the policy breakdown before submitting the claim."
+      );
+      return;
+    }
 
     setSubmitting(true);
     setServerErrors([]);
@@ -3663,6 +3898,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             </View>
           ) : null}
 
+          {/* Super Admin Claims OFF Callout */}
+          {!claimsEnabled ? (
+            <View style={styles.missingProofBanner}>
+              <AlertCircle size={16} color="#dc2626" />
+              <Text style={styles.missingProofText}>
+                Expense claim applications are currently turned off by Super Admin. Please try again later.
+              </Text>
+            </View>
+          ) : null}
+
           {/* Server Error / Warning Callouts */}
           {serverErrors.length > 0 ? (
             <View style={styles.missingProofBanner}>
@@ -3740,7 +3985,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               </Text>
               <TouchableOpacity
                 style={styles.datePickerBtn}
-                onPress={() => setActiveDatePicker("claimDate")}
+                onPress={() => {
+                  if (claimDate) {
+                    const [ry, rm, rd] = String(claimDate).split("-").map(Number);
+                    const parsed = ry && rm && rd ? new Date(ry, rm - 1, rd) : new Date();
+                    setClaimCalendarViewDate(!isNaN(parsed.getTime()) ? parsed : new Date());
+                  } else {
+                    setClaimCalendarViewDate(new Date());
+                  }
+                  setActiveDatePicker("claimDate");
+                }}
               >
                 <Calendar size={16} color="#4f46e5" />
                 <Text style={[styles.datePickerBtnText, !claimDate && { color: "#94a3b8" }]}>
@@ -3811,8 +4065,333 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             </View>
           )}
 
-          {/* Native DateTimePicker */}
-          {activeDatePicker ? (
+          {/* Leaves-Style Custom Calendar Modal for Normal Claim Date (only today + previous 2 days enabled) */}
+          <Modal
+            visible={activeDatePicker === "claimDate"}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setActiveDatePicker(null)}
+          >
+            {(() => {
+              const viewYear = claimCalendarViewDate.getFullYear();
+              const viewMonth = claimCalendarViewDate.getMonth();
+              const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+              const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+              const daysInPrevMonth = new Date(viewYear, viewMonth, 0).getDate();
+
+              const cells = [];
+              for (let i = firstDay - 1; i >= 0; i--) {
+                cells.push({ day: daysInPrevMonth - i, isCurrentMonth: false });
+              }
+              for (let d = 1; d <= daysInMonth; d++) {
+                cells.push({ day: d, isCurrentMonth: true });
+              }
+              const remainder = cells.length % 7;
+              if (remainder !== 0) {
+                for (let d = 1; d <= 7 - remainder; d++) {
+                  cells.push({ day: d, isCurrentMonth: false });
+                }
+              }
+
+              const weeks = [];
+              for (let i = 0; i < cells.length; i += 7) {
+                weeks.push(cells.slice(i, i + 7));
+              }
+
+              const now = new Date();
+              const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+              const minNormalDate = getMinNormalClaimDate();
+
+              let selectedDateObj = null;
+              if (claimDate) {
+                const [sy, sm, sd] = String(claimDate).split("-").map(Number);
+                if (sy && sm && sd) {
+                  const p = new Date(sy, sm - 1, sd);
+                  if (!isNaN(p.getTime())) selectedDateObj = p;
+                }
+              }
+
+              const activeDayName =
+                selectedDateObj instanceof Date && !isNaN(selectedDateObj.getTime())
+                  ? CLAIM_CAL_DAYS[selectedDateObj.getDay()].slice(0, 3).toUpperCase()
+                  : "";
+              const activeMonthShort =
+                selectedDateObj instanceof Date && !isNaN(selectedDateObj.getTime())
+                  ? CLAIM_CAL_MONTHS[selectedDateObj.getMonth()].slice(0, 3).toUpperCase()
+                  : "";
+
+              return (
+                <View
+                  style={{
+                    flex: 1,
+                    backgroundColor: "rgba(15,23,42,0.6)",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    padding: 18,
+                  }}
+                >
+                  <View
+                    style={{
+                      backgroundColor: "#ffffff",
+                      borderRadius: 28,
+                      width: "100%",
+                      maxWidth: 370,
+                      overflow: "hidden",
+                      borderWidth: 1,
+                      borderColor: "#e2e8f0",
+                      elevation: 12,
+                    }}
+                  >
+                    {/* Calendar Top Banner */}
+                    <View style={{ backgroundColor: "#4f46e5", paddingHorizontal: 20, paddingTop: 18, paddingBottom: 16 }}>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                        <Text style={{ fontSize: 10, fontWeight: "bold", color: "rgba(255,255,255,0.75)", letterSpacing: 1.5 }}>
+                          SELECT CLAIM DATE
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setActiveDatePicker(null)}
+                          style={{ backgroundColor: "rgba(255,255,255,0.18)", padding: 6, borderRadius: 999 }}
+                        >
+                          <X size={16} color="#ffffff" />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8, flexWrap: "wrap", gap: 6 }}>
+                        <Text style={{ fontSize: 20, fontWeight: "800", color: "#ffffff" }}>
+                          {selectedDateObj instanceof Date && !isNaN(selectedDateObj.getTime())
+                            ? `${activeDayName}, ${activeMonthShort} ${selectedDateObj.getDate()}, ${selectedDateObj.getFullYear()}`
+                            : "Choose a date"}
+                        </Text>
+                        <View style={{ backgroundColor: "rgba(255,255,255,0.2)", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 }}>
+                          <Text style={{ fontSize: 10, fontWeight: "bold", color: "#ffffff" }}>
+                            {normalClaimMaxPastDays === null
+                              ? "Any Past Date"
+                              : normalClaimMaxPastDays === 0
+                                ? "Today Only"
+                                : `Last ${normalClaimMaxPastDays}d + Today`}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={{ padding: 16 }}>
+                      {/* Month & Year Navigation Bar */}
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          marginBottom: 14,
+                          backgroundColor: "#f8fafc",
+                          padding: 6,
+                          borderRadius: 16,
+                          borderWidth: 1,
+                          borderColor: "#f1f5f9",
+                        }}
+                      >
+                        <TouchableOpacity
+                          onPress={() => setClaimCalendarViewDate(new Date(viewYear, viewMonth - 1, 1))}
+                          style={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: 12,
+                            backgroundColor: "#ffffff",
+                            justifyContent: "center",
+                            alignItems: "center",
+                            borderWidth: 1,
+                            borderColor: "#e2e8f0",
+                          }}
+                        >
+                          <ChevronLeft size={16} color="#334155" />
+                        </TouchableOpacity>
+                        <Text style={{ fontSize: 14, fontWeight: "800", color: "#0f172a", letterSpacing: 0.3 }}>
+                          {CLAIM_CAL_MONTHS[viewMonth]} {viewYear}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setClaimCalendarViewDate(new Date(viewYear, viewMonth + 1, 1))}
+                          style={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: 12,
+                            backgroundColor: "#ffffff",
+                            justifyContent: "center",
+                            alignItems: "center",
+                            borderWidth: 1,
+                            borderColor: "#e2e8f0",
+                          }}
+                        >
+                          <ChevronRight size={16} color="#334155" />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Weekday Header Row */}
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                          marginBottom: 8,
+                          paddingBottom: 8,
+                          borderBottomWidth: 1,
+                          borderBottomColor: "#f1f5f9",
+                        }}
+                      >
+                        {["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((dLabel, idx) => (
+                          <View key={dLabel} style={{ width: "14.28%", alignItems: "center" }}>
+                            <Text
+                              style={{
+                                fontSize: 10,
+                                fontWeight: "800",
+                                color: idx === 0 ? "#ef4444" : "#64748b",
+                              }}
+                            >
+                              {dLabel}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+
+                      {/* Calendar Grid — non-applicable dates shown light & disabled */}
+                      {weeks.map((week, wIdx) => (
+                        <View key={wIdx} style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                          {week.map((cellObj, cIdx) => {
+                            const dayNum = cellObj.day;
+                            if (!cellObj.isCurrentMonth) {
+                              return (
+                                <View
+                                  key={cIdx}
+                                  style={{
+                                    width: "13.4%",
+                                    height: 40,
+                                    borderRadius: 12,
+                                    justifyContent: "center",
+                                    alignItems: "center",
+                                  }}
+                                >
+                                  <Text style={{ fontSize: 12, fontWeight: "600", color: "#e2e8f0" }}>
+                                    {dayNum}
+                                  </Text>
+                                </View>
+                              );
+                            }
+
+                            const cellDate = new Date(viewYear, viewMonth, dayNum);
+                            const isDisabled = (minNormalDate ? cellDate < minNormalDate : false) || cellDate > todayStart;
+                            const isToday =
+                              todayStart.getFullYear() === viewYear &&
+                              todayStart.getMonth() === viewMonth &&
+                              todayStart.getDate() === dayNum;
+                            const isSelected =
+                              selectedDateObj instanceof Date &&
+                              selectedDateObj.getFullYear() === viewYear &&
+                              selectedDateObj.getMonth() === viewMonth &&
+                              selectedDateObj.getDate() === dayNum;
+
+                            return (
+                              <TouchableOpacity
+                                key={cIdx}
+                                disabled={isDisabled}
+                                activeOpacity={0.75}
+                                onPress={() => {
+                                  const y = cellDate.getFullYear();
+                                  const m = String(cellDate.getMonth() + 1).padStart(2, "0");
+                                  const d = String(cellDate.getDate()).padStart(2, "0");
+                                  setClaimDate(`${y}-${m}-${d}`);
+                                  setPreviewData(null);
+                                  setActiveDatePicker(null);
+                                }}
+                                style={{
+                                  width: "13.4%",
+                                  height: 40,
+                                  borderRadius: 12,
+                                  justifyContent: "center",
+                                  alignItems: "center",
+                                  backgroundColor: isSelected
+                                    ? "#4f46e5"
+                                    : isDisabled
+                                      ? "#f8fafc"
+                                      : "#eef2ff",
+                                  borderWidth: isSelected ? 0 : 1,
+                                  borderColor: isSelected
+                                    ? "#4f46e5"
+                                    : isDisabled
+                                      ? "#f1f5f9"
+                                      : isToday
+                                        ? "#4f46e5"
+                                        : "#c7d2fe",
+                                }}
+                              >
+                                <Text
+                                  style={{
+                                    fontSize: 13,
+                                    fontWeight: isSelected || !isDisabled ? "800" : "600",
+                                    color: isSelected
+                                      ? "#ffffff"
+                                      : isDisabled
+                                        ? "#cbd5e1"
+                                        : "#4338ca",
+                                  }}
+                                >
+                                  {dayNum}
+                                </Text>
+                                {isToday && !isSelected && (
+                                  <View
+                                    style={{
+                                      position: "absolute",
+                                      bottom: 4,
+                                      width: 4,
+                                      height: 4,
+                                      borderRadius: 2,
+                                      backgroundColor: isDisabled ? "#cbd5e1" : "#4f46e5",
+                                    }}
+                                  />
+                                )}
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      ))}
+
+                      {/* Legend & Footer */}
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          marginTop: 10,
+                          paddingTop: 12,
+                          borderTopWidth: 1,
+                          borderTopColor: "#f1f5f9",
+                        }}
+                      >
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                            <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#4f46e5" }} />
+                            <Text style={{ fontSize: 10, fontWeight: "700", color: "#64748b" }}>Selected</Text>
+                          </View>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                            <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#eef2ff", borderWidth: 1, borderColor: "#c7d2fe" }} />
+                            <Text style={{ fontSize: 10, fontWeight: "700", color: "#4f46e5" }}>Allowed</Text>
+                          </View>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                            <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#f8fafc", borderWidth: 1, borderColor: "#e2e8f0" }} />
+                            <Text style={{ fontSize: 10, fontWeight: "700", color: "#94a3b8" }}>Disabled</Text>
+                          </View>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => setActiveDatePicker(null)}
+                          style={{ paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10, backgroundColor: "#f1f5f9" }}
+                        >
+                          <Text style={{ fontSize: 11, fontWeight: "800", color: "#475569" }}>Close</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+              );
+            })()}
+          </Modal>
+
+          {/* Native DateTimePicker (Lodging From / To Date) */}
+          {activeDatePicker && activeDatePicker !== "claimDate" ? (
             <DateTimePicker
               value={
                 (() => {
@@ -3842,6 +4421,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               display={Platform.OS === "ios" ? "spinner" : "default"}
               minimumDate={
                 (() => {
+                  if (activeDatePicker === "claimDate") {
+                    return getMinNormalClaimDate() || undefined;
+                  }
                   if (activeDatePicker === "toDate" && fromDate) {
                     const [fy, fm, fd] = String(fromDate).split("-").map(Number);
                     if (fy && fm && fd) {
@@ -3875,6 +4457,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   }
 
                   if (picker === "claimDate") {
+                    const minNormalStr = getMinNormalClaimDateStr();
+                    if (minNormalStr && iso < minNormalStr) {
+                      const dayMsg = normalClaimMaxPastDays === 0
+                        ? "For a normal claim, you can only select today's date."
+                        : `For a normal claim, you can only select a date within the previous ${normalClaimMaxPastDays} day${normalClaimMaxPastDays === 1 ? "" : "s"}.`;
+                      Alert.alert("Invalid Date", dayMsg);
+                      return;
+                    }
                     setClaimDate(iso);
                   } else if (picker === "fromDate") {
                     setFromDate(iso);
@@ -5655,112 +6245,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           )}
 
           {/* ======================================================== */}
-          {/* STEP 5: FULL PAYMENT (Optional)                          */}
-          {/* ======================================================== */}
-          {!isRelativeStay && (
-          <>
-          <Text style={styles.sectionTitle}>5. Full Payment (Optional)</Text>
-
-          <View style={styles.itemCard}>
-            <TouchableOpacity
-              style={styles.fullPaymentRadioRow}
-              activeOpacity={0.8}
-              onPress={() => {
-                setFullPaymentRequested(!fullPaymentRequested);
-                if (previewData) setPreviewData(null);
-              }}
-            >
-              <View style={[styles.fullPaymentRadioCircle, fullPaymentRequested && styles.fullPaymentRadioCircleActive]}>
-                {fullPaymentRequested ? <View style={styles.radioDot} /> : null}
-              </View>
-              <View style={{ flex: 1, marginLeft: 10 }}>
-                <Text style={styles.fullPaymentRadioTitle}>Full Payment</Text>
-                <Text style={styles.fullPaymentRadioSub}>
-                  Click this if this is a full payment claim. Your Reporting Manager must approve it before Accounts processes payment.
-                </Text>
-              </View>
-            </TouchableOpacity>
-
-            {fullPaymentRequested ? (
-              <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#f1f5f9" }}>
-                <View style={styles.fieldBlock}>
-                  <Text style={styles.inputLabel}>
-                    Reason for Full Payment <Text style={styles.reqStar}>*</Text>
-                  </Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="e.g. Client approved complete reimbursement"
-                    placeholderTextColor="#94a3b8"
-                    value={fullPaymentReason}
-                    onChangeText={(t) => {
-                      setFullPaymentReason(t);
-                      if (previewData) setPreviewData(null);
-                    }}
-                  />
-                </View>
-
-                {/* Read-only Reporting Manager for Full Payment */}
-                {isCurrentUserManagement ? (
-                  <View style={[styles.fieldBlock, { marginTop: 14 }]}>
-                    <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#f0fdf4", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#bbf7d0" }}>
-                      <CheckCircle2 size={16} color="#16a34a" />
-                      <View style={{ marginLeft: 8, flex: 1 }}>
-                        <Text style={{ fontSize: 13, fontWeight: "700", color: "#15803d" }}>Approval Not Applicable</Text>
-                        <Text style={{ fontSize: 11, color: "#166534", marginTop: 2 }}>
-                          As a Management user, approval is not applicable and your full payment request routes directly to Accounts.
-                        </Text>
-                      </View>
-                    </View>
-                  </View>
-                ) : (
-                  (() => {
-                    const fpRes = resolveHierarchyManagerForAmount(totalClaimRequestedAmount);
-                    const resolvedMgr = fpRes.approver || reportingManagerApprover;
-                    const isEscalated = fpRes.isEscalated || fpRes.isTagEscalated;
-                    const badgeText = fpRes.isTagEscalated
-                      ? "Above Reporting Manager"
-                      : "Reporting Manager Approval";
-                    return (
-                      <View style={[styles.fieldBlock, { marginTop: 14 }]}>
-                        <View style={styles.inputLabelRow}>
-                          <Text style={styles.inputLabel}>Reporting Manager</Text>
-                          <View style={[styles.badgeSuccess, isEscalated && { backgroundColor: "#fef3c7", borderColor: "#fde68a" }]}>
-                            <CheckCircle2 size={12} color={isEscalated ? "#d97706" : "#059669"} />
-                            <Text style={[styles.badgeSuccessText, isEscalated && { color: "#b45309" }]}>{badgeText}</Text>
-                          </View>
-                        </View>
-                        <View style={[styles.selectorBox, { backgroundColor: "#f8fafc", borderColor: isEscalated ? "#fcd34d" : "#cbd5e1" }]}>
-                          <ShieldCheck size={16} color={isEscalated ? "#d97706" : "#4f46e5"} />
-                          <View style={{ flex: 1, marginLeft: 8 }}>
-                            <Text style={[styles.selectorText, { color: "#0f172a", fontWeight: "700" }]} numberOfLines={1}>
-                              {loadingReportingManagers
-                                ? "Loading Reporting Manager..."
-                                : resolvedMgr
-                                  ? `${resolvedMgr.name}${resolvedMgr.employeeIdCode ? ` (${resolvedMgr.employeeIdCode})` : ""}`
-                                  : (currentUser?.reportsTo?.name || currentUser?.reportingManager || currentUser?.approverName || "Assigned Reporting Manager")}
-                            </Text>
-                            {resolvedMgr && (resolvedMgr.designation || resolvedMgr.department) ? (
-                              <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2 }} numberOfLines={1}>
-                                {[resolvedMgr.designation, resolvedMgr.department].filter(Boolean).join(" · ")}
-                              </Text>
-                            ) : null}
-                          </View>
-                        </View>
-                        <Text style={styles.fullPaymentRadioSub}>
-                          {fpRes.isTagEscalated
-                            ? `Because ${fpRes.tagEscalatedFrom || "a Team Lead / Reporting Manager"} is tagged in this claim, this full payment request automatically routes to the above-level Reporting Manager (${resolvedMgr?.name || "higher authority"}).${cfoApprovalConfig?.enabled !== false && cfoApprovalConfig?.applyOnFullPayment !== false ? " After 1st approval, it goes to CFO / Finance Head for 2nd approval, then Accounts." : " After approval it goes to Accounts."}`
-                            : `Your full payment request automatically routes to your Reporting Manager based on your department hierarchy.${cfoApprovalConfig?.enabled !== false && cfoApprovalConfig?.applyOnFullPayment !== false ? " After 1st approval, it goes to CFO / Finance Head for 2nd approval, then Accounts." : " After approval it goes to Accounts."}`}
-                        </Text>
-                      </View>
-                    );
-                  })()
-                )}
-              </View>
-            ) : null}
-          </View>
-          </>
-          )}
-          {/* ======================================================== */}
           {/* STEP 6: LIVE CALCULATION & PREVIEW BREAKDOWN             */}
           {/* ======================================================== */}
           {previewData && isAllRequiredFilled() ? (
@@ -5959,6 +6443,111 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           ) : null}
 
           {/* ======================================================== */}
+          {/* STEP 5: FULL PAYMENT (Optional — only when excess > 0)   */}
+          {/* ======================================================== */}
+          {showFullPaymentOption && (
+          <>
+          <Text style={styles.sectionTitle}>5. Full Payment</Text>
+
+          <View style={styles.itemCard}>
+            <TouchableOpacity
+              style={styles.fullPaymentRadioRow}
+              activeOpacity={0.8}
+              onPress={() => {
+                // Keep the calculated preview: Full Payment is chosen after the breakdown is shown
+                setFullPaymentRequested(!fullPaymentRequested);
+              }}
+            >
+              <View style={[styles.fullPaymentRadioCircle, fullPaymentRequested && styles.fullPaymentRadioCircleActive]}>
+                {fullPaymentRequested ? <View style={styles.radioDot} /> : null}
+              </View>
+              <View style={{ flex: 1, marginLeft: 10 }}>
+                <Text style={styles.fullPaymentRadioTitle}>Full Payment</Text>
+                <Text style={styles.fullPaymentRadioSub}>
+                  Click this if this is a full payment claim. Your Reporting Manager must approve it before Accounts processes payment.
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {fullPaymentRequested ? (
+              <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: "#f1f5f9" }}>
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.inputLabel}>
+                    Reason for Full Payment <Text style={styles.reqStar}>*</Text>
+                  </Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="e.g. Client approved complete reimbursement"
+                    placeholderTextColor="#94a3b8"
+                    value={fullPaymentReason}
+                    onChangeText={(t) => {
+                      setFullPaymentReason(t);
+                    }}
+                  />
+                </View>
+
+                {/* Read-only Reporting Manager for Full Payment */}
+                {isCurrentUserManagement ? (
+                  <View style={[styles.fieldBlock, { marginTop: 14 }]}>
+                    <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#f0fdf4", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#bbf7d0" }}>
+                      <CheckCircle2 size={16} color="#16a34a" />
+                      <View style={{ marginLeft: 8, flex: 1 }}>
+                        <Text style={{ fontSize: 13, fontWeight: "700", color: "#15803d" }}>Approval Not Applicable</Text>
+                        <Text style={{ fontSize: 11, color: "#166534", marginTop: 2 }}>
+                          As a Management user, approval is not applicable and your full payment request routes directly to Accounts.
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                ) : (
+                  (() => {
+                    const fpRes = resolveHierarchyManagerForAmount(totalClaimRequestedAmount);
+                    const resolvedMgr = fpRes.approver || reportingManagerApprover;
+                    const isEscalated = fpRes.isEscalated || fpRes.isTagEscalated;
+                    const badgeText = fpRes.isTagEscalated
+                      ? "Above Reporting Manager"
+                      : "Reporting Manager Approval";
+                    return (
+                      <View style={[styles.fieldBlock, { marginTop: 14 }]}>
+                        <View style={styles.inputLabelRow}>
+                          <Text style={styles.inputLabel}>Reporting Manager</Text>
+                          <View style={[styles.badgeSuccess, isEscalated && { backgroundColor: "#fef3c7", borderColor: "#fde68a" }]}>
+                            <CheckCircle2 size={12} color={isEscalated ? "#d97706" : "#059669"} />
+                            <Text style={[styles.badgeSuccessText, isEscalated && { color: "#b45309" }]}>{badgeText}</Text>
+                          </View>
+                        </View>
+                        <View style={[styles.selectorBox, { backgroundColor: "#f8fafc", borderColor: isEscalated ? "#fcd34d" : "#cbd5e1" }]}>
+                          <ShieldCheck size={16} color={isEscalated ? "#d97706" : "#4f46e5"} />
+                          <View style={{ flex: 1, marginLeft: 8 }}>
+                            <Text style={[styles.selectorText, { color: "#0f172a", fontWeight: "700" }]} numberOfLines={1}>
+                              {loadingReportingManagers
+                                ? "Loading Reporting Manager..."
+                                : resolvedMgr
+                                  ? `${resolvedMgr.name}${resolvedMgr.employeeIdCode ? ` (${resolvedMgr.employeeIdCode})` : ""}`
+                                  : (currentUser?.reportsTo?.name || currentUser?.reportingManager || currentUser?.approverName || "Assigned Reporting Manager")}
+                            </Text>
+                            {resolvedMgr && (resolvedMgr.designation || resolvedMgr.department) ? (
+                              <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2 }} numberOfLines={1}>
+                                {[resolvedMgr.designation, resolvedMgr.department].filter(Boolean).join(" · ")}
+                              </Text>
+                            ) : null}
+                          </View>
+                        </View>
+                        <Text style={styles.fullPaymentRadioSub}>
+                          {fpRes.isTagEscalated
+                            ? `Because ${fpRes.tagEscalatedFrom || "a Team Lead / Reporting Manager"} is tagged in this claim, this full payment request automatically routes to the above-level Reporting Manager (${resolvedMgr?.name || "higher authority"}).${cfoApprovalConfig?.enabled !== false && cfoApprovalConfig?.applyOnFullPayment !== false ? " After 1st approval, it goes to CFO / Finance Head for 2nd approval, then Accounts." : " After approval it goes to Accounts."}`
+                            : `Your full payment request automatically routes to your Reporting Manager based on your department hierarchy.${cfoApprovalConfig?.enabled !== false && cfoApprovalConfig?.applyOnFullPayment !== false ? " After 1st approval, it goes to CFO / Finance Head for 2nd approval, then Accounts." : " After approval it goes to Accounts."}`}
+                        </Text>
+                      </View>
+                    );
+                  })()
+                )}
+              </View>
+            ) : null}
+          </View>
+          </>
+          )}
+          {/* ======================================================== */}
           {/* BOTTOM ACTIONS: CALCULATE, SAVE DRAFT & SUBMIT CLAIM     */}
           {/* ======================================================== */}
           <View style={styles.bottomActions}>
@@ -5995,7 +6584,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               ) : null}
 
               <TouchableOpacity
-                style={styles.submitBtn}
+                style={[styles.submitBtn, !previewData && { opacity: 0.55 }]}
                 onPress={handleSubmit}
                 disabled={savingDraft || submitting || previewing}
               >
@@ -6442,8 +7031,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             </View>
             <View style={styles.photoModalBody}>
               {photoPreviewModal.uri ? (
-                <Image
-                  source={{ uri: resolveProofImageUrl(photoPreviewModal.uri) }}
+                <ZoomableImage
+                  key={photoPreviewModal.uri}
+                  uri={resolveProofImageUrl(photoPreviewModal.uri)}
                   style={styles.photoModalImage}
                   resizeMode="contain"
                 />
@@ -7097,7 +7687,7 @@ const styles = StyleSheet.create({
   },
   fullPaymentRadioCircleActive: { backgroundColor: "#4f46e5" },
   radioDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#ffffff" },
-  fullPaymentRadioTitle: { fontSize: 13, fontWeight: "800", color: "#0f172a" },
+  fullPaymentRadioTitle: { fontSize: 15, fontWeight: "800", color: "#f30909ff" },
   fullPaymentRadioSub: { fontSize: 11, color: "#64748b", marginTop: 1 },
 
   // Preview Breakdown

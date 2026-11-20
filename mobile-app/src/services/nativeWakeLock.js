@@ -3,13 +3,13 @@ import { NativeModules, Platform } from 'react-native';
 const { NativeWakeLock } = NativeModules;
 
 /**
- * Acquire hardware CPU PARTIAL_WAKE_LOCK to prevent Android OS
- * from sleeping or throttling GPS tracking during duty hours.
+ * Acquire hardware CPU PARTIAL_WAKE_LOCK if a custom NativeWakeLock module is registered.
+ * When running under Expo's LocationTaskService foreground service, Android wake locks
+ * are already managed natively by expo-location via android.permission.WAKE_LOCK.
  */
 export const acquireWakeLock = async () => {
   if (Platform.OS !== 'android') return false;
   if (!NativeWakeLock || typeof NativeWakeLock.acquireWakeLock !== 'function') {
-    console.log('[NativeWakeLock] Native module unavailable (Expo Go / Web). Skipping.');
     return false;
   }
 

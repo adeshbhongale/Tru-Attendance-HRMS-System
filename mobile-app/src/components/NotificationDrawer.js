@@ -1,16 +1,21 @@
-import { AlertCircle, Bell, Check, CheckCheck, Inbox, Megaphone, ShieldAlert, X } from 'lucide-react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { AlertCircle, Bell, Calendar, Check, CheckCheck, ChevronDown, Filter, Inbox, Megaphone, ShieldAlert, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Modal,
+  Platform,
   RefreshControl,
+  ScrollView,
   Text,
   TouchableOpacity,
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '../api/axios';
+import { navigateGlobal } from '../utils/navigation';
+import { resolveNotificationTarget } from '../utils/notifications';
 
 const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
   const [notifications, setNotifications] = useState([]);
@@ -23,6 +28,26 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // Filters: notification type (from Office Setup -> Notifications) + single date
+  const [typeOptions, setTypeOptions] = useState([]);
+  const [typeFilter, setTypeFilter] = useState(null); // { title, ids }
+  const [dateFilter, setDateFilter] = useState(null); // Date
+  const [showTypePicker, setShowTypePicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  const buildFilterQuery = () => {
+    let q = '';
+    if (typeFilter?.ids?.length) q += `&notificationIds=${encodeURIComponent(typeFilter.ids.join(','))}`;
+    if (dateFilter) {
+      const from = new Date(dateFilter); from.setHours(0, 0, 0, 0);
+      const to = new Date(dateFilter); to.setHours(23, 59, 59, 999);
+      q += `&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`;
+    }
+    return q;
+  };
+
+  const formatFilterDate = (d) => d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
   const fetchNotifications = async (targetPage = 1, shouldAppend = false, showLoading = true) => {
     try {
       if (targetPage === 1) {
@@ -31,7 +56,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
         setLoadingMore(true);
       }
 
-      const res = await api.get(`/notifications/employee/feed?page=${targetPage}&limit=10`);
+      const res = await api.get(`/notifications/employee/feed?page=${targetPage}&limit=10${buildFilterQuery()}`);
       if (res.data.success) {
         const rawFeed = Array.isArray(res.data?.data) ? res.data.data : [];
         // Logout alerts are strictly for admin website, never show in mobile app
@@ -78,6 +103,13 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
     if (visible) {
       fetchNotifications(1, false, true);
     }
+  }, [visible, typeFilter, dateFilter]);
+
+  useEffect(() => {
+    if (!visible) return;
+    api.get('/notifications/employee/types')
+      .then((res) => { if (res.data?.success) setTypeOptions(Array.isArray(res.data.data) ? res.data.data : []); })
+      .catch(() => {});
   }, [visible]);
 
   const onRefresh = () => {
@@ -120,11 +152,19 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
     }
   };
 
-  const toggleExpand = (id, isRead) => {
-    setExpandedId(expandedId === id ? null : id);
-    if (!isRead) {
-      handleMarkAsRead(id);
+  const handleItemPress = (item) => {
+    if (!item.isRead) {
+      handleMarkAsRead(item._id);
     }
+    const target = resolveNotificationTarget(item);
+    if (target) {
+      if (onClose) onClose();
+      setTimeout(() => {
+        navigateGlobal(target.screen, target.params);
+      }, 150);
+      return;
+    }
+    setExpandedId(expandedId === item._id ? null : item._id);
   };
 
   const getTypeConfig = (type) => {
@@ -255,6 +295,37 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
           </TouchableOpacity>
         </View>
 
+        {/* Filters: Notification Type + Date */}
+        <View className="flex-row items-center gap-2 px-4 py-3 bg-white border-b border-slate-100">
+          <TouchableOpacity
+            onPress={() => setShowTypePicker(true)}
+            className={`flex-1 flex-row items-center gap-1.5 px-3 py-2 rounded-xl border ${typeFilter ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200'}`}
+          >
+            <Filter size={14} color={typeFilter ? '#4f46e5' : '#64748b'} />
+            <Text numberOfLines={1} className={`flex-1 text-[11px] font-bold ${typeFilter ? 'text-indigo-700' : 'text-slate-600'}`}>
+              {typeFilter ? typeFilter.title : 'All Types'}
+            </Text>
+            <ChevronDown size={14} color="#64748b" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setShowDatePicker(true)}
+            className={`flex-row items-center gap-1.5 px-3 py-2 rounded-xl border ${dateFilter ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-200'}`}
+          >
+            <Calendar size={14} color={dateFilter ? '#4f46e5' : '#64748b'} />
+            <Text className={`text-[11px] font-bold ${dateFilter ? 'text-indigo-700' : 'text-slate-600'}`}>
+              {dateFilter ? formatFilterDate(dateFilter) : 'Any Date'}
+            </Text>
+          </TouchableOpacity>
+          {(typeFilter || dateFilter) && (
+            <TouchableOpacity
+              onPress={() => { setTypeFilter(null); setDateFilter(null); }}
+              className="p-2 rounded-xl bg-rose-50 border border-rose-100"
+            >
+              <X size={14} color="#e11d48" />
+            </TouchableOpacity>
+          )}
+        </View>
+
         {/* Sub Header / Mark All As Read */}
         {notifications.length > 0 && notifications.some(n => !n.isRead) && (
           <View className="px-6 py-3 bg-indigo-50/50 flex-row justify-between items-center border-b border-indigo-100/30">
@@ -280,9 +351,11 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
               <Inbox size={36} color="#94a3b8" />
             </View>
             <View className="items-center">
-              <Text className="text-lg font-bold text-slate-700 tracking-tight">Inbox is Empty</Text>
+              <Text className="text-lg font-bold text-slate-700 tracking-tight">{typeFilter || dateFilter ? 'No Matching Notifications' : 'Inbox is Empty'}</Text>
               <Text className="text-slate-400 font-bold text-xs text-center mt-1">
-                You're all caught up! Push messages, alerts, and system confirmations will show up here.
+                {typeFilter || dateFilter
+                  ? 'No notifications match the selected type / date. Clear the filters to see all.'
+                  : "You're all caught up! Push messages, alerts, and system confirmations will show up here."}
               </Text>
             </View>
           </View>
@@ -312,9 +385,9 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
               const config = getTypeConfig(item.type);
               return (
                 <TouchableOpacity
-                  onPress={() => toggleExpand(item._id, item.isRead)}
+                  onPress={() => handleItemPress(item)}
                   activeOpacity={0.9}
-                  className={`bg-white rounded-3xl p-5 mb-4 border transition-all flex-row gap-4 items-start relative ${item.isRead
+                  className={`bg-white rounded-3xl p-5 mb-4 border flex-row gap-4 items-start relative ${item.isRead
                     ? 'border-slate-100 shadow-sm'
                     : `border-slate-100 shadow-md ${config.shadowColor}`
                     }`}
@@ -356,6 +429,66 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
               );
             }}
           />
+        )}
+
+        {/* Notification Type picker (types configured in Office Setup -> Notifications) */}
+        <Modal visible={showTypePicker} transparent animationType="fade" onRequestClose={() => setShowTypePicker(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => setShowTypePicker(false)} className="flex-1 bg-black/40 justify-center px-6">
+            <TouchableOpacity activeOpacity={1} className="bg-white rounded-3xl p-4 max-h-[70%]">
+              <Text className="text-base font-bold text-slate-800 mb-3 px-1">Notification Type</Text>
+              <ScrollView>
+                {[{ title: 'All Types', ids: null }, ...typeOptions].map((opt) => {
+                  const selected = opt.ids ? typeFilter?.title === opt.title : !typeFilter;
+                  return (
+                    <TouchableOpacity
+                      key={opt.title}
+                      onPress={() => { setTypeFilter(opt.ids ? { title: opt.title, ids: opt.ids } : null); setShowTypePicker(false); }}
+                      className={`flex-row items-center justify-between px-3 py-3 rounded-xl mb-1 ${selected ? 'bg-indigo-50' : ''}`}
+                    >
+                      <Text className={`flex-1 text-[13px] font-bold ${selected ? 'text-indigo-700' : 'text-slate-700'}`}>{opt.title}</Text>
+                      {selected && <Check size={14} color="#4f46e5" />}
+                    </TouchableOpacity>
+                  );
+                })}
+                {typeOptions.length === 0 && (
+                  <Text className="text-xs text-slate-400 font-bold px-3 py-2">No notification types configured in Office Setup.</Text>
+                )}
+              </ScrollView>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Single date filter */}
+        {showDatePicker && Platform.OS !== 'ios' && (
+          <DateTimePicker
+            value={dateFilter || new Date()}
+            mode="date"
+            maximumDate={new Date()}
+            onValueChange={(event, selected) => {
+              setShowDatePicker(false);
+              if (selected) setDateFilter(selected);
+            }}
+            onDismiss={() => setShowDatePicker(false)}
+          />
+        )}
+        {Platform.OS === 'ios' && (
+          <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => setShowDatePicker(false)}>
+            <View className="flex-1 bg-black/40 justify-center px-6">
+              <View className="bg-white rounded-3xl p-4">
+                <DateTimePicker
+                  value={dateFilter || new Date()}
+                  mode="date"
+                  display="inline"
+                  maximumDate={new Date()}
+                  onValueChange={(event, selected) => { if (selected) setDateFilter(selected); setShowDatePicker(false); }}
+                  onDismiss={() => setShowDatePicker(false)}
+                />
+                <TouchableOpacity onPress={() => setShowDatePicker(false)} className="mt-2 py-3 items-center rounded-xl bg-slate-100">
+                  <Text className="text-sm font-bold text-slate-700">Close</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
         )}
       </SafeAreaView>
     </Modal>

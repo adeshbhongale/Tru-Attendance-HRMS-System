@@ -58,14 +58,18 @@ const getApiUrl = () => {
   if (envUrl && envUrl.trim()) {
     let cleaned = envUrl.trim().replace(/^['"]|['"]$/g, "").replace(/\/+$/, "");
 
-    // STRICT SAFEGUARD: Never connect to deprecated Render backend under any circumstance
-    if (cleaned.includes('render.com') || cleaned.includes('onrender.com')) {
+    // STRICT SAFEGUARD: Never connect to deprecated backends under any circumstance
+    if (
+      cleaned.includes('render.com') ||
+      cleaned.includes('onrender.com') ||
+      cleaned.includes('gatimaan-production.up.railway.app')
+    ) {
       return PRODUCTION_API_URL;
     }
 
     // SAFEGUARD: In release/preview/production builds (!__DEV__), localhost is unreachable on physical devices
     if (!__DEV__ && isLocalOrLanHost(cleaned)) {
-      console.warn('[Axios] Localhost detected in release/preview build. Falling back to Railway production API.');
+      console.warn('[Axios] Localhost detected in release/preview build. Falling back to production API.');
       return PRODUCTION_API_URL;
     }
 
@@ -80,6 +84,10 @@ const getApiUrl = () => {
     }
 
     cleaned = ensurePortIfLocal(cleaned);
+
+    if (!__DEV__ && cleaned.startsWith("http://") && !isLocalOrLanHost(cleaned)) {
+      cleaned = cleaned.replace(/^http:\/\//i, "https://");
+    }
 
     if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
       return cleaned;
@@ -107,7 +115,8 @@ api.interceptors.request.use(
       config.headers['X-Client-Platform'] = 'mobile';
       try { config.headers['X-App-Version'] = Constants?.expoConfig?.version || '1.0.1'; config.headers['X-App-Build'] = String(Constants?.expoConfig?.android?.versionCode || '2'); } catch (_) {}
     }
-    const token = await AsyncStorage.getItem("token");
+    const { getSecureToken } = require("../utils/secureStorage");
+    const token = await getSecureToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -130,6 +139,12 @@ api.interceptors.response.use(
       if (!isAutoLoggingOut) {
         isAutoLoggingOut = true;
         try {
+          const { clearTrackingSession } = require("../services/trackingManager");
+          await clearTrackingSession();
+        } catch (_) {}
+        try {
+          const { removeSecureToken } = require("../utils/secureStorage");
+          await removeSecureToken();
           const companyCode = await AsyncStorage.getItem("companyCode");
           await AsyncStorage.multiRemove([
             "token",
@@ -175,7 +190,7 @@ api.interceptors.response.use(
     config.__retryCount = config.__retryCount || 0;
     if (isNetworkError && config.__retryCount < 2) {
       config.__retryCount += 1;
-      console.log(`[Axios] Auto-retrying request #${config.__retryCount} for ${config.url}...`);
+      console.log(`[Axios] Auto-retrying request #${config.__retryCount}...`);
       await new Promise((resolve) => setTimeout(resolve, 1500));
       return api(config);
     }

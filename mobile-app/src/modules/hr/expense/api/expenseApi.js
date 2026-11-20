@@ -1,6 +1,6 @@
 import api from "../../../../api/axios";
 import { Platform } from "react-native";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 
 /**
  * Expense module API. Mutating calls return `{ success, data, message, errors, status, network }`
@@ -96,7 +96,7 @@ export const expenseApi = {
    * Works reliably on both Web (Blob / base64) and Native (FormData).
    * onProgress(0..100) drives the per-file progress bar.
    */
-  uploadFile: async ({ uri, name, type, file, base64 }, onProgress, purpose = "receipt") => {
+  uploadFile: async ({ uri, name, type, file, base64, geoTag }, onProgress, purpose = "receipt") => {
     try {
       const fileName = name || `proof_${Date.now()}.jpg`;
       const mimeType = type || "image/jpeg";
@@ -120,6 +120,7 @@ export const expenseApi = {
           api.post("/expense/uploads/base64", {
             image: payloadImage,
             name: fileName,
+            ...(geoTag ? { geoTag } : {}),
           })
         );
         if (b64Res.success && b64Res.data?.url) {
@@ -151,6 +152,7 @@ export const expenseApi = {
         });
       }
       form.append("purpose", purpose);
+      if (geoTag) form.append("geoTag", JSON.stringify(geoTag));
 
       return await call(() =>
         api.post("/expense/uploads", form, {
@@ -272,9 +274,9 @@ export const expenseApi = {
     }
   },
 
-  getClaimPdfUrl: (id, token = "") => {
+  getClaimPdfUrl: (id) => {
     const base = api.defaults.baseURL || "";
-    return `${base}/expense/claims/${id}/pdf${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    return `${base}/expense/claims/${encodeURIComponent(id)}/pdf`;
   },
 
   getClaimAudit: async (claimId) => {
@@ -298,10 +300,32 @@ export const expenseApi = {
   /** Petty Cash Wallet (employee portal: always scoped to logged-in employee on server). */
   getMyPettyCashWallet: () => call(() => api.get("/expense/petty-cash/wallet")),
   getMyPettyCashTransactions: (params = {}) => call(() => api.get("/expense/petty-cash/transactions", { params })),
+  getPettyCashAdvanceProviders: () => call(() => api.get("/expense/petty-cash/advance-providers")),
   getMyPettyCashRequests: () => call(() => api.get("/expense/petty-cash/requests")),
   createPettyCashRequest: (payload) => call(() => api.post("/expense/petty-cash/requests", payload)),
+  acceptPettyCashRequest: (id) => call(() => api.post(`/expense/petty-cash/requests/${id}/accept`)),
   getMyPettyCashReturnRequests: () => call(() => api.get("/expense/petty-cash/return-requests")),
   createPettyCashReturnRequest: (payload) => call(() => api.post("/expense/petty-cash/return-requests", payload)),
+
+  /** Team Lead Petty Cash Advance & Return approvals (mobile Other Approvals). */
+  getTeamLeadPettyCashRequests: (status = "PENDING") =>
+    call(() => api.get("/expense/petty-cash/team-lead/requests", { params: { status } })),
+  submitTeamLeadPettyCashAdvance: (id, payload) =>
+    call(() => api.post(`/expense/petty-cash/team-lead/requests/${id}/submit`, payload)),
+  rejectTeamLeadPettyCashAdvance: (id, remarks) =>
+    call(() => api.post(`/expense/petty-cash/team-lead/requests/${id}/reject`, { remarks })),
+  getTeamLeadPettyCashReturnRequests: (status = "PENDING") =>
+    call(() => api.get("/expense/petty-cash/team-lead/return-requests", { params: { status } })),
+  approveTeamLeadPettyCashReturn: (id, payload) =>
+    call(() => api.post(`/expense/petty-cash/team-lead/return-requests/${id}/approve`, payload)),
+  rejectTeamLeadPettyCashReturn: (id, remarks) =>
+    call(() => api.post(`/expense/petty-cash/team-lead/return-requests/${id}/reject`, { remarks })),
+
+  /** Early Punch-Out approvals (Reporting Manager in Other Approvals). */
+  getEarlyPunchOutApprovals: (status = "PENDING") =>
+    call(() => api.get("/attendance/early-punchout-approvals", { params: { status } })),
+  decideEarlyPunchOut: (id, action, remarks) =>
+    call(() => api.post(`/attendance/early-punchout-approvals/${id}/decide`, { action, remarks })),
 
 };
 

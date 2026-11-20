@@ -266,11 +266,6 @@ const HRScreen = ({ navigation }) => {
                                 <Text className="text-slate-800 font-bold text-[14px] text-center tracking-wide">
                                     {item.label}
                                 </Text>
-                                {item.comingSoon && (
-                                    <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
-                                        Coming soon
-                                    </Text>
-                                )}
                             </TouchableOpacity>
                         );
                     })}

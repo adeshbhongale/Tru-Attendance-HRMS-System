@@ -288,6 +288,13 @@ const ExpenseDashboardScreen = ({ navigation }) => {
     }).length,
   };
 
+  const claimsEnabled = activePolicy?.claimRules?.claimsEnabled !== false;
+  const showClaimsPausedAlert = () =>
+    Alert.alert(
+      "Claims Temporarily Off",
+      "Expense claim applications are currently turned off by Super Admin. Please try again later."
+    );
+
   const renderStat = (label, value, color) => (
     <View style={[styles.statCard, { borderTopColor: color }]}>
       <Text style={[styles.statValue, { color }]}>{value}</Text>
@@ -303,8 +310,11 @@ const ExpenseDashboardScreen = ({ navigation }) => {
         navigation={navigation}
         rightElement={
           <TouchableOpacity
-            style={styles.newBtn}
-            onPress={() => navigation.navigate("CreateExpenseClaim", { mode: "NORMAL" })}
+            style={[styles.newBtn, !claimsEnabled && { opacity: 0.45 }]}
+            onPress={() => {
+              if (!claimsEnabled) return showClaimsPausedAlert();
+              navigation.navigate("CreateExpenseClaim", { mode: "NORMAL" });
+            }}
           >
             <Plus size={18} color="#ffffff" />
           </TouchableOpacity>
@@ -357,11 +367,40 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           {renderStat("Paid", summary.disbursed, "#059669")}
         </View>
 
+        {!claimsEnabled && (
+          <View
+            style={{
+              backgroundColor: "#fef2f2",
+              borderWidth: 1,
+              borderColor: "#fecaca",
+              borderRadius: 14,
+              padding: 12,
+              marginBottom: 12,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 10,
+            }}
+          >
+            <AlertCircle size={18} color="#dc2626" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12, fontWeight: "800", color: "#991b1b" }}>
+                Claims Temporarily Paused
+              </Text>
+              <Text style={{ fontSize: 11, fontWeight: "600", color: "#b91c1c", marginTop: 2 }}>
+                Expense claim applications are currently turned off by Super Admin. Please try again later.
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* Action Buttons: Normal Claim & Lodging Claim in Button UI */}
         <View style={styles.buttonsRow}>
           <TouchableOpacity
-            style={styles.normalClaimBtn}
-            onPress={() => navigation.navigate("CreateExpenseClaim", { mode: "NORMAL" })}
+            style={[styles.normalClaimBtn, !claimsEnabled && { opacity: 0.5 }]}
+            onPress={() => {
+              if (!claimsEnabled) return showClaimsPausedAlert();
+              navigation.navigate("CreateExpenseClaim", { mode: "NORMAL" });
+            }}
             activeOpacity={0.85}
           >
             <Plus size={18} color="#ffffff" />
@@ -369,8 +408,11 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.lodgingClaimBtn}
-            onPress={() => navigation.navigate("CreateExpenseClaim", { mode: "LODGING" })}
+            style={[styles.lodgingClaimBtn, !claimsEnabled && { opacity: 0.5 }]}
+            onPress={() => {
+              if (!claimsEnabled) return showClaimsPausedAlert();
+              navigation.navigate("CreateExpenseClaim", { mode: "LODGING" });
+            }}
             activeOpacity={0.85}
           >
             <BedDouble size={18} color="#ffffff" />
@@ -548,6 +590,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             onPress={(e) => {
                               e.stopPropagation?.();
+                              if (!claimsEnabled) return showClaimsPausedAlert();
                               navigation.navigate("CreateExpenseClaim", { claimId: c._id, mode: isLodgingClaim ? "LODGING" : "NORMAL" });
                             }}
                           >

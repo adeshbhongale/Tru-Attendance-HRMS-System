@@ -9,6 +9,7 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -35,13 +36,14 @@ const to12Hour = (time24) => {
   return `${h}:${parts[1]} ${ampm}`;
 };
 
-const LeaveApprovalsScreen = ({ navigation }) => {
+const LeaveApprovalsScreen = ({ navigation, route }) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [filter, setFilter] = useState('Pending');
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [actionPrompt, setActionPrompt] = useState({ visible: false, item: null, action: 'reject', reason: '' });
   const [isAccessBlocked, setIsAccessBlocked] = useState(false);
 
   const STATUS_FILTERS = ['Pending', 'All', 'Approved', 'Rejected', 'Cancelled'];
@@ -86,26 +88,48 @@ const LeaveApprovalsScreen = ({ navigation }) => {
     return unsub;
   }, [navigation]);
 
+  const targetLeaveId = route?.params?.leaveId;
+  const targetTimestamp = route?.params?.timestamp;
+
+  useEffect(() => {
+    if (!targetLeaveId || requests.length === 0) return;
+    const matched = requests.find((r) => String(r._id) === String(targetLeaveId));
+    if (matched) {
+      if (filter !== 'All' && filter !== matched.status) {
+        setFilter('All');
+      }
+      setDetail(matched);
+      navigation.setParams?.({ leaveId: undefined });
+    }
+  }, [targetLeaveId, targetTimestamp, requests]);
+
   const filteredRequests = filter === 'All' ? requests : requests.filter((r) => r.status === filter);
 
-  const doAction = async (item, action) => {
+  const doAction = async (item, action, reasonText = '') => {
+    const trimmed = String(reasonText || '').trim();
+    if (action === 'reject' && !trimmed) {
+      Alert.alert('Reason Required', 'Please enter a reason for rejecting this leave request.');
+      return;
+    }
     setActionLoading(true);
     try {
+      const payload = { reason: trimmed, adminNote: trimmed, ...(action === 'reject' ? { rejectionReason: trimmed } : {}) };
       if (action === 'approve') {
         try {
-          await api.patch(`/leaves/approvals/${item._id}/approve`);
+          await api.patch(`/leaves/approvals/${item._id}/approve`, payload);
         } catch (appErr) {
-          await api.patch(`/leaves/${item._id}`, { status: 'Approved' });
+          await api.patch(`/leaves/${item._id}`, { status: 'Approved', ...payload });
         }
         Alert.alert('Approved', `Leave approved for ${item.user?.name || 'the employee'}.`);
       } else {
         try {
-          await api.patch(`/leaves/approvals/${item._id}/reject`);
+          await api.patch(`/leaves/approvals/${item._id}/reject`, payload);
         } catch (rejErr) {
-          await api.patch(`/leaves/${item._id}`, { status: 'Rejected' });
+          await api.patch(`/leaves/${item._id}`, { status: 'Rejected', ...payload });
         }
         Alert.alert('Rejected', `Leave rejected for ${item.user?.name || 'the employee'}.`);
       }
+      setActionPrompt({ visible: false, item: null, action: 'approve', reason: '' });
       setDetail(null);
       fetchRequests();
     } catch (err) {
@@ -116,14 +140,16 @@ const LeaveApprovalsScreen = ({ navigation }) => {
   };
 
   const confirmAction = (item, action) => {
+    if (action === 'reject') {
+      setActionPrompt({ visible: true, item, action: 'reject', reason: '' });
+      return;
+    }
     Alert.alert(
-      action === 'approve' ? 'Approve Leave?' : 'Reject Leave?',
-      action === 'approve'
-        ? `Approve ${item.leaveType} for ${item.user?.name || 'employee'} (${item.duration || 'Full Day'})?`
-        : `Reject the ${item.leaveType} request from ${item.user?.name || 'employee'}?`,
+      'Approve Leave',
+      `Approve ${item.leaveType || 'leave'} request for ${item.user?.name || 'this employee'}?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: action === 'approve' ? 'Yes, Approve' : 'Yes, Reject', style: action === 'reject' ? 'destructive' : 'default', onPress: () => doAction(item, action) },
+        { text: 'Approve', onPress: () => doAction(item, 'approve', '') },
       ]
     );
   };
@@ -207,13 +233,13 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                       <View className="flex-1">
                         <Text className="text-base font-extrabold text-slate-800">{item.user?.name || 'Unknown employee'}</Text>
                         <Text className="text-[10px] font-bold text-slate-400 tracking-wide">
-                          {item.user?.designation || 'Employee'} {item.user?.department ? ` • ${typeof item.user.department === 'object' ? item.user.department?.name : item.user.department}` : ''}
+                          {(typeof item.user?.designation === 'object' ? item.user?.designation?.name : item.user?.designation) || 'Employee'} {item.user?.department ? ` • ${typeof item.user.department === 'object' ? item.user.department?.name : item.user.department}` : ''}
                         </Text>
                       </View>
                     </View>
                   </View>
                   <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: st.bg }}>
-                    <Text style={{ fontSize: 9, fontWeight: 'bold', color: st.text }}>{item.status.toUpperCase()}</Text>
+                    <Text style={{ fontSize: 9, fontWeight: 'bold', color: st.text }}>{(item.status || 'Pending').toUpperCase()}</Text>
                   </View>
                 </View>
 
@@ -327,7 +353,7 @@ const LeaveApprovalsScreen = ({ navigation }) => {
       </Modal>
 
       {/* Detail modal */}
-      <Modal visible={!!detail} transparent animationType="fade">
+      <Modal visible={!!detail && !actionPrompt.visible} transparent animationType="fade">
         <View style={ms.overlay}>
           <View style={[ms.sheet, { minHeight: 380 }]}>
             <View style={ms.row}>
@@ -340,7 +366,7 @@ const LeaveApprovalsScreen = ({ navigation }) => {
               <View style={{ marginTop: 20 }}>
                 <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#0f172a' }}>{detail.user?.name}</Text>
                 <Text style={{ fontSize: 12, color: '#64748b', fontWeight: 'bold', marginTop: 4 }}>
-                  {detail.user?.designation || 'Employee'} • {(typeof detail.user?.department === 'object' ? detail.user?.department?.name : detail.user?.department) || '—'}
+                  {(typeof detail.user?.designation === 'object' ? detail.user?.designation?.name : detail.user?.designation) || 'Employee'} • {(typeof detail.user?.department === 'object' ? detail.user?.department?.name : detail.user?.department) || '—'}
                 </Text>
                 <View style={{ height: 20 }} />
                 <DetailRow label="Leave type" value={detail.leaveType} />
@@ -349,7 +375,20 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 <DetailRow label="Days" value={detail.duration === 'Half Day' ? '0.5' : (detail.durationDays || (Math.ceil((new Date(detail.endDate) - new Date(detail.startDate)) / (1000 * 60 * 60 * 24)) + 1))} />
                 <DetailRow label="Applied on" value={new Date(detail.createdAt).toLocaleString()} />
                 <DetailRow label="Status" value={detail.status} />
+                {(detail.actionedByName || detail.actionedBy?.name || detail.actionedBy?.fullName) ? (
+                  <DetailRow
+                    label={detail.status === 'Rejected' ? 'Rejected by' : 'Approved by'}
+                    value={detail.actionedByName || detail.actionedBy?.fullName || detail.actionedBy?.name}
+                  />
+                ) : null}
                 {detail.reason ? <DetailRow label="Reason" value={detail.reason} multiline /> : null}
+                {detail.status === 'Rejected' && (detail.rejectionReason || detail.adminNote) ? (
+                  <DetailRow
+                    label="Rejection reason"
+                    value={detail.rejectionReason || detail.adminNote}
+                    multiline
+                  />
+                ) : null}
 
                 {detail.status === 'Pending' && (
                   <View style={{ flexDirection: 'row', gap: 12, marginTop: 28 }}>
@@ -381,6 +420,80 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 )}
               </View>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rejection Reason prompt modal */}
+      <Modal visible={actionPrompt.visible} transparent animationType="fade">
+        <View style={ms.overlay}>
+          <View style={ms.sheet}>
+            <View style={ms.row}>
+              <Text style={ms.sheetTitle}>Reject Leave</Text>
+              <TouchableOpacity
+                onPress={() => setActionPrompt({ visible: false, item: null, action: 'reject', reason: '' })}
+                style={ms.closeBtn}
+              >
+                <X size={20} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#64748b', marginTop: 6, marginBottom: 16 }}>
+              {actionPrompt.item?.user?.name || 'Employee'} • {actionPrompt.item?.leaveType || 'Leave'}
+            </Text>
+            <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#94a3b8', letterSpacing: 1.5, marginBottom: 8 }}>
+              REASON FOR REJECTION *
+            </Text>
+            <TextInput
+              placeholder="Enter reason for rejection..."
+              placeholderTextColor="#94a3b8"
+              multiline
+              numberOfLines={3}
+              value={actionPrompt.reason}
+              onChangeText={(v) => setActionPrompt(prev => ({ ...prev, reason: v }))}
+              style={{
+                backgroundColor: '#f8fafc',
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: '#e2e8f0',
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                fontSize: 13,
+                fontWeight: 'bold',
+                color: '#1e293b',
+                textAlignVertical: 'top',
+                minHeight: 84,
+                marginBottom: 20,
+              }}
+            />
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity
+                onPress={() => setActionPrompt({ visible: false, item: null, action: 'reject', reason: '' })}
+                disabled={actionLoading}
+                style={{ flex: 1, height: 52, borderRadius: 16, backgroundColor: '#f1f5f9', justifyContent: 'center', alignItems: 'center' }}
+              >
+                <Text style={{ color: '#475569', fontWeight: 'bold', fontSize: 13 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => doAction(actionPrompt.item, 'reject', actionPrompt.reason)}
+                disabled={actionLoading}
+                style={{
+                  flex: 2,
+                  height: 52,
+                  borderRadius: 16,
+                  backgroundColor: '#e11d48',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}
+              >
+                {actionLoading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>
+                    Confirm Rejection
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

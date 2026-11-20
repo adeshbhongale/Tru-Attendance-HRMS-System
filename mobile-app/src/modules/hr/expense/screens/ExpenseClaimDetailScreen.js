@@ -33,6 +33,7 @@ import {
   Platform,
   RefreshControl,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -45,6 +46,7 @@ import HRModuleFooter from "../../../../components/HRModuleFooter";
 import { resolveProofImageUrl } from "../../../../utils/imageUrl";
 import expenseApi from "../api/expenseApi";
 import ExpenseHeader from "../components/ExpenseHeader";
+import ZoomableImage from "../components/ZoomableImage";
 
 const formatINR = (n) => {
   const v = Number(n || 0);
@@ -261,10 +263,32 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         window.URL.revokeObjectURL(url);
         Alert.alert("Success", "Claim PDF downloaded successfully.");
       } else {
-        const token = await AsyncStorage.getItem("token");
+        const { getSecureToken } = require("../../../../utils/secureStorage");
+        const FileSystem = require("expo-file-system/legacy");
+        const token = await getSecureToken();
         const baseUrl = api.defaults.baseURL || "";
-        const pdfUrl = `${baseUrl}/expense/claims/${claim._id}/pdf${token ? `?token=${encodeURIComponent(token)}` : ""}`;
-        await Linking.openURL(pdfUrl);
+        const pdfUrl = `${baseUrl}/expense/claims/${encodeURIComponent(claim._id)}/pdf`;
+        const targetUri = `${FileSystem.cacheDirectory || ""}${filename}`;
+        const downloadRes = await FileSystem.downloadAsync(pdfUrl, targetUri, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (downloadRes?.status && downloadRes.status !== 200) {
+          throw new Error("Unable to download claim PDF from server.");
+        }
+        if (Platform.OS === "android" && typeof FileSystem.getContentUriAsync === "function") {
+          try {
+            const contentUri = await FileSystem.getContentUriAsync(downloadRes.uri);
+            await Linking.openURL(contentUri);
+            return;
+          } catch (_) {
+            // Fallback to Share sheet if no PDF viewer is installed
+          }
+        }
+        await Share.share({
+          url: downloadRes.uri,
+          title: filename,
+          message: filename,
+        });
       }
     } catch (err) {
       console.warn("PDF Download error:", err);
@@ -836,6 +860,37 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         attachments: singleIsConv ? [] : receiptsList,
       }];
     })();
+
+  // Progressive remaining Policy Limit across multiple Food entries in the same claim:
+  // Entry 1 shows full available Food policy limit (e.g. ₹500), then deducts Entry 1's allowed amount
+  // (e.g. 500 - 290 = ₹210 for Entry 2, then 210 - 210 = ₹0 for Entry 3, etc.).
+  const foodItemsInClaim = combinedEntries.filter((e) => {
+    const t = String(e.expenseType || "").trim().toUpperCase();
+    return t === "FOOD" || t === "FOOD_DA" || t === "FOOD_EXPENSE";
+  });
+  if (foodItemsInClaim.length > 0) {
+    const baseFoodLim = Math.max(0, ...foodItemsInClaim.map((e) => Number(e.policyLimit) || 0));
+    const fSumObj = claim.foodSummary || {};
+    const initialFoodLim =
+      Number(fSumObj.priorConsumed) > 0 && fSumObj.remainingBefore !== undefined && fSumObj.remainingBefore !== null
+        ? Math.max(0, Number(fSumObj.remainingBefore) || 0)
+        : baseFoodLim;
+
+    if (baseFoodLim > 0 || (fSumObj.remainingBefore !== undefined && fSumObj.remainingBefore !== null)) {
+      let remainingFoodPool = initialFoodLim;
+      foodItemsInClaim.forEach((fe) => {
+        const remVal = Math.round(remainingFoodPool * 100) / 100;
+        fe.displayPolicyLimit = remVal;
+        fe.hasDisplayPolicyLimit = true;
+        fe.limitDisplay = `₹${remVal}`;
+        const usedAllow = Math.max(0, Number(fe.standardAllowedAmount ?? fe.allowedAmount ?? 0));
+        remainingFoodPool = Math.max(
+          0,
+          Math.round((remainingFoodPool - Math.min(remainingFoodPool, usedAllow)) * 100) / 100
+        );
+      });
+    }
+  }
 
   // If this is a Lodging claim with included Food (stored in foodEntries / foodSummary / foodRequestedAmount),
   // ensure the Food entry is included in combinedEntries as Entry 02 when not already present.
@@ -1687,13 +1742,15 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                               if (isPurchase) return "📦";
                               return "🧾";
                             })();
-                            const foodSafeLimit = (isFoodEntry || isLodgingEntry)
-                              ? `₹${entry.policyLimit > 0 ? entry.policyLimit : (entry.allowedAmount ?? 0)}`
-                              : entry.expenseType === "TRAVEL"
-                                ? (entry.limitDisplay || (entry.hasExcess ? `₹${entry.allowedAmount ?? 0}` : "Actuals (Fully Allowed)"))
-                                : (isConveyance || entry.expenseType === "OTHER" || entry.expenseType === "STOCK_PURCHASE")
-                                  ? "Actuals (Fully Allowed)"
-                                  : (entry.limitDisplay || `₹${entry.allowedAmount ?? 0}`);
+                            const foodSafeLimit = entry.hasDisplayPolicyLimit
+                              ? `₹${entry.displayPolicyLimit ?? 0}`
+                              : (isFoodEntry || isLodgingEntry)
+                                ? `₹${entry.policyLimit > 0 ? entry.policyLimit : (entry.allowedAmount ?? 0)}`
+                                : entry.expenseType === "TRAVEL"
+                                  ? (entry.limitDisplay || (entry.hasExcess ? `₹${entry.allowedAmount ?? 0}` : "Actuals (Fully Allowed)"))
+                                  : (isConveyance || entry.expenseType === "OTHER" || entry.expenseType === "STOCK_PURCHASE")
+                                    ? "Actuals (Fully Allowed)"
+                                    : (entry.limitDisplay || `₹${entry.allowedAmount ?? 0}`);
 
                             const entryTitleDetail = (() => {
                               if (entry.expenseType === "TRAVEL" && (entry.travelModeName || entry.travelModeCode)) {
@@ -3289,8 +3346,9 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             </View>
             <View style={styles.photoModalBody}>
               {photoPreviewModal.uri ? (
-                <Image
-                  source={{ uri: resolveProofImageUrl(photoPreviewModal.uri) }}
+                <ZoomableImage
+                  key={photoPreviewModal.uri}
+                  uri={resolveProofImageUrl(photoPreviewModal.uri)}
                   style={styles.photoModalImage}
                   resizeMode="contain"
                 />

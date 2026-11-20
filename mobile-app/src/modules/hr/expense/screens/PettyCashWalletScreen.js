@@ -71,6 +71,28 @@ const classifyTransaction = (t) => {
   const src = String(t?.source || "").toUpperCase();
   const type = String(t?.type || "").toUpperCase();
 
+  if (src === "TEAM_LEAD_ADVANCE_IN") {
+    return {
+      kind: "ENHANCEMENT",
+      badgeText: "Team Lead Advance (Received)",
+      badgeBg: "#dcfce7",
+      badgeColor: "#15803d",
+      borderColor: "#86efac",
+      cardBg: "#f0fdf4",
+    };
+  }
+
+  if (src === "TEAM_LEAD_ADVANCE_OUT" || cat === "TEAM_LEAD_ADVANCE") {
+    return {
+      kind: "TEAM_LEAD_OUT",
+      badgeText: "Team Lead Advance (Given)",
+      badgeBg: "#f3e8ff",
+      badgeColor: "#7e22ce",
+      borderColor: "#d8b4fe",
+      cardBg: "#faf5ff",
+    };
+  }
+
   if (
     cat === "ALLOCATION_ENHANCEMENT" ||
     cat === "INITIAL_ALLOCATION" ||
@@ -80,6 +102,17 @@ const classifyTransaction = (t) => {
     return {
       kind: "ENHANCEMENT",
       badgeText: src === "TOPUP_REQUEST" ? "Petty Cash Enhancement" : "Petty Cash Allocation",
+      badgeBg: "#dcfce7",
+      badgeColor: "#15803d",
+      borderColor: "#86efac",
+      cardBg: "#f0fdf4",
+    };
+  }
+
+  if (src === "TEAM_LEAD_RETURN_IN") {
+    return {
+      kind: "ENHANCEMENT",
+      badgeText: "Team Lead Return (Received)",
       badgeBg: "#dcfce7",
       badgeColor: "#15803d",
       borderColor: "#86efac",
@@ -131,35 +164,42 @@ const classifyTransaction = (t) => {
     };
   }
 
+  const isAdd = String(t?.direction || "").toUpperCase() === "CR";
   return {
     kind: "NORMAL",
-    badgeText: "Account Adjustment",
-    badgeBg: "#f1f5f9",
-    badgeColor: "#475569",
-    borderColor: "#e2e8f0",
+    badgeText: isAdd ? "Opening Balance" : "Closing Balance",
+    badgeBg: isAdd ? "#dcfce7" : "#fee2e2",
+    badgeColor: isAdd ? "#15803d" : "#b91c1c",
+    borderColor: isAdd ? "#86efac" : "#fca5a5",
     cardBg: "#ffffff",
   };
 };
 
-const PettyCashWalletScreen = ({ navigation }) => {
-  const [tab, setTab] = useState("ledger"); // ledger | enhance_requests | return_requests
+const PettyCashWalletScreen = ({ navigation, route }) => {
+  const [tab, setTab] = useState(route?.params?.tab || "ledger"); // ledger | enhance_requests | return_requests
   const [wallet, setWallet] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
   const [requests, setRequests] = useState([]);
   const [returnRequests, setReturnRequests] = useState([]);
+  const [advanceProviders, setAdvanceProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Request Enhancement modal
   const [reqModal, setReqModal] = useState(false);
+  const [reqProviderType, setReqProviderType] = useState("COMPANY"); // COMPANY | TEAM_LEAD
+  const [reqProviderId, setReqProviderId] = useState("");
   const [reqAmount, setReqAmount] = useState("");
   const [reqReason, setReqReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [acceptingId, setAcceptingId] = useState(null);
 
   // Return Request modal + confirmation dialog
   const [retModal, setRetModal] = useState(false);
   const [retConfirmVisible, setRetConfirmVisible] = useState(false);
+  const [retRecipientType, setRetRecipientType] = useState("COMPANY"); // COMPANY | TEAM_LEAD
+  const [retRecipientId, setRetRecipientId] = useState("");
   const [retAmount, setRetAmount] = useState("");
   const [retRemarks, setRetRemarks] = useState("");
   const [retProofs, setRetProofs] = useState([]); // [{ localId, uri, url, name, isUploading, uploadFailed }]
@@ -169,11 +209,12 @@ const PettyCashWalletScreen = ({ navigation }) => {
   const load = useCallback(async (page = 1, showSpinner = true) => {
     if (showSpinner) setLoading(true);
     try {
-      const [wRes, tRes, rRes, retRes] = await Promise.all([
+      const [wRes, tRes, rRes, retRes, provRes] = await Promise.all([
         expenseApi.getMyPettyCashWallet(),
         expenseApi.getMyPettyCashTransactions({ page, limit: 15 }),
         expenseApi.getMyPettyCashRequests(),
         expenseApi.getMyPettyCashReturnRequests(),
+        expenseApi.getPettyCashAdvanceProviders(),
       ]);
       if (wRes.success) setWallet(wRes.data);
       if (tRes.success) {
@@ -182,6 +223,7 @@ const PettyCashWalletScreen = ({ navigation }) => {
       }
       if (rRes.success) setRequests(rRes.data || []);
       if (retRes.success) setReturnRequests(retRes.data || []);
+      if (provRes.success) setAdvanceProviders(Array.isArray(provRes.data) ? provRes.data : []);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -192,7 +234,24 @@ const PettyCashWalletScreen = ({ navigation }) => {
     load(1, true);
   }, [load]);
 
+  useEffect(() => {
+    if (route?.params?.tab) {
+      setTab(route.params.tab);
+      load(1, false);
+    }
+  }, [route?.params?.tab, route?.params?.timestamp, load]);
+
+  const openEnhanceModal = () => {
+    setReqProviderType("COMPANY");
+    setReqProviderId(advanceProviders.length === 1 ? String(advanceProviders[0]._id) : "");
+    setReqModal(true);
+  };
+
   const handleCreateRequest = async () => {
+    if (reqProviderType === "TEAM_LEAD" && !reqProviderId) {
+      notifyAlert("Team Lead Required", "Please select a Team Lead to request the petty cash advance from.");
+      return;
+    }
     const amt = Number(reqAmount);
     if (!Number.isFinite(amt) || amt <= 0) {
       notifyAlert("Invalid Amount", "Please enter an amount greater than zero.");
@@ -204,18 +263,69 @@ const PettyCashWalletScreen = ({ navigation }) => {
     }
     setSubmitting(true);
     try {
-      const res = await expenseApi.createPettyCashRequest({ amount: amt, reason: reqReason.trim() });
+      const payload = {
+        amount: amt,
+        reason: reqReason.trim(),
+        providerType: reqProviderType,
+        ...(reqProviderType === "TEAM_LEAD" ? { providerEmployeeId: reqProviderId } : {}),
+      };
+      const res = await expenseApi.createPettyCashRequest(payload);
       if (res.success) {
+        const pickedTL = advanceProviders.find((p) => String(p._id) === String(reqProviderId));
         setReqModal(false);
         setReqAmount("");
         setReqReason("");
-        notifyAlert("Enhancement Request Submitted", "Your request to increase petty cash allocation has been sent to Accounts Admin.");
+        setReqProviderType("COMPANY");
+        setReqProviderId("");
+        notifyAlert(
+          "Enhancement Request Submitted",
+          reqProviderType === "TEAM_LEAD"
+            ? `Your petty cash advance request has been sent to ${pickedTL?.name || "the selected Team Lead"}.`
+            : "Your request to increase petty cash allocation has been sent to Accounts Admin."
+        );
         load(1, false);
       } else {
         notifyAlert("Request Failed", res.message || "Unable to submit request.");
       }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleAcceptAdvance = (r) => {
+    const tlName = r.providerEmployee?.name || r.providerEmployeeName || "Team Lead";
+    const amtText = fmtINR(r.approvedAmount || r.requestedAmount);
+    const runAccept = async () => {
+      setAcceptingId(r._id);
+      try {
+        const res = await expenseApi.acceptPettyCashRequest(r._id);
+        if (res.success) {
+          notifyAlert(
+            "Advance Accepted",
+            `${amtText} has been deducted from ${tlName} and added to your Petty Cash Wallet.`
+          );
+          load(1, false);
+        } else {
+          notifyAlert("Unable to Accept", res.message || "Could not complete advance transfer.");
+        }
+      } finally {
+        setAcceptingId(null);
+      }
+    };
+
+    if (Platform.OS === "web" && typeof window !== "undefined" && window.confirm) {
+      if (window.confirm(`Accept ${amtText} petty cash advance from ${tlName}?\n\nThis will add ${amtText} to your wallet and deduct it from ${tlName}.`)) {
+        runAccept();
+      }
+    } else {
+      Alert.alert(
+        "Accept Petty Cash Advance",
+        `Confirm receiving ${amtText} from ${tlName}?\n\n${amtText} will be deducted from ${tlName} and credited to your Petty Cash Wallet.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Accept Advance", onPress: runAccept },
+        ]
+      );
     }
   };
 
@@ -235,7 +345,14 @@ const PettyCashWalletScreen = ({ navigation }) => {
       if (useCamera) {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== "granted") {
-          notifyAlert("Permission Required", "Camera permission is required to capture proof photos.");
+          Alert.alert(
+            "Permission Required",
+            "Camera permission is required to capture proof photos.",
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Open Settings", onPress: () => Linking.openSettings().catch(() => {}) },
+            ]
+          );
           return;
         }
         result = await ImagePicker.launchCameraAsync({
@@ -244,11 +361,7 @@ const PettyCashWalletScreen = ({ navigation }) => {
           base64: true,
         });
       } else {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== "granted") {
-          notifyAlert("Permission Required", "Gallery permission is required to select proof photos.");
-          return;
-        }
+        // Android system Photo Picker requires no runtime media library permissions
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ["images"],
           quality: 0.6,
@@ -319,6 +432,10 @@ const PettyCashWalletScreen = ({ navigation }) => {
   };
 
   const handleValidateReturnAndConfirm = () => {
+    if (retRecipientType === "TEAM_LEAD" && !retRecipientId) {
+      notifyAlert("Team Lead Required", "Please select a Team Lead to return petty cash to.");
+      return;
+    }
     if (currentBalance <= currentBaseLimit || availableForReturn <= 0) {
       notifyAlert(
         "Return Not Allowed",
@@ -346,6 +463,11 @@ const PettyCashWalletScreen = ({ navigation }) => {
       notifyAlert("Uploading Proof", "Please wait until proof photo upload finishes.");
       return;
     }
+    const uploadedAttachments = retProofs.filter((p) => p.url && !p.uploadFailed);
+    if (uploadedAttachments.length === 0) {
+      notifyAlert("Payment Proof Required", "Please upload or capture at least one payment proof photo.");
+      return;
+    }
     setRetConfirmVisible(true);
   };
 
@@ -354,24 +476,36 @@ const PettyCashWalletScreen = ({ navigation }) => {
     const uploadedAttachments = retProofs
       .filter((p) => p.url && !p.uploadFailed)
       .map((p) => p.url);
+    if (uploadedAttachments.length === 0) {
+      setRetConfirmVisible(false);
+      notifyAlert("Payment Proof Required", "Please upload or capture at least one payment proof photo.");
+      return;
+    }
     setRetSubmitting(true);
     try {
+      const pickedTL = advanceProviders.find((p) => String(p._id) === String(retRecipientId));
       const res = await expenseApi.createPettyCashReturnRequest({
         amount: amt,
         requestedAmount: amt,
         remarks: retRemarks.trim(),
         reason: retRemarks.trim(),
         attachments: uploadedAttachments,
+        recipientType: retRecipientType,
+        ...(retRecipientType === "TEAM_LEAD" ? { recipientEmployeeId: retRecipientId } : {}),
       });
       if (res.success) {
         setRetConfirmVisible(false);
         setRetModal(false);
+        setRetRecipientType("COMPANY");
+        setRetRecipientId("");
         setRetAmount("");
         setRetRemarks("");
         setRetProofs([]);
         notifyAlert(
           "Return Request Submitted",
-          "Your Petty Cash Return Request has been submitted to Accounts. Your Petty Cash Balance will update once Accounts approves the return."
+          retRecipientType === "TEAM_LEAD"
+            ? `Your Petty Cash Return Request has been sent to ${pickedTL?.name || "the selected Team Lead"}. Once accepted, the amount will transfer to their petty cash.`
+            : "Your Petty Cash Return Request has been submitted to Accounts. Your Petty Cash Balance will update once Accounts approves the return."
         );
         load(1, false);
       } else {
@@ -384,6 +518,7 @@ const PettyCashWalletScreen = ({ navigation }) => {
   };
 
   const pendingEnhanceCount = requests.filter((r) => r.status === "PENDING").length;
+  const awaitingAcceptCount = requests.filter((r) => r.status === "AWAITING_EMPLOYEE_ACCEPTANCE").length;
   const pendingReturnCount = returnRequests.filter((r) => r.status === "PENDING").length;
 
   return (
@@ -393,7 +528,7 @@ const PettyCashWalletScreen = ({ navigation }) => {
         subtitle={wallet?.enabled ? "Active Petty Cash Account" : "Petty Cash Allocation & Balance"}
         navigation={navigation}
         rightElement={
-          <TouchableOpacity style={styles.reqTopBtn} onPress={() => setReqModal(true)}>
+          <TouchableOpacity style={styles.reqTopBtn} onPress={openEnhanceModal}>
             <Plus size={16} color="#ffffff" />
           </TouchableOpacity>
         }
@@ -460,7 +595,7 @@ const PettyCashWalletScreen = ({ navigation }) => {
             <View style={styles.actionBtnRow}>
               <TouchableOpacity
                 style={styles.enhanceActionBtn}
-                onPress={() => setReqModal(true)}
+                onPress={openEnhanceModal}
                 activeOpacity={0.85}
               >
                 <View style={styles.enhanceIconCircle}>
@@ -486,6 +621,8 @@ const PettyCashWalletScreen = ({ navigation }) => {
                     );
                     return;
                   }
+                  setRetRecipientType("COMPANY");
+                  setRetRecipientId(advanceProviders.length === 1 ? String(advanceProviders[0]._id) : "");
                   setRetAmount(String(availableForReturn));
                   setRetConfirmVisible(false);
                   setRetModal(true);
@@ -518,11 +655,31 @@ const PettyCashWalletScreen = ({ navigation }) => {
           </View>
         </View>
 
+        {/* Action Required Banner: Team Lead Advance Awaiting Employee Acceptance */}
+        {awaitingAcceptCount > 0 && (
+          <TouchableOpacity
+            style={styles.acceptBanner}
+            activeOpacity={0.85}
+            onPress={() => setTab("enhance_requests")}
+          >
+            <CheckCircle2 size={18} color="#059669" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.acceptBannerTitle}>
+                {awaitingAcceptCount} Petty Cash Advance{awaitingAcceptCount > 1 ? "s" : ""} Ready to Accept
+              </Text>
+              <Text style={styles.acceptBannerSub}>
+                Tap to review proof and accept so the amount is added to your wallet.
+              </Text>
+            </View>
+            <ChevronRight size={16} color="#059669" />
+          </TouchableOpacity>
+        )}
+
         {/* Pending Requests Banner if any */}
         {(pendingEnhanceCount > 0 || pendingReturnCount > 0) && (
           <View style={styles.pendingBanner}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.pendingBannerTitle}>Pending Requests with Accounts</Text>
+              <Text style={styles.pendingBannerTitle}>Pending Requests</Text>
               <Text style={styles.pendingBannerSub}>
                 {pendingEnhanceCount > 0 ? `${pendingEnhanceCount} Enhancement Request(s)` : ""}
                 {pendingEnhanceCount > 0 && pendingReturnCount > 0 ? " • " : ""}
@@ -687,50 +844,130 @@ const PettyCashWalletScreen = ({ navigation }) => {
                 </Text>
               </View>
             ) : (
-              requests.map((r) => (
-                <View key={r._id} style={styles.reqCard}>
-                  <View style={styles.txnTopRow}>
-                    <Text style={styles.reqAmount}>
-                      Requested Enhancement: +{fmtINR(r.requestedAmount)}
-                    </Text>
-                    <View
-                      style={[
-                        styles.reqStatusBadge,
-                        r.status === "FULFILLED"
-                          ? { backgroundColor: "#ecfdf5" }
-                          : r.status === "REJECTED"
-                            ? { backgroundColor: "#fef2f2" }
-                            : { backgroundColor: "#fffbeb" },
-                      ]}
-                    >
-                      <Text
+              requests.map((r) => {
+                const isTL = r.providerType === "TEAM_LEAD";
+                const tlName = r.providerEmployee?.name || r.providerEmployeeName || "Team Lead";
+                const isAwaitingAccept = r.status === "AWAITING_EMPLOYEE_ACCEPTANCE";
+                const statusLabel = isAwaitingAccept
+                  ? "READY TO ACCEPT"
+                  : r.status === "PENDING" && isTL
+                    ? "PENDING (TL)"
+                    : r.status;
+                const badgeBg =
+                  r.status === "FULFILLED"
+                    ? "#ecfdf5"
+                    : r.status === "REJECTED"
+                      ? "#fef2f2"
+                      : isAwaitingAccept
+                        ? "#eef2ff"
+                        : "#fffbeb";
+                const badgeColor =
+                  r.status === "FULFILLED"
+                    ? "#059669"
+                    : r.status === "REJECTED"
+                      ? "#dc2626"
+                      : isAwaitingAccept
+                        ? "#4f46e5"
+                        : "#d97706";
+                const isBusy = acceptingId === r._id;
+
+                return (
+                  <View
+                    key={r._id}
+                    style={[
+                      styles.reqCard,
+                      isAwaitingAccept && { borderColor: "#6366f1", backgroundColor: "#fafaff" },
+                    ]}
+                  >
+                    <View style={styles.txnTopRow}>
+                      <Text style={styles.reqAmount}>
+                        Requested: +{fmtINR(r.requestedAmount)}
+                      </Text>
+                      <View style={[styles.reqStatusBadge, { backgroundColor: badgeBg }]}>
+                        <Text style={[styles.reqStatusText, { color: badgeColor }]}>
+                          {statusLabel}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.providerChipRow}>
+                      <View
                         style={[
-                          styles.reqStatusText,
-                          r.status === "FULFILLED"
-                            ? { color: "#059669" }
-                            : r.status === "REJECTED"
-                              ? { color: "#dc2626" }
-                              : { color: "#d97706" },
+                          styles.providerChip,
+                          { backgroundColor: isTL ? "#f3e8ff" : "#eef2ff" },
                         ]}
                       >
-                        {r.status}
+                        <Text
+                          style={[
+                            styles.providerChipText,
+                            { color: isTL ? "#7e22ce" : "#4338ca" },
+                          ]}
+                        >
+                          {isTL ? `Team Lead: ${tlName}` : "Company (Accounts)"}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {r.approvedAmount > 0 && (
+                      <Text style={styles.reqApproved}>
+                        {isAwaitingAccept
+                          ? `Sent by ${tlName}: +${fmtINR(r.approvedAmount)} (Tap Accept to credit)`
+                          : `Approved & Added to Petty Cash Balance: +${fmtINR(r.approvedAmount)}`}
                       </Text>
+                    )}
+
+                    <Text style={styles.txnDesc}>{r.reason}</Text>
+
+                    {isTL && r.tlRemarks ? (
+                      <Text style={styles.reqRemarks}>Team Lead Remark: {r.tlRemarks}</Text>
+                    ) : !isTL && r.remarks ? (
+                      <Text style={styles.reqRemarks}>Accounts Remark: {r.remarks}</Text>
+                    ) : null}
+
+                    {Array.isArray(r.tlProofs) && r.tlProofs.length > 0 && (
+                      <View style={styles.proofThumbRow}>
+                        {r.tlProofs.map((att, idx) => {
+                          const url = resolveProofImageUrl(typeof att === "string" ? att : att?.url);
+                          if (!url) return null;
+                          return (
+                            <TouchableOpacity
+                              key={`${r._id}_tlp_${idx}`}
+                              onPress={() => Linking.openURL(url).catch(() => {})}
+                              style={styles.proofThumbItem}
+                            >
+                              <Image source={{ uri: url }} style={styles.proofThumbImg} />
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    )}
+
+                    {isAwaitingAccept && (
+                      <TouchableOpacity
+                        style={[styles.acceptAdvanceBtn, isBusy && { opacity: 0.6 }]}
+                        disabled={isBusy}
+                        onPress={() => handleAcceptAdvance(r)}
+                        activeOpacity={0.85}
+                      >
+                        {isBusy ? (
+                          <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                          <>
+                            <CheckCircle2 size={16} color="#ffffff" />
+                            <Text style={styles.acceptAdvanceBtnText}>
+                              Accept Advance (+{fmtINR(r.approvedAmount)})
+                            </Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    )}
+
+                    <View style={styles.txnMetaRow}>
+                      <Text style={styles.txnDate}>{fmtDate(r.createdAt)}</Text>
                     </View>
                   </View>
-                  {r.approvedAmount > 0 && (
-                    <Text style={styles.reqApproved}>
-                      Approved & Added to Petty Cash Balance: +{fmtINR(r.approvedAmount)}
-                    </Text>
-                  )}
-                  <Text style={styles.txnDesc}>{r.reason}</Text>
-                  {r.remarks ? (
-                    <Text style={styles.reqRemarks}>Accounts Remark: {r.remarks}</Text>
-                  ) : null}
-                  <View style={styles.txnMetaRow}>
-                    <Text style={styles.txnDate}>{fmtDate(r.createdAt)}</Text>
-                  </View>
-                </View>
-              ))
+                );
+              })
             )}
           </>
         )}
@@ -750,6 +987,8 @@ const PettyCashWalletScreen = ({ navigation }) => {
                 const displayStatus = r.status === "PROCESSED" ? "APPROVED" : r.status;
                 const isApproved = displayStatus === "APPROVED";
                 const isRejected = displayStatus === "REJECTED";
+                const isTL = r.recipientType === "TEAM_LEAD";
+                const tlName = r.recipientEmployee?.name || r.recipientEmployeeName || "Team Lead";
                 return (
                   <View key={r._id} style={styles.reqCard}>
                     <View style={styles.txnTopRow}>
@@ -776,7 +1015,24 @@ const PettyCashWalletScreen = ({ navigation }) => {
                                 : { color: "#d97706" },
                           ]}
                         >
-                          {displayStatus}
+                          {displayStatus === "PENDING" && isTL ? "PENDING (TL)" : displayStatus}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.providerChipRow}>
+                      <View
+                        style={[
+                          styles.providerChip,
+                          { backgroundColor: isTL ? "#f3e8ff" : "#eef2ff" },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.providerChipText,
+                            { color: isTL ? "#7e22ce" : "#4338ca" },
+                          ]}
+                        >
+                          {isTL ? `Return To Team Lead: ${tlName}` : "Return To: Company (Accounts)"}
                         </Text>
                       </View>
                     </View>
@@ -809,7 +1065,7 @@ const PettyCashWalletScreen = ({ navigation }) => {
                     )}
                     {r.accountsRemarks ? (
                       <Text style={styles.reqRemarks}>
-                        Accounts Remark: {r.accountsRemarks}
+                        {isTL ? "Team Lead Remark: " : "Accounts Remark: "}{r.accountsRemarks}
                       </Text>
                     ) : null}
                     <View style={styles.txnMetaRow}>
@@ -848,39 +1104,106 @@ const PettyCashWalletScreen = ({ navigation }) => {
               Approved enhancements increase your Petty Cash Balance ({fmtINR(currentBalance)}). Your Base Limit ({fmtINR(currentBaseLimit)}) remains unchanged.
             </Text>
 
-            <Text style={styles.inputLabel}>Enhancement Amount Required (₹) *</Text>
-            <TextInput
-              value={reqAmount}
-              onChangeText={setReqAmount}
-              keyboardType="numeric"
-              placeholder="e.g. 2000"
-              style={styles.input}
-            />
+            <ScrollView style={{ maxHeight: 460 }} showsVerticalScrollIndicator={false}>
+              <Text style={styles.inputLabel}>Request Petty Cash Advance From *</Text>
+              <View style={styles.providerToggleRow}>
+                {[
+                  { key: "COMPANY", label: "Company (Accounts)" },
+                  { key: "TEAM_LEAD", label: "Team Lead" },
+                ].map((opt) => {
+                  const active = reqProviderType === opt.key;
+                  return (
+                    <TouchableOpacity
+                      key={opt.key}
+                      style={[styles.providerToggleBtn, active && styles.providerToggleBtnActive]}
+                      onPress={() => {
+                        setReqProviderType(opt.key);
+                        if (opt.key === "TEAM_LEAD" && !reqProviderId && advanceProviders.length === 1) {
+                          setReqProviderId(String(advanceProviders[0]._id));
+                        }
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.providerToggleText, active && styles.providerToggleTextActive]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
 
-            <Text style={styles.inputLabel}>Reason (e.g. upcoming outstation tour) *</Text>
-            <TextInput
-              value={reqReason}
-              onChangeText={setReqReason}
-              placeholder="Describe the tour or travel expense requirement"
-              multiline
-              numberOfLines={3}
-              style={[styles.input, { height: 80, textAlignVertical: "top" }]}
-            />
+              {reqProviderType === "TEAM_LEAD" && (
+                <View style={styles.tlPickerBox}>
+                  <Text style={styles.inputLabel}>Select Team Lead (Only One) *</Text>
+                  {advanceProviders.length === 0 ? (
+                    <Text style={styles.tlEmptyText}>
+                      No other Team Lead is configured as an advance provider. Please select Company (Accounts).
+                    </Text>
+                  ) : (
+                    advanceProviders.map((tl) => {
+                      const selected = String(reqProviderId) === String(tl._id);
+                      return (
+                        <TouchableOpacity
+                          key={String(tl._id)}
+                          style={[styles.tlOptionRow, selected && styles.tlOptionRowSelected]}
+                          onPress={() => setReqProviderId(String(tl._id))}
+                          activeOpacity={0.8}
+                        >
+                          <View style={[styles.tlRadioOuter, selected && styles.tlRadioOuterSelected]}>
+                            {selected && <View style={styles.tlRadioInner} />}
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.tlOptionName, selected && { color: "#4338ca" }]}>
+                              {tl.name}
+                            </Text>
+                            <Text style={styles.tlOptionMeta}>
+                              {[tl.employeeIdCode, tl.designation, tl.department].filter(Boolean).join(" • ") || "Team Lead"}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })
+                  )}
+                </View>
+              )}
 
-            <View style={styles.modalBtnRow}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setReqModal(false)}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                disabled={submitting}
-                style={styles.submitBtn}
-                onPress={handleCreateRequest}
-              >
-                <Text style={styles.submitBtnText}>
-                  {submitting ? "Submitting…" : "Submit Request"}
-                </Text>
-              </TouchableOpacity>
-            </View>
+              <Text style={styles.inputLabel}>Enhancement Amount Required (₹) *</Text>
+              <TextInput
+                value={reqAmount}
+                onChangeText={setReqAmount}
+                keyboardType="numeric"
+                placeholder="e.g. 2000"
+                style={styles.input}
+              />
+
+              <Text style={styles.inputLabel}>Reason (e.g. upcoming outstation tour) *</Text>
+              <TextInput
+                value={reqReason}
+                onChangeText={setReqReason}
+                placeholder="Describe the tour or travel expense requirement"
+                multiline
+                numberOfLines={3}
+                style={[styles.input, { height: 80, textAlignVertical: "top" }]}
+              />
+
+              <View style={styles.modalBtnRow}>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => setReqModal(false)}>
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  disabled={submitting || (reqProviderType === "TEAM_LEAD" && advanceProviders.length === 0)}
+                  style={[
+                    styles.submitBtn,
+                    (submitting || (reqProviderType === "TEAM_LEAD" && advanceProviders.length === 0)) && { opacity: 0.5 },
+                  ]}
+                  onPress={handleCreateRequest}
+                >
+                  <Text style={styles.submitBtnText}>
+                    {submitting ? "Submitting…" : "Submit Request"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -938,7 +1261,69 @@ const PettyCashWalletScreen = ({ navigation }) => {
             )}
 
             {!retConfirmVisible ? (
-              <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+              <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
+                <Text style={styles.inputLabel}>Return Petty Cash To *</Text>
+                <View style={styles.providerToggleRow}>
+                  {[
+                    { key: "COMPANY", label: "Company (Accounts)" },
+                    { key: "TEAM_LEAD", label: "Team Lead" },
+                  ].map((opt) => {
+                    const active = retRecipientType === opt.key;
+                    return (
+                      <TouchableOpacity
+                        key={opt.key}
+                        style={[styles.providerToggleBtn, active && styles.providerToggleBtnActive]}
+                        onPress={() => {
+                          setRetRecipientType(opt.key);
+                          if (opt.key === "TEAM_LEAD" && !retRecipientId && advanceProviders.length === 1) {
+                            setRetRecipientId(String(advanceProviders[0]._id));
+                          }
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={[styles.providerToggleText, active && styles.providerToggleTextActive]}>
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {retRecipientType === "TEAM_LEAD" && (
+                  <View style={styles.tlPickerBox}>
+                    <Text style={styles.inputLabel}>Select Team Lead (Only One) *</Text>
+                    {advanceProviders.length === 0 ? (
+                      <Text style={styles.tlEmptyText}>
+                        No other Team Lead is configured as an advance provider. Please select Company (Accounts).
+                      </Text>
+                    ) : (
+                      advanceProviders.map((tl) => {
+                        const selected = String(retRecipientId) === String(tl._id);
+                        return (
+                          <TouchableOpacity
+                            key={String(tl._id)}
+                            style={[styles.tlOptionRow, selected && styles.tlOptionRowSelected]}
+                            onPress={() => setRetRecipientId(String(tl._id))}
+                            activeOpacity={0.8}
+                          >
+                            <View style={[styles.tlRadioOuter, selected && styles.tlRadioOuterSelected]}>
+                              {selected && <View style={styles.tlRadioInner} />}
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[styles.tlOptionName, selected && { color: "#4338ca" }]}>
+                                {tl.name}
+                              </Text>
+                              <Text style={styles.tlOptionMeta}>
+                                {[tl.employeeIdCode, tl.designation, tl.department].filter(Boolean).join(" • ") || "Team Lead"}
+                              </Text>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
+                  </View>
+                )}
+
                 <Text style={styles.inputLabel}>Return Amount (₹) * (Max {fmtINR(availableForReturn)})</Text>
                 <TextInput
                   value={retAmount}
@@ -958,7 +1343,7 @@ const PettyCashWalletScreen = ({ navigation }) => {
                   style={[styles.input, { height: 68, textAlignVertical: "top" }]}
                 />
 
-                <Text style={styles.inputLabel}>Upload Proof Photos</Text>
+                <Text style={styles.inputLabel}>Upload Payment Proof Photos *</Text>
                 <View style={styles.proofPickerRow}>
                   <TouchableOpacity
                     style={styles.proofPickerBtn}
@@ -1010,7 +1395,12 @@ const PettyCashWalletScreen = ({ navigation }) => {
                     <Text style={styles.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.submitBtn, { backgroundColor: "#dc2626" }]}
+                    disabled={retRecipientType === "TEAM_LEAD" && advanceProviders.length === 0}
+                    style={[
+                      styles.submitBtn,
+                      { backgroundColor: "#dc2626" },
+                      retRecipientType === "TEAM_LEAD" && advanceProviders.length === 0 && { opacity: 0.5 },
+                    ]}
                     onPress={handleValidateReturnAndConfirm}
                   >
                     <Text style={styles.submitBtnText}>Review & Submit</Text>
@@ -1025,8 +1415,18 @@ const PettyCashWalletScreen = ({ navigation }) => {
                   <Text style={styles.confirmTitle}>Confirm Petty Cash Return Request</Text>
                 </View>
                 <Text style={styles.confirmDesc}>
-                  Please confirm that you want to submit this Return Request to Accounts:
+                  {retRecipientType === "TEAM_LEAD"
+                    ? `Please confirm that you want to submit this Return Request to Team Lead (${advanceProviders.find((p) => String(p._id) === String(retRecipientId))?.name || "Team Lead"}):`
+                    : "Please confirm that you want to submit this Return Request to Accounts:"}
                 </Text>
+                <View style={styles.confirmDetailRow}>
+                  <Text style={styles.confirmDetailLabel}>Return To:</Text>
+                  <Text style={styles.confirmDetailValue}>
+                    {retRecipientType === "TEAM_LEAD"
+                      ? `Team Lead (${advanceProviders.find((p) => String(p._id) === String(retRecipientId))?.name || "Team Lead"})`
+                      : "Company (Accounts)"}
+                  </Text>
+                </View>
                 <View style={styles.confirmDetailRow}>
                   <Text style={styles.confirmDetailLabel}>Return Amount:</Text>
                   <Text style={[styles.confirmDetailValue, { color: "#dc2626" }]}>
@@ -1518,6 +1918,88 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   submitBtnText: { fontSize: 13, fontWeight: "800", color: "#ffffff" },
+  acceptBanner: {
+    backgroundColor: "#ecfdf5",
+    borderWidth: 1,
+    borderColor: "#86efac",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  acceptBannerTitle: { fontSize: 12.5, fontWeight: "800", color: "#065f46" },
+  acceptBannerSub: { fontSize: 11, color: "#047857", marginTop: 2 },
+  providerChipRow: { flexDirection: "row", marginTop: 5, marginBottom: 2 },
+  providerChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  providerChipText: { fontSize: 10.5, fontWeight: "800" },
+  acceptAdvanceBtn: {
+    marginTop: 10,
+    backgroundColor: "#059669",
+    borderRadius: 10,
+    paddingVertical: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  acceptAdvanceBtnText: { fontSize: 12.5, fontWeight: "800", color: "#ffffff" },
+  providerToggleRow: { flexDirection: "row", gap: 8, marginBottom: 8 },
+  providerToggleBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    backgroundColor: "#f8fafc",
+    alignItems: "center",
+  },
+  providerToggleBtnActive: {
+    backgroundColor: "#4f46e5",
+    borderColor: "#4f46e5",
+  },
+  providerToggleText: { fontSize: 12, fontWeight: "800", color: "#475569" },
+  providerToggleTextActive: { color: "#ffffff" },
+  tlPickerBox: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    marginBottom: 4,
+  },
+  tlEmptyText: { fontSize: 11.5, color: "#b45309", fontWeight: "600", marginTop: 2 },
+  tlOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#ffffff",
+    marginTop: 6,
+  },
+  tlOptionRowSelected: {
+    borderColor: "#4f46e5",
+    backgroundColor: "#eef2ff",
+  },
+  tlRadioOuter: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: "#94a3b8",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tlRadioOuterSelected: { borderColor: "#4f46e5" },
+  tlRadioInner: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#4f46e5" },
+  tlOptionName: { fontSize: 12.5, fontWeight: "800", color: "#0f172a" },
+  tlOptionMeta: { fontSize: 10.5, color: "#64748b", marginTop: 1 },
 });
 
 export default PettyCashWalletScreen;

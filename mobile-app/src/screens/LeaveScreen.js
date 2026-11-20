@@ -23,6 +23,23 @@ const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Cancelled'];
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
+const getMaxAllowedDate = (maxAdvanceDays) => {
+  const days = Number(maxAdvanceDays);
+  if (!days || days <= 0) return null;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + (days - 1));
+  return d;
+};
+
+const isDateWithinAdvanceLimit = (date, maxAdvanceDays) => {
+  if (!date || !(date instanceof Date) || isNaN(date.getTime())) return false;
+  const maxDate = getMaxAllowedDate(maxAdvanceDays);
+  if (!maxDate) return true;
+  const check = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return check <= maxDate;
+};
+
 const isDateAllowedByPolicy = (date, allowedDays) => {
   if (!date || !(date instanceof Date) || isNaN(date.getTime())) return false;
   const valid = Array.isArray(allowedDays) ? allowedDays.filter(d => d && d !== 'All') : [];
@@ -31,13 +48,15 @@ const isDateAllowedByPolicy = (date, allowedDays) => {
   return valid.some(d => String(d).trim().toLowerCase() === dayName.toLowerCase());
 };
 
-const getNextAllowedDate = (baseDate, allowedDays) => {
+const getNextAllowedDate = (baseDate, allowedDays, maxAdvanceDays) => {
   const start = baseDate instanceof Date && !isNaN(baseDate.getTime()) ? new Date(baseDate) : new Date();
+  start.setHours(0, 0, 0, 0);
   const valid = Array.isArray(allowedDays) ? allowedDays.filter(d => d && d !== 'All') : [];
+  const maxLimit = Number(maxAdvanceDays) > 0 ? Number(maxAdvanceDays) : 14;
   if (valid.length === 0 || valid.length >= 7) return start;
   const cursor = new Date(start);
-  for (let i = 0; i < 14; i++) {
-    if (isDateAllowedByPolicy(cursor, valid)) {
+  for (let i = 0; i < maxLimit; i++) {
+    if (isDateAllowedByPolicy(cursor, valid) && isDateWithinAdvanceLimit(cursor, maxAdvanceDays)) {
       return cursor;
     }
     cursor.setDate(cursor.getDate() + 1);
@@ -78,13 +97,14 @@ const ms = StyleSheet.create({
   durationText: { fontSize: 10, fontWeight: 'bold', color: '#4f46e5' },
 });
 
-const LeaveScreen = ({ navigation }) => {
+const LeaveScreen = ({ navigation, route }) => {
   // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
   const [leaves, setLeaves] = useState([]);
   const [filteredLeaves, setFilteredLeaves] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
+  const [detailLeave, setDetailLeave] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [filter, setFilter] = useState('All');
   const [quotas, setQuotas] = useState([]);
@@ -194,6 +214,31 @@ const LeaveScreen = ({ navigation }) => {
       setFilteredLeaves(leaves.filter(l => l.status === filter));
     }
   }, [filter, leaves]);
+
+  const targetLeaveId = route?.params?.leaveId;
+  const targetTimestamp = route?.params?.timestamp;
+
+  useEffect(() => {
+    if (!targetLeaveId || leaves.length === 0) return;
+    const matched = leaves.find((l) => String(l._id) === String(targetLeaveId));
+    if (matched) {
+      if (filter !== 'All' && filter !== matched.status) {
+        setFilter('All');
+      }
+      if (historyDateFilter) {
+        setHistoryDateFilter(null);
+      }
+      const idx = leaves
+        .slice()
+        .sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
+        .findIndex((l) => String(l._id) === String(targetLeaveId));
+      if (idx >= visibleLeaves) {
+        setVisibleLeaves(idx + 3);
+      }
+      setDetailLeave(matched);
+      navigation.setParams?.({ leaveId: undefined });
+    }
+  }, [targetLeaveId, targetTimestamp, leaves]);
 
   const fetchLeaves = async () => {
     try {
@@ -306,6 +351,20 @@ const LeaveScreen = ({ navigation }) => {
       setToast({ show: true, message: 'You cannot apply for leave on past dates.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
+    }
+
+    const maxAdvanceDays = Number(selectedQuota?.maxAdvanceDays) || 0;
+    if (maxAdvanceDays > 0) {
+      const maxDate = getMaxAllowedDate(maxAdvanceDays);
+      if (!isDateWithinAdvanceLimit(form.startDate, maxAdvanceDays) || !isDateWithinAdvanceLimit(finalEndDate, maxAdvanceDays)) {
+        setToast({
+          show: true,
+          message: `${form.leaveType} can only be applied within ${maxAdvanceDays} day(s) from today (up to ${maxDate.toLocaleDateString()}).`,
+          type: 'error',
+        });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2800);
+        return;
+      }
     }
 
     const isUnlimited = selectedQuota?.hasLimit === false;
@@ -434,31 +493,13 @@ const LeaveScreen = ({ navigation }) => {
 
     const defaultSess = 'Session 1';
     const sTimes = getSessionTimes(defaultSess, shift);
-    const initialDate = getNextAllowedDate(new Date(), q?.allowedDays);
+    const initialDate = getNextAllowedDate(new Date(), q?.allowedDays, q?.maxAdvanceDays);
 
     setForm({
       id: null,
       leaveType: q?.name || '',
       startDate: initialDate,
       endDate: initialDate,
-      duration: defaultDuration,
-      session: defaultSess,
-      startTime: sTimes.startTime,
-      endTime: sTimes.endTime,
-      reason: ''
-    });
-    setModalVisible(true);
-  };
-
-  const _unusedOpenApply = () => {
-    const defaultSess = 'Session 1';
-    const sTimes = getSessionTimes(defaultSess, shift);
-
-    setForm({
-      id: null,
-      leaveType: q?.name || '',
-      startDate: new Date(),
-      endDate: new Date(),
       duration: defaultDuration,
       session: defaultSess,
       startTime: sTimes.startTime,
@@ -593,12 +634,12 @@ const LeaveScreen = ({ navigation }) => {
                     pending: q.pending || 0,
                     remaining: q.hasLimit === false ? 'No Limit' : q.balance
                   });
-                  const nextValid = getNextAllowedDate(new Date(), q?.allowedDays);
+                  const nextValid = getNextAllowedDate(new Date(), q?.allowedDays, q?.maxAdvanceDays);
                   setForm(prev => ({
                     ...prev,
                     leaveType: q.name,
-                    startDate: isDateAllowedByPolicy(prev.startDate, q?.allowedDays) ? prev.startDate : nextValid,
-                    endDate: isDateAllowedByPolicy(prev.endDate, q?.allowedDays) ? prev.endDate : nextValid,
+                    startDate: (isDateAllowedByPolicy(prev.startDate, q?.allowedDays) && isDateWithinAdvanceLimit(prev.startDate, q?.maxAdvanceDays)) ? prev.startDate : nextValid,
+                    endDate: (isDateAllowedByPolicy(prev.endDate, q?.allowedDays) && isDateWithinAdvanceLimit(prev.endDate, q?.maxAdvanceDays)) ? prev.endDate : nextValid,
                   }));
                 }}
                 style={{
@@ -792,7 +833,12 @@ const LeaveScreen = ({ navigation }) => {
               const date = new Date(item.startDate);
               const isMulti = item.duration === 'Multiple Days' || new Date(item.startDate).toLocaleDateString() !== new Date(item.endDate).toLocaleDateString();
               return (
-                <View key={item._id} className="bg-white p-5 rounded-2xl border border-slate-100 mb-3">
+                <TouchableOpacity
+                  key={item._id}
+                  activeOpacity={0.88}
+                  onPress={() => setDetailLeave(item)}
+                  className="bg-white p-5 rounded-2xl border border-slate-100 mb-3"
+                >
                   <View className="flex-row justify-between items-start mb-3">
                     <View className="flex-1">
                       <Text className="text-base font-extrabold text-slate-800">{item.leaveType}</Text>
@@ -814,13 +860,35 @@ const LeaveScreen = ({ navigation }) => {
                       )}
                     </View>
                     <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: statusStyle.bg }}>
-                      <Text style={{ fontSize: 9, fontWeight: 'bold', color: statusStyle.text }}>{item.status.toUpperCase()}</Text>
+                      <Text style={{ fontSize: 9, fontWeight: 'bold', color: statusStyle.text }}>{(item.status || 'Pending').toUpperCase()}</Text>
                     </View>
                   </View>
 
                   {item.reason && (
                     <Text className="text-xs text-slate-500 mb-3">{item.reason}</Text>
                   )}
+
+                  {(() => {
+                    const actorName = item.actionedByName || item.actionedBy?.fullName || item.actionedBy?.name || ((item.status === 'Approved' || item.status === 'Rejected') ? (item.approverId?.fullName || item.approverId?.name) : '');
+                    const isRej = item.status === 'Rejected';
+                    const isApp = item.status === 'Approved';
+                    const decisionNote = isRej ? String(item.rejectionReason || item.adminNote || '').trim() : '';
+                    if (!actorName && !decisionNote) return null;
+                    return (
+                      <View style={{ backgroundColor: isRej ? '#fff1f2' : isApp ? '#ecfdf5' : '#eef2ff', borderColor: isRej ? '#fecdd3' : isApp ? '#a7f3d0' : '#e0e7ff', borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12 }}>
+                        {actorName ? (
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: isRej ? '#be123c' : isApp ? '#047857' : '#4338ca' }}>
+                            {isApp ? 'Approved by: ' : isRej ? 'Rejected by: ' : 'Approver: '}{actorName}
+                          </Text>
+                        ) : null}
+                        {decisionNote ? (
+                          <Text style={{ fontSize: 11, fontWeight: '600', color: '#e11d48', marginTop: actorName ? 2 : 0 }}>
+                            Rejection Reason: {decisionNote}
+                          </Text>
+                        ) : null}
+                      </View>
+                    );
+                  })()}
 
                   <View className="flex-row justify-between items-center pt-3 border-t border-slate-50">
                     <View className="bg-slate-50 px-3 py-1 rounded-lg">
@@ -833,13 +901,13 @@ const LeaveScreen = ({ navigation }) => {
                     {item.status === 'Pending' && (
                       <View className="flex-row gap-2">
                         <TouchableOpacity
-                          onPress={() => handleCancel(item._id)}
+                          onPress={(e) => { e.stopPropagation?.(); handleCancel(item._id); }}
                           className="px-3 py-2 bg-rose-50 rounded-lg border border-rose-100"
                         >
                           <Text className="text-[10px] font-bold text-rose-600">CANCEL</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                          onPress={() => openEditModal(item)}
+                          onPress={(e) => { e.stopPropagation?.(); openEditModal(item); }}
                           className="px-4 py-2 bg-indigo-50 rounded-lg border border-indigo-100"
                         >
                           <Text className="text-[10px] font-bold text-indigo-600">EDIT</Text>
@@ -847,7 +915,7 @@ const LeaveScreen = ({ navigation }) => {
                       </View>
                     )}
                   </View>
-                </View>
+                </TouchableOpacity>
               );
             })
         )}
@@ -877,6 +945,130 @@ const LeaveScreen = ({ navigation }) => {
           </Text>
         </View>
       </ScrollView>
+
+      {/* ─── LEAVE DETAILS MODAL — ALL INLINE STYLES (no className) ─── */}
+      <Modal visible={!!detailLeave && !modalVisible} animationType="fade" transparent onRequestClose={() => setDetailLeave(null)}>
+        <View style={ms.overlay}>
+          <View style={[ms.sheet, { maxHeight: '85%' }]}>
+            <View style={ms.handle} />
+            <View style={[ms.row, { marginBottom: 16 }]}>
+              <Text style={ms.sheetTitle}>Leave Details</Text>
+              <TouchableOpacity onPress={() => setDetailLeave(null)} style={ms.closeBtn}>
+                <X size={18} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+            {detailLeave && (() => {
+              const st = getStatusStyle(detailLeave.status);
+              const dStart = new Date(detailLeave.startDate);
+              const dEnd = new Date(detailLeave.endDate);
+              const isMulti = detailLeave.duration === 'Multiple Days' || dStart.toLocaleDateString() !== dEnd.toLocaleDateString();
+              const daysCount = detailLeave.duration === 'Half Day'
+                ? '0.5'
+                : (detailLeave.durationDays || (Math.ceil((dEnd - dStart) / (1000 * 60 * 60 * 24)) + 1));
+              const actorName =
+                detailLeave.actionedByName ||
+                detailLeave.actionedBy?.fullName ||
+                detailLeave.actionedBy?.name ||
+                detailLeave.approverId?.fullName ||
+                detailLeave.approverId?.name ||
+                (detailLeave.status === 'Pending' ? approverName : '');
+              const rejReason = String(detailLeave.rejectionReason || detailLeave.adminNote || '').trim();
+              return (
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f8fafc', padding: 14, borderRadius: 18, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 16 }}>
+                    <View style={{ flex: 1, paddingRight: 10 }}>
+                      <Text style={{ fontSize: 17, fontWeight: '800', color: '#0f172a' }}>{detailLeave.leaveType}</Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569', marginTop: 3 }}>
+                        {isMulti ? `${dStart.toLocaleDateString()} — ${dEnd.toLocaleDateString()}` : dStart.toLocaleDateString()}
+                      </Text>
+                    </View>
+                    <View style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: st.bg }}>
+                      <Text style={{ fontSize: 11, fontWeight: '800', color: st.text }}>{(detailLeave.status || 'Pending').toUpperCase()}</Text>
+                    </View>
+                  </View>
+
+                  <View style={{ gap: 12, marginBottom: 16 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#94a3b8', letterSpacing: 1 }}>DURATION</Text>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }}>
+                        {detailLeave.duration} ({daysCount} Day{String(daysCount) === '1' ? '' : 's'})
+                      </Text>
+                    </View>
+
+                    {detailLeave.duration === 'Half Day' && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: '#94a3b8', letterSpacing: 1 }}>SESSION TIME</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#4f46e5' }}>
+                          {detailLeave.session ? `${detailLeave.session} (${to12Hour(detailLeave.startTime)} - ${to12Hour(detailLeave.endTime)})` : `${to12Hour(detailLeave.startTime)} - ${to12Hour(detailLeave.endTime)}`}
+                        </Text>
+                      </View>
+                    )}
+
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#94a3b8', letterSpacing: 1 }}>APPLIED ON</Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#334155' }}>
+                        {new Date(detailLeave.createdAt).toLocaleString()}
+                      </Text>
+                    </View>
+
+                    {actorName ? (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: '#94a3b8', letterSpacing: 1 }}>
+                          {detailLeave.status === 'Approved' ? 'APPROVED BY' : detailLeave.status === 'Rejected' ? 'REJECTED BY' : 'REPORTING MANAGER'}
+                        </Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: detailLeave.status === 'Rejected' ? '#be123c' : detailLeave.status === 'Approved' ? '#047857' : '#4f46e5' }}>
+                          {actorName}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+
+                  {detailLeave.reason ? (
+                    <View style={{ backgroundColor: '#f8fafc', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 14 }}>
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: '#94a3b8', letterSpacing: 1.2, marginBottom: 6 }}>LEAVE REASON</Text>
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: '#334155', lineHeight: 19 }}>{detailLeave.reason}</Text>
+                    </View>
+                  ) : null}
+
+                  {detailLeave.status === 'Rejected' && (
+                    <View style={{ backgroundColor: '#fff1f2', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#fecdd3', marginBottom: 14 }}>
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: '#be123c', letterSpacing: 1.2, marginBottom: 6 }}>REJECTION REASON</Text>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#e11d48', lineHeight: 19 }}>
+                        {rejReason || 'No rejection reason provided.'}
+                      </Text>
+                    </View>
+                  )}
+
+                  {detailLeave.status === 'Pending' && (
+                    <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                      <TouchableOpacity
+                        onPress={() => {
+                          const targetId = detailLeave._id;
+                          setDetailLeave(null);
+                          handleCancel(targetId);
+                        }}
+                        style={{ flex: 1, height: 48, borderRadius: 14, backgroundColor: '#fff1f2', borderWidth: 1, borderColor: '#fecdd3', justifyContent: 'center', alignItems: 'center' }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: '#e11d48' }}>Cancel Leave</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => {
+                          const target = detailLeave;
+                          setDetailLeave(null);
+                          openEditModal(target);
+                        }}
+                        style={{ flex: 1, height: 48, borderRadius: 14, backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#c7d2fe', justifyContent: 'center', alignItems: 'center' }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: '#4f46e5' }}>Edit Leave</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </ScrollView>
+              );
+            })()}
+          </View>
+        </View>
+      </Modal>
 
       {/* ─── APPLY LEAVE MODAL — ALL INLINE STYLES (no className) ─── */}
       <Modal visible={modalVisible} animationType="slide" transparent>
@@ -934,12 +1126,12 @@ const LeaveScreen = ({ navigation }) => {
                     key={q.name}
                     style={[ms.typeBtn, { minWidth: 100 }, form.leaveType === q.name ? ms.typeBtnActive : ms.typeBtnIdle]}
                     onPress={() => {
-                      const nextValid = getNextAllowedDate(new Date(), q?.allowedDays);
+                      const nextValid = getNextAllowedDate(new Date(), q?.allowedDays, q?.maxAdvanceDays);
                   setForm(prev => ({
                     ...prev,
                     leaveType: q.name,
-                    startDate: isDateAllowedByPolicy(prev.startDate, q?.allowedDays) ? prev.startDate : nextValid,
-                    endDate: isDateAllowedByPolicy(prev.endDate, q?.allowedDays) ? prev.endDate : nextValid,
+                    startDate: (isDateAllowedByPolicy(prev.startDate, q?.allowedDays) && isDateWithinAdvanceLimit(prev.startDate, q?.maxAdvanceDays)) ? prev.startDate : nextValid,
+                    endDate: (isDateAllowedByPolicy(prev.endDate, q?.allowedDays) && isDateWithinAdvanceLimit(prev.endDate, q?.maxAdvanceDays)) ? prev.endDate : nextValid,
                   }));
                       setSelectedQuota(q);
                       setBalance({
@@ -1000,11 +1192,15 @@ const LeaveScreen = ({ navigation }) => {
                 <Text style={ms.label}>{form.duration === 'Multiple Days' ? 'START DATE' : 'DATE'}</Text>
                 {(() => {
                   const ad = Array.isArray(selectedQuota?.allowedDays) ? selectedQuota.allowedDays.filter(d => d && d !== 'All') : [];
-                  if (ad.length > 0 && ad.length < 7) {
+                  const maxAdv = Number(selectedQuota?.maxAdvanceDays) || 0;
+                  const parts = [];
+                  if (ad.length > 0 && ad.length < 7) parts.push(`Only on ${ad.join(', ')}`);
+                  if (maxAdv > 0) parts.push(`Max ${maxAdv} days window`);
+                  if (parts.length > 0) {
                     return (
                       <View style={{ backgroundColor: '#eef2ff', borderColor: '#c7d2fe', borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, marginBottom: 10 }}>
                         <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#4f46e5' }}>
-                          Policy Rule: Only applicable on {ad.join(', ')}
+                          Policy Rule: {parts.join(' • ')}
                         </Text>
                       </View>
                     );
@@ -1218,6 +1414,8 @@ const LeaveScreen = ({ navigation }) => {
           const minDate = showEndPicker && form.startDate
             ? new Date(form.startDate.getFullYear(), form.startDate.getMonth(), form.startDate.getDate())
             : todayStart;
+          const maxAdvanceDays = Number(activeQuota?.maxAdvanceDays) || 0;
+          const maxDate = getMaxAllowedDate(maxAdvanceDays);
 
           const activeDayName = activeDate instanceof Date && !isNaN(activeDate)
             ? DAY_NAMES[activeDate.getDay()].slice(0, 3).toUpperCase()
@@ -1242,16 +1440,19 @@ const LeaveScreen = ({ navigation }) => {
                       <X size={16} color="#fff" />
                     </TouchableOpacity>
                   </View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, flexWrap: 'wrap', gap: 6 }}>
                     <Text style={{ fontSize: 20, fontWeight: '800', color: '#fff' }}>
                       {activeDate instanceof Date && !isNaN(activeDate)
                         ? `${activeDayName}, ${activeMonthShort} ${activeDate.getDate()}, ${activeDate.getFullYear()}`
                         : 'Choose a date'}
                     </Text>
-                    {hasDayRestriction && (
+                    {(hasDayRestriction || maxAdvanceDays > 0) && (
                       <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 }}>
                         <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#fff' }}>
-                          {rawAllowedDays.map(d => d.slice(0, 3)).join(', ')} Only
+                          {[
+                            hasDayRestriction ? `${rawAllowedDays.map(d => d.slice(0, 3)).join(', ')} Only` : null,
+                            maxAdvanceDays > 0 ? `Max ${maxAdvanceDays}d` : null,
+                          ].filter(Boolean).join(' • ')}
                         </Text>
                       </View>
                     )}
@@ -1332,7 +1533,8 @@ const LeaveScreen = ({ navigation }) => {
                         const cellDate = new Date(viewYear, viewMonth, dayNum);
                         const isAllowedWeekday = !allowedDayIndices || allowedDayIndices.has(cellDate.getDay());
                         const isPast = cellDate < minDate;
-                        const isDisabled = isPast || !isAllowedWeekday;
+                        const isBeyondMax = maxDate ? cellDate > maxDate : false;
+                        const isDisabled = isPast || isBeyondMax || !isAllowedWeekday;
                         const isToday =
                           todayStart.getFullYear() === viewYear &&
                           todayStart.getMonth() === viewMonth &&
@@ -1605,7 +1807,8 @@ const LeaveScreen = ({ navigation }) => {
           <DateTimePicker
             value={form.startDate}
             mode="date"
-            onChange={(e, date) => {
+            onDismiss={() => setShowStartPicker(false)}
+            onValueChange={(e, date) => {
               setShowStartPicker(false);
               if (date) {
                 setForm(prev => ({
@@ -1621,7 +1824,8 @@ const LeaveScreen = ({ navigation }) => {
           <DateTimePicker
             value={form.endDate}
             mode="date"
-            onChange={(e, date) => {
+            onDismiss={() => setShowEndPicker(false)}
+            onValueChange={(e, date) => {
               setShowEndPicker(false);
               if (date) {
                 setForm(prev => ({

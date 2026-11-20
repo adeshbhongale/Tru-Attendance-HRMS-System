@@ -1,0 +1,69 @@
+# EAS Build ignore file (.easignore)
+# Mirrors .gitignore EXCEPT allows google-services.json and GoogleService-Info.plist
+# to be uploaded to the isolated EAS Build worker without committing them to Git.
+
+# dependencies
+node_modules/
+**/node_modules/
+
+# Non-mobile monorepo folders (keeps EAS archive fast and clean)
+backend/
+admin-panel/
+.kilo/
+
+# Expo
+.expo/
+**/.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+**/.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files (EAS uses eas.json env profiles in cloud builds)
+.env*.local
+**/.env*.local
+.env
+**/.env
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders & build artifacts (works from both repo root and mobile-app/)
+/ios
+mobile-app/ios/
+android/.gradle/
+**/android/.gradle/
+android/build/
+**/android/build/
+android/app/build/
+**/android/app/build/
+android/.cxx/
+**/android/.cxx/
+android/app/.cxx/
+**/android/app/.cxx/
+android/local.properties
+**/android/local.properties
+*.keystore
+!android/app/debug.keystore
+!**/android/app/debug.keystore

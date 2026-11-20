@@ -14,7 +14,7 @@ const { ensureExpenseMasters, ensureEntitlementIndexes } = require('../services/
 const { getActivePolicy, resolveCityClass, getExpenseTypes } = require('../services/policyEngine');
 
 const access = require('../services/expenseAccess');
-const { parseRelativeStayPercent } = require('../services/claimRules');
+const { parseRelativeStayPercent, resolvePolicyConfig } = require('../services/claimRules');
 
 // Trusted company: tenant middleware value (only global users may pick another company).
 const resolveTenantCompanyId = async (req) => {
@@ -41,10 +41,23 @@ const num = (v, min, max, d) => {
 };
 
 /** Whitelisted + range-checked Super Admin claim settings. */
-function sanitizePolicyRules(body) {
+function sanitizePolicyRules(body, existingClaimRules = null, isSuperAdmin = false) {
   const out = {};
   if (body.claimRules && typeof body.claimRules === 'object') {
     const c = body.claimRules;
+    const prev = existingClaimRules || {};
+    let normalClaimMaxPastDays = prev.normalClaimMaxPastDays !== undefined ? prev.normalClaimMaxPastDays : 2;
+    if (c.normalClaimMaxPastDays === null || c.normalClaimMaxPastDays === '') {
+      normalClaimMaxPastDays = null;
+    } else if (c.normalClaimMaxPastDays !== undefined) {
+      const parsed = Number(c.normalClaimMaxPastDays);
+      if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 365) {
+        normalClaimMaxPastDays = parsed;
+      }
+    }
+    const claimsEnabled = isSuperAdmin && c.claimsEnabled !== undefined
+      ? Boolean(c.claimsEnabled)
+      : (prev.claimsEnabled !== false);
     out.claimRules = {
       remarkMinLength: num(c.remarkMinLength, 0, 200, 5),
       remarkMaxLength: num(c.remarkMaxLength, 20, 2000, 500),
@@ -52,6 +65,8 @@ function sanitizePolicyRules(body) {
       allowFutureDates: !!c.allowFutureDates,
       maxLodgingNights: num(c.maxLodgingNights, 1, 365, 30),
       deadlineOverrideAllowed: c.deadlineOverrideAllowed !== false,
+      claimsEnabled,
+      normalClaimMaxPastDays,
     };
   }
   if (body.receiptRules && typeof body.receiptRules === 'object') {
@@ -358,6 +373,7 @@ exports.getActivePolicy = async (req, res) => {
     const policy = await getActivePolicy(companyId) || await ensureExpenseMasters(companyId);
     if (!policy) return res.status(404).json({ success: false, message: 'No active policy configured.' });
     const polObj = policy.toObject ? policy.toObject() : { ...policy };
+    polObj.claimRules = resolvePolicyConfig(polObj).claimRules;
     try {
       const uid = req.user?._id || req.user?.id;
       let effectiveUser = req.user;
@@ -376,6 +392,112 @@ exports.getActivePolicy = async (req, res) => {
       // Non-fatal
     }
     res.json({ success: true, data: polObj });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /api/expense/claim-control
+ * Returns Super Admin claim application toggle (ON/OFF) and Normal Claim max past days limit.
+ */
+exports.getClaimControl = async (req, res) => {
+  try {
+    const companyId = await resolveTenantCompanyId(req);
+    if (!companyId) return res.status(400).json({ success: false, message: 'Company context missing.' });
+    const policy = (await getActivePolicy(companyId)) || (await ensureExpenseMasters(companyId));
+    const resolved = resolvePolicyConfig(policy).claimRules;
+    res.json({
+      success: true,
+      companyId: String(companyId),
+      data: {
+        claimsEnabled: resolved.claimsEnabled !== false,
+        normalClaimMaxPastDays: resolved.normalClaimMaxPastDays,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * PUT /api/expense/claim-control (Super Admin ONLY)
+ * Body: { claimsEnabled?: boolean, normalClaimMaxPastDays?: number | null | '' }
+ */
+exports.updateClaimControl = async (req, res) => {
+  try {
+    if (!access.isSuperAdmin(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only Super Admin can update claim controls.' });
+    }
+    const companyId = await resolveTenantCompanyId(req);
+    if (!companyId) return res.status(422).json({ success: false, message: 'Please select a company.' });
+    await ensureExpenseMasters(companyId);
+
+    const policy =
+      (await ExpensePolicy.findOne({ companyId, status: 'active' }).sort({ effectiveFrom: -1, createdAt: -1 })) ||
+      (await ExpensePolicy.findOne({ companyId }).sort({ createdAt: -1 }));
+    if (!policy) return res.status(404).json({ success: false, message: 'No expense policy found for this company.' });
+
+    const current = resolvePolicyConfig(policy).claimRules;
+    let nextEnabled = current.claimsEnabled !== false;
+    let nextMaxPastDays = current.normalClaimMaxPastDays;
+
+    if (req.body?.claimsEnabled !== undefined) {
+      if (typeof req.body.claimsEnabled !== 'boolean') {
+        return res.status(400).json({ success: false, message: 'claimsEnabled must be true or false.' });
+      }
+      nextEnabled = req.body.claimsEnabled;
+    }
+
+    if (req.body?.normalClaimMaxPastDays !== undefined) {
+      const raw = req.body.normalClaimMaxPastDays;
+      if (raw === null || raw === '') {
+        nextMaxPastDays = null;
+      } else {
+        const strVal = String(raw).trim();
+        if (!/^\d+$/.test(strVal)) {
+          return res.status(400).json({ success: false, message: 'Normal claim date limit must be a whole number of days (0 to 365) or left blank for no limit.' });
+        }
+        const parsed = Number(strVal);
+        if (!Number.isInteger(parsed) || parsed < 0 || parsed > 365) {
+          return res.status(400).json({ success: false, message: 'Normal claim date limit must be between 0 and 365 days.' });
+        }
+        nextMaxPastDays = parsed;
+      }
+    }
+
+    const before = {
+      claimsEnabled: current.claimsEnabled !== false,
+      normalClaimMaxPastDays: current.normalClaimMaxPastDays,
+    };
+
+    policy.claimRules = {
+      ...current,
+      claimsEnabled: nextEnabled,
+      normalClaimMaxPastDays: nextMaxPastDays,
+    };
+    policy.markModified('claimRules');
+    await policy.save();
+
+    await access.audit({
+      req,
+      action: 'CLAIM_CONTROL_UPDATED',
+      entity: 'ExpensePolicy',
+      entityId: String(policy._id),
+      claim: { companyId },
+      description: `Super Admin updated claim controls: Claims ${nextEnabled ? 'ON' : 'OFF'}, Normal claim date limit ${nextMaxPastDays === null ? 'No limit' : `${nextMaxPastDays} day(s)`}.`,
+      before,
+      after: { claimsEnabled: nextEnabled, normalClaimMaxPastDays: nextMaxPastDays },
+    });
+
+    res.json({
+      success: true,
+      companyId: String(companyId),
+      data: {
+        claimsEnabled: nextEnabled,
+        normalClaimMaxPastDays: nextMaxPastDays,
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -427,7 +549,7 @@ exports.createPolicy = async (req, res) => {
       localTravelFoodAllowed: body.localTravelFoodAllowed,
       deadlineRules: body.deadlineRules || [],
       sharedLodgingConfig: body.sharedLodgingConfig,
-      ...sanitizePolicyRules(body),
+      ...sanitizePolicyRules(body, null, access.isSuperAdmin(req.user)),
       createdBy: req.user?._id || null,
     });
     if (body.payLimitConfig || body.cfoApprovalConfig) {
@@ -455,7 +577,7 @@ exports.updatePolicy = async (req, res) => {
     allowed.forEach(k => {
       if (req.body[k] !== undefined) policy[k] = req.body[k];
     });
-    Object.assign(policy, sanitizePolicyRules(req.body || {}));
+    Object.assign(policy, sanitizePolicyRules(req.body || {}, policy.claimRules, access.isSuperAdmin(req.user)));
     // Lodging Policy — Stay with Relative (strictly validated, never clamped)
     let relativeStayChange = null;
     if (req.body.relativeStayPercent !== undefined) {

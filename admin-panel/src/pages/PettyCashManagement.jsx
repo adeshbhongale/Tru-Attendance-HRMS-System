@@ -25,6 +25,7 @@ import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
+import ClaimSubmissionControl from '../components/expense/ClaimSubmissionControl';
 
 const fmtINR = (n) => {
   const v = Number(n) || 0;
@@ -622,6 +623,9 @@ const PettyCashManagement = () => {
           </button>
         </div>
       </div>
+
+      {/* Super Admin Only: Claims ON/OFF switch & Normal Claim Date Limit */}
+      <ClaimSubmissionControl />
 
       {/* KPI Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">

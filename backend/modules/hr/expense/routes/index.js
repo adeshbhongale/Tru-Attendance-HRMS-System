@@ -48,6 +48,9 @@ router.get('/employees', master.employeeOptions);
 
 // Mobile form configuration (types per mode, receipt / remark / full-payment limits)
 router.get('/claim-config', claim.getClaimConfig);
+// Super Admin claim submission switch (ON/OFF) & normal claim max past-day limit
+router.get('/claim-control', master.getClaimControl);
+router.put('/claim-control', master.updateClaimControl);
 // Travel modes + subtypes with the employee's Level Entitlement for each (all modes visible to all)
 router.get('/travel-config', claim.getTravelConfig);
 

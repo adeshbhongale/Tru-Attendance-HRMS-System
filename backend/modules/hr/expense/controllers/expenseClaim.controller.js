@@ -5,7 +5,7 @@ const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpenseEntitlement = require('../models/ExpenseEntitlement');
 const TravelMode = require('../models/TravelMode');
 const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
-const { getExpenseTypes, resolveCityClass, getEntitlements, findEntitlement, getEmployeeLevelNumber, getEmployeeGradeCode } = require('../services/policyEngine');
+const { getActivePolicy, getExpenseTypes, resolveCityClass, getEntitlements, findEntitlement, getEmployeeLevelNumber, getEmployeeGradeCode } = require('../services/policyEngine');
 const { round2 } = require('../services/calculationEngine');
 const rules = require('../services/claimRules');
 const food = require('../services/foodEntitlementService');
@@ -36,6 +36,16 @@ const { generateClaimPdf } = require('../services/claimPdfGenerator');
  */
 
 const LEGACY_MESSAGE = 'This app version uses the old expense form. Please update the app to submit expense claims.';
+const CLAIMS_DISABLED_MESSAGE = 'Expense claim applications are currently turned off by Super Admin. Please try again later.';
+
+async function assertClaimsEnabled(companyId) {
+  if (!companyId) return null;
+  const active = await getActivePolicy(companyId);
+  if (active?.claimRules?.claimsEnabled === false) {
+    return CLAIMS_DISABLED_MESSAGE;
+  }
+  return null;
+}
 
 const fail = (res, status, message, errors = [], extra = {}) =>
   res.status(status).json({ success: false, message, errors, ...extra });
@@ -222,6 +232,9 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId, ex
     }
   }
 
+  const currentActivePolicy = await getActivePolicy(companyId);
+  const currentActiveConfig = rules.resolvePolicyConfig(currentActivePolicy || policy);
+  const configuredMaxPastDaysNormal = currentActiveConfig.claimRules.normalClaimMaxPastDays;
   const parsedExistingDate = existingClaimDate ? rules.parseDateOnly(existingClaimDate) : null;
   const skipNormalPastLimit = Boolean(
     parsedExistingDate &&
@@ -235,7 +248,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId, ex
     isDraft: !submit,
     isManagement: isMgmt,
     user: effectiveActorUser,
-    maxPastDaysNormal: skipNormalPastLimit ? null : 2,
+    maxPastDaysNormal: skipNormalPastLimit ? null : configuredMaxPastDaysNormal,
   });
   errors.push(...(submit ? travelErrors : travelErrors.filter((e) => !e.required)));
 
@@ -1261,6 +1274,8 @@ exports.createClaim = async (req, res) => {
     if (isLegacyPayload(req.body)) return fail(res, 426, LEGACY_MESSAGE);
     const companyId = await companyFor(req);
     if (!companyId) return fail(res, 400, 'Company context missing.');
+    const claimsDisabledMsg = await assertClaimsEnabled(companyId);
+    if (claimsDisabledMsg) return fail(res, 403, claimsDisabledMsg, [{ field: 'claimsEnabled', code: 'CLAIMS_DISABLED', message: claimsDisabledMsg }]);
     const input = rules.normalizeInput(req.body);
     const submit = req.body.submit === true || req.body.submit === 'true';
 
@@ -1359,6 +1374,8 @@ exports.updateClaim = async (req, res) => {
     }
 
     const companyId = String(claim.companyId);
+    const claimsDisabledMsg = await assertClaimsEnabled(companyId);
+    if (claimsDisabledMsg) return fail(res, 403, claimsDisabledMsg, [{ field: 'claimsEnabled', code: 'CLAIMS_DISABLED', message: claimsDisabledMsg }]);
     const input = rules.normalizeInput(req.body);
     const wasAlreadySubmitted = access.businessStatus(claim) === 'PENDING';
     const wasRejected = access.businessStatus(claim) === 'REJECTED';
@@ -1447,6 +1464,8 @@ exports.submitClaim = async (req, res) => {
     const bs = access.businessStatus(claim);
     if (bs === 'PENDING') return res.json({ success: true, duplicate: true, data: withComputed(req, claim) });
     if (bs !== 'DRAFT' && bs !== 'REJECTED') return fail(res, 409, `Claim is already ${bs === 'PAID' ? 'Paid' : 'Processed'}.`);
+    const claimsDisabledMsg = await assertClaimsEnabled(String(claim.companyId));
+    if (claimsDisabledMsg) return fail(res, 403, claimsDisabledMsg, [{ field: 'claimsEnabled', code: 'CLAIMS_DISABLED', message: claimsDisabledMsg }]);
 
     const wasRejected = bs === 'REJECTED';
     const isLegacyClaim = !claim.claimDate && !claim.fromDate;

@@ -30,6 +30,7 @@ import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
 import api from '../api/axios';
 import FinanceHeadPanel from '../components/expense/FinanceHeadPanel';
+import ClaimSubmissionControl from '../components/expense/ClaimSubmissionControl';
 
 const CITY_CLASSES = ['A+', 'A', 'B', 'C'];
 const CITY_CLASS_PRIORITY = { 'A+': 1, 'A': 2, 'B': 3, 'C': 4 };
@@ -1895,6 +1896,13 @@ const ExpenseManagement = () => {
             loadPolicies(cfg);
             loadTypes(cfg);
           }}
+        />
+
+        {/* Super Admin Only: Claims ON/OFF switch & Normal Claim Date Limit */}
+        <ClaimSubmissionControl
+          reqConfig={getReqConfig(effectiveCompanyId)}
+          companyId={effectiveCompanyId}
+          onUpdated={() => loadPolicies(getReqConfig(effectiveCompanyId))}
         />
 
 

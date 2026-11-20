@@ -2988,6 +2988,23 @@ test('Normal claim 2-day past limit allows previous 2 days only; Lodging claim a
 
   // Lodging form is never restricted by the 2-day past limit
   assert.deepEqual(validate(lodgingBody({ fromDate: '2026-01-10', toDate: '2026-01-13' }), { maxPastDaysNormal: 2 }), []);
+
+  // Configurable limits: 0 = today only, 5 = previous 5 days, null = unlimited
+  assert.deepEqual(validate(normalBody({ claimDate: '2026-10-08' }), { maxPastDaysNormal: 0 }), []);
+  assert.ok(codes(validate(normalBody({ claimDate: '2026-10-07' }), { maxPastDaysNormal: 0 })).includes('PAST_DATE_LIMIT_EXCEEDED'));
+  assert.deepEqual(validate(normalBody({ claimDate: '2026-10-03' }), { maxPastDaysNormal: 5 }), []);
+  assert.ok(codes(validate(normalBody({ claimDate: '2026-10-02' }), { maxPastDaysNormal: 5 })).includes('PAST_DATE_LIMIT_EXCEEDED'));
+  assert.deepEqual(validate(normalBody({ claimDate: '2026-01-10' }), { maxPastDaysNormal: null }), []);
+
+  // resolvePolicyConfig defaults & overrides for claimsEnabled + normalClaimMaxPastDays
+  const defCfg = rules.resolvePolicyConfig({});
+  assert.equal(defCfg.claimRules.claimsEnabled, true);
+  assert.equal(defCfg.claimRules.normalClaimMaxPastDays, 2);
+  const offCfg = rules.resolvePolicyConfig({ claimRules: { claimsEnabled: false, normalClaimMaxPastDays: null } });
+  assert.equal(offCfg.claimRules.claimsEnabled, false);
+  assert.equal(offCfg.claimRules.normalClaimMaxPastDays, null);
+  const zeroCfg = rules.resolvePolicyConfig({ claimRules: { normalClaimMaxPastDays: 0 } });
+  assert.equal(zeroCfg.claimRules.normalClaimMaxPastDays, 0);
 });
 
 test('Shared daily Food entitlement across separate same-day claims: 3 engineers (₹1500 combined) claim ₹300, then 1 engineer claims ₹100 separately', async () => {

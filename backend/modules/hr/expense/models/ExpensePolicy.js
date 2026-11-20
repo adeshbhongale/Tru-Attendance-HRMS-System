@@ -109,6 +109,10 @@ const ExpensePolicySchema = new mongoose.Schema({
     maxLodgingNights: { type: Number, default: 30 },
     // Super Admin may file/submit after a blocking deadline has passed
     deadlineOverrideAllowed: { type: Boolean, default: true },
+    // Super Admin switch to turn employee claim applications ON or OFF
+    claimsEnabled: { type: Boolean, default: true },
+    // Max past days allowed for Normal claim date (default 2 = today + previous 2 days; null = no limit)
+    normalClaimMaxPastDays: { type: Number, default: 2, min: 0, max: 365 },
   },
 
   // Bills / receipt proof rules

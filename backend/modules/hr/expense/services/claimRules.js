@@ -37,6 +37,8 @@ const DEFAULT_CLAIM_RULES = {
   allowFutureDates: false,
   maxLodgingNights: 30,
   deadlineOverrideAllowed: true,
+  claimsEnabled: true,
+  normalClaimMaxPastDays: 2,
 };
 const DEFAULT_RECEIPT_RULES = {
   required: true,
@@ -307,6 +309,15 @@ function resolvePolicyConfig(policy) {
   const claimRules = { ...DEFAULT_CLAIM_RULES, ...clean(p.claimRules) };
   if (!claimRules.remarkMaxLength || claimRules.remarkMaxLength < 500) {
     claimRules.remarkMaxLength = 500;
+  }
+  claimRules.claimsEnabled = p.claimRules?.claimsEnabled !== false;
+  const rawMaxPast = p.claimRules?.normalClaimMaxPastDays;
+  if (rawMaxPast === null) {
+    claimRules.normalClaimMaxPastDays = null;
+  } else if (rawMaxPast !== undefined && rawMaxPast !== '' && Number.isInteger(Number(rawMaxPast)) && Number(rawMaxPast) >= 0) {
+    claimRules.normalClaimMaxPastDays = Math.min(365, Number(rawMaxPast));
+  } else {
+    claimRules.normalClaimMaxPastDays = DEFAULT_CLAIM_RULES.normalClaimMaxPastDays;
   }
   return {
     claimRules,
@@ -708,7 +719,10 @@ function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = 
     } else if (!claimRules.allowFutureDates && input.claimDate > today) {
       add('claimDate', 'FUTURE_DATE', 'Claim date cannot be in the future.');
     } else if (Number.isInteger(maxPastDaysNormal) && maxPastDaysNormal >= 0 && input.claimDate < addDays(today, -maxPastDaysNormal)) {
-      add('claimDate', 'PAST_DATE_LIMIT_EXCEEDED', `For a normal claim, you can only select a date within the previous ${maxPastDaysNormal} days.`);
+      const msg = maxPastDaysNormal === 0
+        ? "For a normal claim, you can only select today's date."
+        : `For a normal claim, you can only select a date within the previous ${maxPastDaysNormal} day${maxPastDaysNormal === 1 ? '' : 's'}.`;
+      add('claimDate', 'PAST_DATE_LIMIT_EXCEEDED', msg);
     }
   }
   if (input.claimMode === 'LODGING') {

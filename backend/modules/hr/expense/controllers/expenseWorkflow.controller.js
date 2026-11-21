@@ -9,7 +9,7 @@ const CityClassification = require('../models/CityClassification');
 const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
 const access = require('../services/expenseAccess');
 const { computePayable, formatINR, approvalKindFor } = require('../services/claimRules');
-const { round2 } = require('../services/calculationEngine');
+const { round2, roundRupee } = require('../services/calculationEngine');
 const pettyCash = require('../services/pettyCashService');
 
 /**
@@ -171,7 +171,7 @@ exports.accountsApproveClaim = async (req, res) => {
     const approvedByName = req.user.name || '';
     const isApprovalPending = claim.status === 'APPROVAL_PENDING';
 
-    const payable = round2(
+    const payable = roundRupee(
       claim.payableAmount > 0
         ? claim.payableAmount
         : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0)
@@ -181,6 +181,7 @@ exports.accountsApproveClaim = async (req, res) => {
       status: 'ACCOUNTS_APPROVED',
       approvalStatus: 'APPROVED',
       paymentStatus: 'AWAITING_DISBURSEMENT',
+      payableAmount: payable,
       accountsRemarks: remarks,
       accountsApproval: {
         status: 'APPROVED',
@@ -206,7 +207,7 @@ exports.accountsApproveClaim = async (req, res) => {
         delete updateSet['managerApproval.remarks'];
       }
       if (claim.fullPayment?.requested) {
-        const fullPayable = round2(claim.grandRequested || payable);
+        const fullPayable = roundRupee(claim.grandRequested || payable);
         updateSet['fullPayment.status'] = 'APPROVED';
         updateSet['fullPayment.approvedAmount'] = fullPayable;
         updateSet['fullPayment.decidedBy'] = req.user._id;
@@ -278,20 +279,20 @@ exports.markPaid = async (req, res) => {
     const paymentDate = parsePaymentDate(body.paymentDate);
     if (!paymentDate) return fail(res, 422, 'Please select a valid payment date (cannot be in the future).');
 
-    const payable = round2(claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0));
-    let paidAmount = payable > 0 ? payable : round2(claim.grandRequested || claim.grandAllowed || 0);
+    const payable = roundRupee(claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0));
+    let paidAmount = payable > 0 ? payable : roundRupee(claim.grandRequested || claim.grandAllowed || 0);
     if (body.paidAmount !== undefined && body.paidAmount !== null && body.paidAmount !== '') {
-      const parsed = round2(Number(body.paidAmount));
+      const parsed = roundRupee(Number(body.paidAmount));
       if (Number.isFinite(parsed) && parsed > 0) {
         paidAmount = parsed;
       }
     }
     if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
-      paidAmount = round2(claim.grandRequested || claim.payableAmount || claim.grandAllowed || 0);
+      paidAmount = roundRupee(claim.grandRequested || claim.payableAmount || claim.grandAllowed || 0);
     }
     if (paidAmount <= 0) return fail(res, 422, 'Paid amount must be greater than zero.');
-    if (claim.grandRequested > 0 && paidAmount > round2(claim.grandRequested) + 0.01 && paidAmount > round2(payable) + 0.01) {
-      return fail(res, 422, `Paid amount cannot exceed the claimed amount (${formatINR(claim.grandRequested)}).`);
+    if (claim.grandRequested > 0 && paidAmount > roundRupee(claim.grandRequested) && paidAmount > payable) {
+      return fail(res, 422, `Paid amount cannot exceed the claimed amount (${formatINR(roundRupee(claim.grandRequested))}).`);
     }
     const paymentMethod = str(body.paymentMethod || 'Bank Transfer', 60);
     const reference = str(body.paymentReference || body.utr, 100);
@@ -690,8 +691,8 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
       const bs = access.businessStatus(claim);
       const reqAmt = claim.grandRequested || 0;
       const allowedAmt = claim.grandAllowed || 0;
-      const payable = claim.payableAmount || allowedAmt;
-      const paidAmt = bs === 'PAID' ? (claim.paidAmount || claim.disbursement?.amount || payable) : 0;
+      const payable = roundRupee(claim.payableAmount || allowedAmt);
+      const paidAmt = bs === 'PAID' ? roundRupee(claim.paidAmount || claim.disbursement?.amount || payable) : 0;
       const excessAmt = bs === 'PAID' ? Math.max(0, reqAmt - paidAmt) : (claim.grandExcess || Math.max(0, reqAmt - allowedAmt));
 
       totals.submitted.amount += reqAmt; totals.submitted.count += 1;
@@ -738,7 +739,7 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
           };
         }
         const share = allowedAmt > 0 ? ecAllowed / allowedAmt : (isSubmitter ? 1 : 0);
-        addTo(employeeMap[empId], bs, { req: ecReq, pendingAmt: ecAllowed, paidAmt: round2(paidAmt * share), excess: ecExcess });
+        addTo(employeeMap[empId], bs, { req: ecReq, pendingAmt: roundRupee(ecAllowed), paidAmt: roundRupee(paidAmt * share), excess: ecExcess });
       });
 
       const projectName = claim.trip?.purpose || claim.trip?.customerName || claim.claimType || 'General Expenses';
@@ -750,20 +751,21 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
       ...r,
       totalSubmitted: round2(r.totalSubmitted),
       advanceAmount: round2(r.advanceAmount),
-      pending: round2(r.pending),
-      paid: round2(r.paid),
+      pending: roundRupee(r.pending),
+      paid: roundRupee(r.paid),
       rejected: round2(r.rejected),
       excessAmount: round2(r.excessAmount),
     });
     const money = (o) => ({ amount: round2(o.amount), count: o.count });
+    const moneyRupee = (o) => ({ amount: roundRupee(o.amount), count: o.count });
 
     res.json({
       success: true,
       data: {
         summary: {
           totalSubmitted: money(totals.submitted),
-          pending: money(totals.pending),
-          paid: money(totals.paid),
+          pending: moneyRupee(totals.pending),
+          paid: moneyRupee(totals.paid),
           rejected: money(totals.rejected),
           excess: { amount: round2(totals.excess) },
         },
@@ -1197,7 +1199,7 @@ function normalizeClaimForReport(c) {
   const claimed = c.grandRequested || 0;
   const allowed = c.grandAllowed !== undefined && c.grandAllowed !== null ? c.grandAllowed : 0;
   const excess = c.grandExcess !== undefined && c.grandExcess !== null ? c.grandExcess : Math.max(0, claimed - allowed);
-  const payable = c.payableAmount || computePayable(c) || allowed;
+  const payable = roundRupee(c.payableAmount || computePayable(c) || allowed);
   const breakdown = computeCategoryBreakdown(c);
   const resolvedType = resolveClaimTypeInfo(c);
   const lastRejection = [...(c.approvalHistory || [])].reverse().find((h) => h.action === 'rejected');
@@ -1240,7 +1242,7 @@ function normalizeClaimForReport(c) {
     allowedAmount: allowed,
     excessAmount: excess,
     payableAmount: payable,
-    paidAmount: bs === 'PAID' ? (c.paidAmount || c.disbursement?.amount || 0) : 0,
+    paidAmount: bs === 'PAID' ? roundRupee(c.paidAmount || c.disbursement?.amount || 0) : 0,
     paymentDate: bs === 'PAID' ? (c.disbursedAt || c.disbursement?.paymentDate || null) : null,
     paymentMethod: bs === 'PAID' ? (c.disbursement?.paymentMethod || c.paymentMethod || '') : '',
     paymentReference: bs === 'PAID' ? (c.disbursement?.paymentReference || c.utr || '') : '',
@@ -1347,7 +1349,7 @@ async function summarize(filter) {
     totalPendingApprovalAmount: round2(s.totalPendingApprovalAmount || 0),
     totalApprovedAmount: round2(s.totalApprovedAmount || 0),
     paidClaims: s.paidClaims || 0,
-    totalPaidAmount: round2(s.totalPaidAmount || 0),
+    totalPaidAmount: roundRupee(s.totalPaidAmount || 0),
     totalPaidClaimedAmount: round2(s.totalPaidClaimedAmount || 0),
     rejectedClaims: s.rejectedClaims || 0,
     totalRejectedAmount: round2(s.totalRejectedAmount || 0),
@@ -1527,7 +1529,7 @@ const CSV_COLUMNS = [
   ['Claimed', (c) => c.claimedAmount ?? 0],
   ['Allowed', (c) => c.allowedAmount ?? 0],
   ['Excess', (c) => c.excessAmount ?? 0],
-  ['Paid Amount', (c) => (c.status === 'PAID' ? (c.paidAmount ?? 0) : 0)],
+  ['Paid Amount', (c) => (c.status === 'PAID' ? roundRupee(c.paidAmount ?? 0) : 0)],
   ['Status', (c) => c.statusLabel || c.status || ''],
   ['Lodging', (c) => c.lodging ?? 0],
   ['Food', (c) => c.food ?? 0],

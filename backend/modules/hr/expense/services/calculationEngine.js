@@ -9,6 +9,13 @@ function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+/** Round claim payment / payable rupee values to whole integers (>= .5 rounds up, < .5 rounds down). */
+function roundRupee(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.floor(num + 0.5 + 1e-9);
+}
+
 /**
  * Calculate allowed/excess for a single item. Returns an auditable object.
  */
@@ -431,4 +438,5 @@ async function calculateItem({
 module.exports = {
   calculateItem,
   round2,
+  roundRupee,
 };

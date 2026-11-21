@@ -46,6 +46,11 @@ import api from '../api/axios';
 import ExpenseClaimDetailContent from '../components/ExpenseClaimDetailContent';
 import SearchableDropdown from '../components/SearchableDropdown';
 const normStr = (v) => String(v || '').trim().toLowerCase();
+const roundRupee = (n) => {
+  const num = Number(n);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.floor(num + 0.5 + 1e-9);
+};
 const MANAGEMENT_ROLES = [
   'management', 'company_admin', 'companyadmin', 'admin',
   'super_admin', 'superadmin', 'tcca1', 'tcsa1', 'tcmgt',
@@ -376,6 +381,7 @@ const PendingApprovals = () => {
   // Active Category Tab - Store & Material tab is visible to Super Admin, Company Admin, and Store Admin
   const canViewStoreTab = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
   const canViewExpenseTab = isSuperAdmin || isCompanyAdmin || isAccountAdmin;
+  const canViewRmPendingTab = isSuperAdmin || isCompanyAdmin;
   const canViewExpenseHistoryTab = isSuperAdmin || isCompanyAdmin || isAccountAdmin;
   const defaultTab = canViewStoreTab ? (isStoreAdmin ? 'store' : 'all') : canViewExpenseTab ? 'expense_claims' : 'all';
   const [searchParams] = useSearchParams();
@@ -386,6 +392,9 @@ const PendingApprovals = () => {
 
   const normalizeTab = (t) => {
     if (!t) return defaultTab;
+    if (['rm_pending_claims', 'reporting_manager_pending', 'rm_pending'].includes(t)) {
+      return canViewRmPendingTab ? 'rm_pending_claims' : defaultTab;
+    }
     if (['approved_claims', 'pending_payment', 'awaiting_payment'].includes(t)) {
       return canViewExpenseTab ? 'approved_claims' : 'all';
     }
@@ -434,6 +443,7 @@ const PendingApprovals = () => {
   const [merges, setMerges] = useState([]);
   const [accountsData, setAccountsData] = useState([]);
   const [expenseClaims, setExpenseClaims] = useState([]);
+  const [rmPendingClaims, setRmPendingClaims] = useState([]);
   const [expenseHistory, setExpenseHistory] = useState([]);
   const [closeRequests, setCloseRequests] = useState([]);
 
@@ -516,9 +526,11 @@ const PendingApprovals = () => {
         ? ['PAID', 'REJECTED']
         : activeTab === 'approved_claims'
           ? ['ACCOUNTS_APPROVED']
-          : activeTab === 'expense_claims'
-            ? ['PENDING_APPROVAL']
-            : ['PENDING_APPROVAL', 'ACCOUNTS_APPROVED', 'PAID'];
+          : activeTab === 'rm_pending_claims'
+            ? ['RM_PENDING']
+            : activeTab === 'expense_claims'
+              ? ['PENDING_APPROVAL']
+              : ['PENDING_APPROVAL', 'ACCOUNTS_APPROVED', 'PAID'];
     if (!validForTab.includes(filterStatus)) {
       setFilterStatus('ALL');
     }
@@ -535,7 +547,7 @@ const PendingApprovals = () => {
   useEffect(() => {
     const isExp =
       detailItem &&
-      ['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim'].includes(detailItem.type);
+      ['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim', 'rm_pending_expense'].includes(detailItem.type);
     const claimId = detailItem?.raw?._id || detailItem?._id;
     if (!isExp || !claimId || detailItem?._enriched) return;
     let cancelled = false;
@@ -560,6 +572,8 @@ const PendingApprovals = () => {
   // Modal State for Actioning
   const [selectedItem, setSelectedItem] = useState(null);
   const [actionType, setActionType] = useState(''); // 'approve' | 'pay' | 'reject'
+  const [selectedApprovedIds, setSelectedApprovedIds] = useState([]);
+  const [bulkPayProgress, setBulkPayProgress] = useState({ current: 0, total: 0 });
   const [adminNote, setAdminNote] = useState('');
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [paymentReference, setPaymentReference] = useState('');
@@ -607,6 +621,7 @@ const PendingApprovals = () => {
   const resetActionModal = () => {
     setSelectedItem(null);
     setActionType('');
+    setBulkPayProgress({ current: 0, total: 0 });
     setAdminNote('');
     setPaymentDate(new Date().toISOString().split('T')[0]);
     setPaymentReference('');
@@ -789,6 +804,19 @@ const PendingApprovals = () => {
     }
   };
 
+  const fetchRmPendingClaimsData = async (reqConfig) => {
+    if (!canViewRmPendingTab) return;
+    try {
+      const res = await api.get('/expense/approvals/reporting-manager-pending', reqConfig);
+      const data = res.data?.data || res.data || [];
+      const list = Array.isArray(data) ? [...data] : [];
+      list.sort((a, b) => new Date(b.submittedAt || b.createdAt || 0) - new Date(a.submittedAt || a.createdAt || 0));
+      setRmPendingClaims(list);
+    } catch (_) {
+      setRmPendingClaims([]);
+    }
+  };
+
   const fetchExpenseHistoryData = async (reqConfig) => {
     if (!canViewExpenseHistoryTab) return;
     try {
@@ -886,12 +914,15 @@ const PendingApprovals = () => {
       if (tabToFetch === 'all') {
         const allPromises = [];
         if (canViewExpenseTab) allPromises.push(fetchExpenseClaimsData(reqConfig));
+        if (canViewRmPendingTab) allPromises.push(fetchRmPendingClaimsData(reqConfig));
         if (canViewStoreTab) allPromises.push(fetchStoreData(reqConfig));
         if (canViewStoreTab || isAccountAdmin) allPromises.push(fetchAccountMaterialsData(reqConfig));
         if (canViewExpenseHistoryTab) allPromises.push(fetchExpenseHistoryData(reqConfig));
         await Promise.all(allPromises);
       } else if (tabToFetch === 'expense_claims' || tabToFetch === 'approved_claims' || tabToFetch === 'account_claims') {
         await fetchExpenseClaimsData(reqConfig);
+      } else if (tabToFetch === 'rm_pending_claims') {
+        await fetchRmPendingClaimsData(reqConfig);
       } else if (tabToFetch === 'store') {
         await fetchStoreData(reqConfig);
       } else if (tabToFetch === 'account_materials') {
@@ -906,7 +937,7 @@ const PendingApprovals = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedCompanyId, activeTab, isSuperAdmin, isCompanyAdmin, isHRAdmin, isAccountAdmin, canViewStoreTab, canViewExpenseTab, canViewExpenseHistoryTab]);
+  }, [selectedCompanyId, activeTab, isSuperAdmin, isCompanyAdmin, isHRAdmin, isAccountAdmin, canViewStoreTab, canViewExpenseTab, canViewRmPendingTab, canViewExpenseHistoryTab]);
 
   useEffect(() => {
     if (isSuperAdmin) {
@@ -919,6 +950,10 @@ const PendingApprovals = () => {
   useEffect(() => {
     fetchPendingData(selectedCompanyId, activeTab, false);
   }, [activeTab]);
+
+  useEffect(() => {
+    setSelectedApprovedIds([]);
+  }, [activeTab, selectedCompanyId]);
 
   // Broadcast total pending approvals count whenever data changes
   useEffect(() => {
@@ -1199,7 +1234,7 @@ const PendingApprovals = () => {
             const claimed = Number(raw.grandRequested || raw.amount || 0);
             const allowed = Number(raw.payableAmount || raw.grandAllowed || 0);
             const payable = allowed > 0 ? (claimed > 0 ? Math.min(allowed, claimed) : allowed) : (claimed > 0 ? claimed : 0);
-            const finalPayable = payable > 0 ? payable : (claimed > 0 ? claimed : 0);
+            const finalPayable = roundRupee(payable > 0 ? payable : (claimed > 0 ? claimed : 0));
 
             const proofObj = {
               name: paymentProofName || 'Payment Confirmation Proof',
@@ -1208,21 +1243,84 @@ const PendingApprovals = () => {
               size: paymentProofSize || 0,
             };
 
-            await api.post(`/expense/claims/${selectedItem._id}/payment`, {
-              paidAmount: finalPayable > 0 ? finalPayable : undefined,
-              paymentDate,
-              paymentMethod: 'Bank Transfer (NEFT)',
-              paymentReference: paymentReference.trim() || trimmedRemark,
-              remarks: trimmedRemark,
-              reason: trimmedRemark,
-              paymentProof: proofObj,
-              paymentProofs: [proofObj],
-              paymentProofUrl,
-              paymentProofName: proofObj.name,
-              paymentProofType: proofObj.type,
-            });
-            toast.success('Expense claim marked as Paid successfully!');
-            setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
+            if (selectedItem.isBulkPay && Array.isArray(selectedItem.bulkItems)) {
+              const itemsToPay = selectedItem.bulkItems;
+              const succeededIds = [];
+              const failedMessages = [];
+              setBulkPayProgress({ current: 0, total: itemsToPay.length });
+
+              for (let idx = 0; idx < itemsToPay.length; idx += 1) {
+                const claimItem = itemsToPay[idx];
+                setBulkPayProgress({ current: idx + 1, total: itemsToPay.length });
+                const itemRaw = claimItem.raw || {};
+                const itemClaimed = Number(itemRaw.grandRequested || itemRaw.amount || 0);
+                const itemAllowed = Number(itemRaw.payableAmount || itemRaw.grandAllowed || 0);
+                const itemPayable = itemAllowed > 0
+                  ? (itemClaimed > 0 ? Math.min(itemAllowed, itemClaimed) : itemAllowed)
+                  : (itemClaimed > 0 ? itemClaimed : 0);
+                const itemFinalPayable = roundRupee(itemPayable > 0 ? itemPayable : (itemClaimed > 0 ? itemClaimed : 0));
+
+                try {
+                  await api.post(`/expense/claims/${claimItem._id}/payment`, {
+                    paidAmount: itemFinalPayable > 0 ? itemFinalPayable : undefined,
+                    paymentDate,
+                    paymentMethod: 'Bank Transfer (NEFT)',
+                    paymentReference: paymentReference.trim() || trimmedRemark,
+                    remarks: trimmedRemark,
+                    reason: trimmedRemark,
+                    paymentProof: proofObj,
+                    paymentProofs: [proofObj],
+                    paymentProofUrl,
+                    paymentProofName: proofObj.name,
+                    paymentProofType: proofObj.type,
+                  });
+                  succeededIds.push(String(claimItem._id));
+                } catch (bulkErr) {
+                  const errMsg = bulkErr?.response?.data?.message || bulkErr?.message || 'Payment failed';
+                  failedMessages.push(`${claimItem.empCode || claimItem._id}: ${errMsg}`);
+                }
+              }
+
+              if (succeededIds.length > 0) {
+                const paidSet = new Set(succeededIds);
+                setExpenseClaims(prev => prev.filter(e => !paidSet.has(String(e._id))));
+                setSelectedApprovedIds(prev => prev.filter(id => !paidSet.has(String(id))));
+                loadedTabsRef.current.delete(`${selectedCompanyId}_expense_history`);
+              }
+
+              if (failedMessages.length === 0) {
+                toast.success(
+                  `${succeededIds.length} approved expense claim${succeededIds.length > 1 ? 's' : ''} marked as Paid successfully!`
+                );
+              } else if (succeededIds.length > 0) {
+                toast.error(
+                  `${succeededIds.length} claim(s) marked Paid, ${failedMessages.length} failed (${failedMessages[0]}).`
+                );
+              } else {
+                toast.error(failedMessages[0] || 'Failed to mark selected claims as Paid.');
+                setBulkPayProgress({ current: 0, total: 0 });
+                setProcessing(false);
+                return;
+              }
+            } else {
+              await api.post(`/expense/claims/${selectedItem._id}/payment`, {
+                paidAmount: finalPayable > 0 ? finalPayable : undefined,
+                paymentDate,
+                paymentMethod: 'Bank Transfer (NEFT)',
+                paymentReference: paymentReference.trim() || trimmedRemark,
+                remarks: trimmedRemark,
+                reason: trimmedRemark,
+                paymentProof: proofObj,
+                paymentProofs: [proofObj],
+                paymentProofUrl,
+                paymentProofName: proofObj.name,
+                paymentProofType: proofObj.type,
+              });
+              toast.success('Expense claim marked as Paid successfully!');
+              setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
+              setSelectedApprovedIds(prev => prev.filter(id => String(id) !== String(selectedItem._id)));
+              loadedTabsRef.current.delete(`${selectedCompanyId}_expense_history`);
+            }
           } else {
             // Reject claim: After Accounts approval, ONLY Super Admin is allowed to reject
             if (isAlreadyAccountsApproved && !isSuperAdmin) {
@@ -1319,6 +1417,39 @@ const PendingApprovals = () => {
           toast.success(`Request rejected.`);
         }
         setCloseRequests(prev => prev.filter(c => c._id !== selectedItem._id));
+      } else if (selectedItem.type === 'rm_pending_expense') {
+        if (!adminNote || !adminNote.trim()) {
+          toast.error(actionType === 'approve' ? 'Approval remark is required.' : 'Rejection reason / remark is required.');
+          setProcessing(false);
+          return;
+        }
+        const trimmedNote = adminNote.trim();
+        if (actionType === 'approve') {
+          const res = await api.post(`/expense/claims/${selectedItem._id}/approve`, {
+            remarks: trimmedNote,
+            reason: trimmedNote,
+            adminNote: trimmedNote,
+          });
+          const updatedClaim = res.data?.data;
+          setRmPendingClaims(prev => prev.filter(c => String(c._id) !== String(selectedItem._id)));
+          if (updatedClaim && String(updatedClaim.status || '').toUpperCase() === 'SUBMITTED') {
+            loadedTabsRef.current.delete(`${selectedCompanyId}_expense_claims`);
+            loadedTabsRef.current.delete(`${selectedCompanyId}_all`);
+            fetchExpenseClaimsData(getReqConfig(selectedCompanyId));
+            toast.success('Reporting Manager approval completed! Claim forwarded to Accounts.');
+          } else {
+            toast.success('1st approval completed! Claim forwarded for 2nd approval.');
+          }
+        } else {
+          await api.post(`/expense/claims/${selectedItem._id}/approval-reject`, {
+            reason: trimmedNote,
+            remarks: trimmedNote,
+            rejectionReason: trimmedNote,
+          });
+          setRmPendingClaims(prev => prev.filter(c => String(c._id) !== String(selectedItem._id)));
+          loadedTabsRef.current.delete(`${selectedCompanyId}_expense_history`);
+          toast.success('Claim rejected.');
+        }
       }
 
       resetActionModal();
@@ -1537,7 +1668,7 @@ const PendingApprovals = () => {
         category: 'accounts',
         type: 'accounts_expense',
         isAccountsApproved: isAccApproved,
-        title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+        title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${roundRupee(c.payableAmount || c.grandAllowed || c.grandRequested || 0)}`,
         applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
         empCode: c.claimNumber || 'EXP-CLAIM',
         companyName: resolveItemCompany(c),
@@ -1640,17 +1771,44 @@ const PendingApprovals = () => {
         statusColor,
         isApproved: isPaid,
         isRejected,
-        title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+        title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${roundRupee(c.payableAmount || c.grandAllowed || c.grandRequested || 0)}`,
         applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
         empCode: c.claimNumber || 'EXP-CLAIM',
         companyName: resolveItemCompany(c),
-        details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested || 0} • Allowed: ₹${c.grandAllowed || 0}${paidVal ? ` • Paid: ₹${paidVal}` : ''}`,
+        details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested || 0} • Allowed: ₹${c.grandAllowed || 0}${paidVal ? ` • Paid: ₹${roundRupee(paidVal)}` : ''}`,
         reason: reasonText,
         date: expDate,
         expenseDate: expDate,
         raw: c
       };
     });
+
+  const allRmPendingItems = !canViewRmPendingTab ? [] : rmPendingClaims.map(c => {
+    const rmName = c.managerApproval?.approver?.name || c.managerApproval?.approverName || 'Unassigned';
+    const rmCode = c.managerApproval?.approver?.employeeIdCode || '';
+    const rmDept = c.managerApproval?.approver?.department || '';
+    return {
+      _id: c._id,
+      category: 'rm_approval',
+      type: 'rm_pending_expense',
+      reportingManagerName: rmName,
+      reportingManagerCode: rmCode,
+      reportingManagerDept: rmDept,
+      title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+      applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
+      empCode: c.claimNumber || 'EXP-CLAIM',
+      companyName: resolveItemCompany(c),
+      details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested || 0} • Allowed: ₹${c.grandAllowed || 0}${c.fullPayment?.requested ? ' • ⚡ Full Payment Requested' : ''}`,
+      reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Awaiting Reporting Manager approval',
+      date: c.submittedAt || c.createdAt,
+      expenseDate: c.claimDate || c.fromDate || c.submittedAt || c.createdAt,
+      raw: c,
+    };
+  }).sort((a, b) => {
+    const timeA = new Date(a.raw?.submittedAt || a.raw?.createdAt || a.date || 0).getTime();
+    const timeB = new Date(b.raw?.submittedAt || b.raw?.createdAt || b.date || 0).getTime();
+    return timeB - timeA;
+  });
 
   const pendingApprovalClaimItems = allExpenseClaimItems.filter(
     item => !(item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED')
@@ -1666,6 +1824,8 @@ const PendingApprovals = () => {
     displayItems = pendingApprovalClaimItems;
   } else if (activeTab === 'approved_claims') {
     displayItems = approvedPendingPaymentItems;
+  } else if (activeTab === 'rm_pending_claims') {
+    displayItems = allRmPendingItems;
   } else if (activeTab === 'store') {
     displayItems = allStoreItems;
   } else if (activeTab === 'account_materials') {
@@ -1709,7 +1869,7 @@ const PendingApprovals = () => {
             isHistory,
             isApproved: st === 'PAID' || st === 'DISBURSED' || st === 'SETTLED',
             isRejected: st.includes('REJECTED'),
-            title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+            title: `Expense Claim (${getResolvedClaimType(c).label}) • ₹${roundRupee(c.payableAmount || c.grandAllowed || c.grandRequested || 0)}`,
             applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
             empCode: c.claimNumber || 'EXP-CLAIM',
             companyName: resolveItemCompany(c),
@@ -1738,6 +1898,8 @@ const PendingApprovals = () => {
       item.applicant.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.details.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.reason.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (item.reportingManagerName && item.reportingManagerName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (item.reportingManagerCode && item.reportingManagerCode.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (item.statusBadge && item.statusBadge.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (item.empCode && item.empCode.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (item.companyName && item.companyName.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -1821,7 +1983,7 @@ const PendingApprovals = () => {
   if (filterExpenseType && filterExpenseType !== 'ALL') {
     const qType = filterExpenseType.toUpperCase().trim();
     displayItems = displayItems.filter(item => {
-      if (item.type !== 'accounts_expense' && item.type !== 'expense_history') return false;
+      if (item.type !== 'accounts_expense' && item.type !== 'expense_history' && item.type !== 'rm_pending_expense') return false;
       const resolved = getResolvedClaimType(item.raw);
       return resolved.code === qType;
     });
@@ -1832,6 +1994,9 @@ const PendingApprovals = () => {
     displayItems = displayItems.filter(item => {
       const rawSt = String(item.raw?.status || '').toUpperCase().trim();
       const isAccApp = Boolean(item.isAccountsApproved || rawSt === 'ACCOUNTS_APPROVED' || String(item.raw?.paymentStatus || '').toUpperCase() === 'AWAITING_DISBURSEMENT');
+      if (qStatus === 'RM_PENDING') {
+        return item.type === 'rm_pending_expense' || rawSt === 'APPROVAL_PENDING';
+      }
       if (qStatus === 'PENDING_APPROVAL') {
         return !item.isHistory && !isAccApp;
       }
@@ -1854,7 +2019,7 @@ const PendingApprovals = () => {
   if (filterVisitType && filterVisitType !== 'ALL') {
     const qVisit = filterVisitType.toUpperCase();
     displayItems = displayItems.filter(item => {
-      if (item.type !== 'accounts_expense') return false;
+      if (item.type !== 'accounts_expense' && item.type !== 'rm_pending_expense') return false;
       const raw = item.raw || {};
       const cMode = (raw.claimMode || '').toUpperCase().trim();
       const cType = (raw.claimType || raw.expenseType || '').toUpperCase().trim();
@@ -1919,6 +2084,81 @@ const PendingApprovals = () => {
     setFilterFromDate('');
     setFilterToDate('');
     setSearchTerm('');
+  };
+
+  const isApprovedPayableClaim = (item) =>
+    item?.type === 'accounts_expense' &&
+    (item.isAccountsApproved ||
+      String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED' ||
+      String(item.raw?.paymentStatus || '').toUpperCase() === 'AWAITING_DISBURSEMENT');
+
+  const getClaimPayableAmount = (raw = {}) => {
+    const claimed = Number(raw.grandRequested || raw.amount || 0);
+    const allowed = Number(raw.payableAmount || raw.grandAllowed || 0);
+    const payable = allowed > 0 ? (claimed > 0 ? Math.min(allowed, claimed) : allowed) : (claimed > 0 ? claimed : 0);
+    return roundRupee(payable > 0 ? payable : (claimed > 0 ? claimed : 0));
+  };
+
+  const selectableApprovedItems = displayItems.filter(isApprovedPayableClaim);
+  const selectedApprovedIdSet = new Set(selectedApprovedIds.map(String));
+  const selectedApprovedItems = selectableApprovedItems.filter((item) =>
+    selectedApprovedIdSet.has(String(item._id))
+  );
+  const allVisibleApprovedSelected =
+    selectableApprovedItems.length > 0 &&
+    selectedApprovedItems.length === selectableApprovedItems.length;
+  const selectedApprovedTotalPayable = selectedApprovedItems.reduce(
+    (sum, item) => sum + getClaimPayableAmount(item.raw),
+    0
+  );
+
+  const toggleSelectApprovedClaim = (id) => {
+    const idStr = String(id);
+    setSelectedApprovedIds((prev) =>
+      prev.includes(idStr) ? prev.filter((x) => x !== idStr) : [...prev, idStr]
+    );
+  };
+
+  const toggleSelectAllApproved = () => {
+    if (allVisibleApprovedSelected) {
+      const visibleSet = new Set(selectableApprovedItems.map((i) => String(i._id)));
+      setSelectedApprovedIds((prev) => prev.filter((id) => !visibleSet.has(String(id))));
+    } else {
+      setSelectedApprovedIds(selectableApprovedItems.map((i) => String(i._id)));
+    }
+  };
+
+  const openBulkPayModal = () => {
+    if (selectedApprovedItems.length === 0) {
+      toast.error('Please select at least one approved claim to mark as paid.');
+      return;
+    }
+    const uniqueApplicants = [...new Set(selectedApprovedItems.map((i) => i.applicant).filter(Boolean))];
+    const totalReq = selectedApprovedItems.reduce((s, i) => s + Number(i.raw?.grandRequested || i.raw?.amount || 0), 0);
+    const totalAllowed = selectedApprovedItems.reduce((s, i) => s + Number(i.raw?.grandAllowed || 0), 0);
+    const totalPayable = selectedApprovedItems.reduce((s, i) => s + getClaimPayableAmount(i.raw), 0);
+
+    openActionModal(
+      {
+        _id: 'BULK_PAY',
+        category: 'accounts',
+        type: 'accounts_expense',
+        isBulkPay: true,
+        bulkItems: selectedApprovedItems,
+        title: `${selectedApprovedItems.length} Approved Expense Claim${selectedApprovedItems.length > 1 ? 's' : ''} • ₹${totalPayable.toLocaleString('en-IN')}`,
+        applicant:
+          uniqueApplicants.length === 1
+            ? uniqueApplicants[0]
+            : `${uniqueApplicants.length} Employees (${uniqueApplicants.slice(0, 3).join(', ')}${uniqueApplicants.length > 3 ? ` +${uniqueApplicants.length - 3} more` : ''})`,
+        details: `${selectedApprovedItems.length} Claim(s) Selected • Req: ₹${totalReq.toLocaleString('en-IN')} • Allowed: ₹${totalAllowed.toLocaleString('en-IN')}`,
+        raw: {
+          payableAmount: totalPayable,
+          grandAllowed: totalAllowed,
+          grandRequested: totalReq,
+        },
+      },
+      'pay'
+    );
   };
 
   return (
@@ -1990,6 +2230,16 @@ const PendingApprovals = () => {
             >
               <CheckCircle2 size={15} />
               Approved • Payment Pending ({approvedPendingPaymentItems.length})
+            </button>
+          )}
+
+          {canViewRmPendingTab && (
+            <button
+              onClick={() => setActiveTab('rm_pending_claims')}
+              className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'rm_pending_claims' ? 'bg-amber-600 text-white shadow-lg shadow-amber-100' : 'bg-amber-50/80 text-amber-800 hover:bg-amber-100/80 border border-amber-200/70'}`}
+            >
+              <Users size={15} />
+              Reporting Manager Pending ({allRmPendingItems.length})
             </button>
           )}
 
@@ -2149,7 +2399,11 @@ const PendingApprovals = () => {
                           ? [
                               { value: 'ACCOUNTS_APPROVED', label: 'Approved • Payment Pending', icon: CheckCircle2, iconColor: 'text-teal-600' },
                             ]
-                          : activeTab === 'expense_claims'
+                          : activeTab === 'rm_pending_claims'
+                            ? [
+                                { value: 'RM_PENDING', label: 'Reporting Manager Pending', icon: Clock, iconColor: 'text-amber-600' },
+                              ]
+                            : activeTab === 'expense_claims'
                             ? [
                                 { value: 'PENDING_APPROVAL', label: 'Pending', icon: Clock, iconColor: 'text-amber-600' },
                               ]
@@ -2284,19 +2538,75 @@ const PendingApprovals = () => {
               ? 'No Expense History Found'
               : activeTab === 'approved_claims'
                 ? 'No Approved Claims Pending Payment!'
-                : 'All Pending Approvals Cleared!'}
+                : activeTab === 'rm_pending_claims'
+                  ? 'No Reporting Manager Pending Claims!'
+                  : 'All Pending Approvals Cleared!'}
           </h3>
           <p className="text-xs font-medium text-slate-400 max-w-sm">
             {activeTab === 'expense_history'
               ? 'There are currently no approved or rejected expense claims recorded.'
               : activeTab === 'approved_claims'
                 ? 'There are currently no approved expense claims awaiting payment.'
-                : 'There are currently no pending approval requests matching your selection.'}
+                : activeTab === 'rm_pending_claims'
+                  ? 'There are currently no claims waiting on Reporting Manager approval.'
+                  : 'There are currently no pending approval requests matching your selection.'}
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {displayItems.map((item) => (
+        <div className="space-y-4">
+          {/* Bulk Pay Toolbar for Approved Claims */}
+          {selectableApprovedItems.length > 0 && (activeTab === 'approved_claims' || activeTab === 'all') && (
+            <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleApprovedSelected}
+                    onChange={toggleSelectAllApproved}
+                    className="w-4 h-4 rounded border-emerald-400 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
+                  />
+                  <span className="text-xs font-extrabold text-emerald-950">
+                    {allVisibleApprovedSelected
+                      ? `Deselect All (${selectableApprovedItems.length})`
+                      : `Select All Approved (${selectableApprovedItems.length})`}
+                  </span>
+                </label>
+
+                {selectedApprovedItems.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="px-2.5 py-1 rounded-xl bg-white border border-emerald-200 text-[11px] font-extrabold text-emerald-800">
+                      {selectedApprovedItems.length} Selected • Total Payable: ₹{selectedApprovedTotalPayable.toLocaleString('en-IN')}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedApprovedIds([])}
+                      className="text-[11px] font-bold text-slate-500 hover:text-rose-600 px-2 py-1 rounded-lg hover:bg-white/80 transition-colors cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={openBulkPayModal}
+                disabled={selectedApprovedItems.length === 0}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-45 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs shadow-sm shadow-emerald-200 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+              >
+                <CheckCircle2 size={15} />
+                {selectedApprovedItems.length > 0
+                  ? `Mark Selected as Paid (${selectedApprovedItems.length})`
+                  : 'Mark Selected as Paid'}
+              </button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {displayItems.map((item) => {
+            const isSelectableApproved = isApprovedPayableClaim(item);
+            const isCardSelected = isSelectableApproved && selectedApprovedIdSet.has(String(item._id));
+            return (
             <motion.div
               key={item._id}
               layout
@@ -2304,26 +2614,45 @@ const PendingApprovals = () => {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               onClick={() => setDetailItem(item)}
-              className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm hover:shadow-xl hover:border-indigo-300 transition-all flex flex-col justify-between space-y-4 group cursor-pointer relative"
+              className={`bg-white rounded-3xl p-6 shadow-sm hover:shadow-xl transition-all flex flex-col justify-between space-y-4 group cursor-pointer relative border ${
+                isCardSelected
+                  ? 'border-emerald-500 ring-2 ring-emerald-200 bg-emerald-50/20'
+                  : 'border-slate-200/80 hover:border-indigo-300'
+              }`}
             >
               <div>
                 {/* Header Tag & Company Badge */}
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <div className="flex items-center gap-2">
+                    {isSelectableApproved && (
+                      <input
+                        type="checkbox"
+                        checked={isCardSelected}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggleSelectApprovedClaim(item._id)}
+                        title="Select claim for bulk payment"
+                        aria-label={`Select ${item.empCode || item.title} for payment`}
+                        className="w-4 h-4 rounded border-emerald-400 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600 shrink-0"
+                      />
+                    )}
                     <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider border ${
-                      item.type === 'accounts_expense' && (item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED')
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-indigo-50 text-indigo-600 border-indigo-200'
+                      item.type === 'rm_pending_expense'
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : item.type === 'accounts_expense' && (item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED')
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-indigo-50 text-indigo-600 border-indigo-200'
                     }`}>
                       {item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material'
                         ? '📦 Material Movement'
                         : item.isHistory || item.type === 'expense_history'
                           ? '📋 Expense History'
-                          : item.type === 'accounts_expense'
-                            ? ((item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED')
-                              ? '✅ Approved • Payment Pending'
-                              : '⏳ Expense Claim • Pending')
-                            : '💰 Customer Visit Claim'}
+                          : item.type === 'rm_pending_expense'
+                            ? '👤 Reporting Manager Pending'
+                            : item.type === 'accounts_expense'
+                              ? ((item.isAccountsApproved || String(item.raw?.status || '').toUpperCase() === 'ACCOUNTS_APPROVED')
+                                ? '✅ Approved • Payment Pending'
+                                : '⏳ Expense Claim • Pending')
+                              : '💰 Customer Visit Claim'}
                     </span>
                   </div>
 
@@ -2350,6 +2679,16 @@ const PendingApprovals = () => {
                   By: <span className="text-slate-800">{item.applicant}</span> ({item.empCode})
                 </p>
 
+                {item.type === 'rm_pending_expense' && (
+                  <div className="mt-2.5 px-3 py-2 rounded-xl bg-amber-50/90 border border-amber-200/80 flex items-center justify-between gap-2 text-[11px]">
+                    <span className="font-bold text-amber-800">Reporting Manager:</span>
+                    <span className="font-extrabold text-amber-950 truncate">
+                      {item.reportingManagerName}
+                      {item.reportingManagerCode ? ` (${item.reportingManagerCode})` : ''}
+                    </span>
+                  </div>
+                )}
+
                 {/* Details & Reason Box */}
                 <div className="mt-4 p-3.5 bg-slate-50 group-hover:bg-indigo-50/40 rounded-2xl border border-slate-100 group-hover:border-indigo-100/60 transition-colors space-y-1">
                   <p className="text-[11px] font-bold text-indigo-600 m-0 text-center">{item.details}</p>
@@ -2358,7 +2697,7 @@ const PendingApprovals = () => {
                     "{item.reason}"
                   </p>
                   {/* Distinct Proof Pills on Pending Card */}
-                  {(item.type === 'expense' || item.type === 'accounts_expense' || item.type === 'hr_expense' || item.type === 'expense_history') && (() => {
+                  {(item.type === 'expense' || item.type === 'accounts_expense' || item.type === 'hr_expense' || item.type === 'expense_history' || item.type === 'rm_pending_expense') && (() => {
                     const { billProofs, serviceReports, fullPaymentProofs, numberPlatePhotos, startKmPhotos, endKmPhotos } = getClaimProofs(item.raw);
                     const billCount = billProofs.length;
                     const srCount = serviceReports.length;
@@ -2467,7 +2806,9 @@ const PendingApprovals = () => {
                 </div>
               )}
             </motion.div>
-          ))}
+            );
+          })}
+          </div>
         </div>
       )}
 
@@ -2524,7 +2865,9 @@ const PendingApprovals = () => {
                   <div className="flex items-center gap-3 mb-2">
                     <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.isHistory
                       ? (detailItem.isRejected ? 'bg-rose-400 text-rose-950' : 'bg-emerald-400 text-emerald-950')
-                      : detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
+                      : detailItem.type === 'rm_pending_expense'
+                        ? 'bg-amber-400 text-amber-950'
+                        : detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
                         (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
                           (detailItem.type === 'disburse_claim' || detailItem.raw?.paymentStatus === 'AWAITING_DISBURSEMENT' || detailItem.raw?.status === 'ACCOUNTS_APPROVED')
                             ? 'bg-amber-400 text-amber-950'
@@ -2532,7 +2875,9 @@ const PendingApprovals = () => {
                       }`}>
                       {detailItem.isHistory
                         ? (detailItem.isRejected ? '❌ Rejected Expense Claim' : '✅ Approved Expense Claim')
-                        : detailItem.category === 'hr' ? '👥 HR Expense Review' :
+                        : detailItem.type === 'rm_pending_expense'
+                          ? `👤 Pending Reporting Manager (${detailItem.reportingManagerName || 'Manager'})`
+                          : detailItem.category === 'hr' ? '👥 HR Expense Review' :
                           (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? '📦 Material Movement Request' :
                             (detailItem.type === 'disburse_claim' || detailItem.raw?.paymentStatus === 'AWAITING_DISBURSEMENT' || detailItem.raw?.status === 'ACCOUNTS_APPROVED')
                               ? '⏳ Awaiting Disbursement'
@@ -2556,7 +2901,7 @@ const PendingApprovals = () => {
                 {/* Modal Body */}
                 <div className="p-6 md:p-8 overflow-y-auto space-y-6 flex-1 text-left bg-slate-50/50">
                   {/* Applicant Profile Card (for non-expense items; ExpenseClaimDetailContent renders full employee cards in Section 2) */}
-                  {!['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim'].includes(detailItem.type) && (
+                  {!['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim', 'rm_pending_expense'].includes(detailItem.type) && (
                     <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-4">
                         <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100 shrink-0">
@@ -2631,7 +2976,7 @@ const PendingApprovals = () => {
                   )}
 
                   {/* ── Category 2: Expense Claim Specific Info ── */}
-                  {['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim'].includes(detailItem.type) && (
+                  {['expense', 'accounts_expense', 'hr_expense', 'expense_history', 'disburse_claim', 'rm_pending_expense'].includes(detailItem.type) && (
                     <ExpenseClaimDetailContent claim={detailItem.raw || detailItem} />
                   )}
 
@@ -3254,8 +3599,8 @@ const PendingApprovals = () => {
                                   ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
                                   : detailItem.type === 'accounts_expense'
                                     ? (isDetailPaidStep
-                                      ? `Mark Paid (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`
-                                      : `Approve Claim (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`)
+                                      ? `Mark Paid (₹${roundRupee(detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0)})`
+                                      : `Approve Claim (₹${roundRupee(detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0)})`)
                                     : 'Approve Request'}
                               </span>
                             </button>
@@ -3281,7 +3626,7 @@ const PendingApprovals = () => {
                 initial={{ opacity: 0, scale: 0.95, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-6 md:p-8 space-y-6 overflow-hidden my-auto"
+                className="bg-white w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl p-6 md:p-8 space-y-6 my-auto"
               >
                 <div className="flex justify-between items-start">
                   <div className="flex items-center gap-3">
@@ -3292,10 +3637,14 @@ const PendingApprovals = () => {
                       <h3 className="text-lg font-bold text-slate-900 m-0">
                         {selectedItem.type === 'split' && actionType === 'approve'
                           ? (splitPhase === 1 ? 'Phase 1: Accept Split Request' : 'Phase 2: Barcode Assignment')
-                          : selectedItem.type === 'accounts_expense' && actionType === 'approve'
-                            ? 'Step 1: Approve Expense Claim'
+                          : selectedItem.type === 'rm_pending_expense' && actionType === 'approve'
+                            ? 'Approve Reporting Manager Stage'
+                            : selectedItem.type === 'accounts_expense' && actionType === 'approve'
+                              ? 'Step 1: Approve Expense Claim'
                             : selectedItem.type === 'accounts_expense' && actionType === 'pay'
-                              ? 'Step 2: Mark Claim as Paid'
+                              ? (selectedItem.isBulkPay
+                                ? `Step 2: Mark ${selectedItem.bulkItems?.length || 0} Claim${(selectedItem.bulkItems?.length || 0) > 1 ? 's' : ''} as Paid`
+                                : 'Step 2: Mark Claim as Paid')
                               : actionType === 'approve'
                                 ? 'Approve Request'
                                 : 'Reject Request'}
@@ -3306,15 +3655,30 @@ const PendingApprovals = () => {
 
                   <button
                     onClick={resetActionModal}
-                    className="p-2 text-slate-400 hover:text-slate-700 bg-slate-50 rounded-xl transition-colors"
+                    disabled={processing}
+                    className="p-2 text-slate-400 hover:text-slate-700 bg-slate-50 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <X size={18} />
                   </button>
                 </div>
 
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-1 text-xs">
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-1.5 text-xs">
                   <p className="font-bold text-slate-800 m-0">Applicant: {selectedItem.applicant}</p>
                   <p className="text-slate-600 m-0">{selectedItem.details}</p>
+                  {selectedItem.isBulkPay && Array.isArray(selectedItem.bulkItems) && selectedItem.bulkItems.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-slate-200/70 max-h-32 overflow-y-auto space-y-1 pr-1">
+                      {selectedItem.bulkItems.map((bItem) => (
+                        <div key={bItem._id} className="flex items-center justify-between gap-2 text-[11px] bg-white px-2.5 py-1.5 rounded-xl border border-slate-200/70">
+                          <span className="font-bold text-slate-700 truncate">
+                            {bItem.empCode} • {bItem.applicant}
+                          </span>
+                          <span className="font-extrabold text-emerald-700 shrink-0">
+                            ₹{getClaimPayableAmount(bItem.raw).toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Split Phase 1 Confirmation Box */}
@@ -3541,7 +3905,7 @@ const PendingApprovals = () => {
                       Step 1: Approve Expense Claim
                     </div>
                     <p className="text-[11px] text-slate-600 font-medium m-0">
-                      Payable Amount: <strong className="text-emerald-800">₹{selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0}</strong>. Confirming approval requires an approval remark and moves this claim to <strong>Step 2 (Mark Paid)</strong>.
+                      Payable Amount: <strong className="text-emerald-800">₹{roundRupee(selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0)}</strong>. Confirming approval requires an approval remark and moves this claim to <strong>Step 2 (Mark Paid)</strong>.
                     </p>
                     <p className="text-[11px] text-amber-800 bg-amber-50/90 border border-amber-200/80 rounded-xl px-2.5 py-1.5 font-semibold m-0">
                       💡 Petty Cash balance is <strong>not</strong> added when approved — the amount is added to Petty Cash only after the claim is marked as <strong>Paid</strong> in Step 2.
@@ -3558,11 +3922,13 @@ const PendingApprovals = () => {
                         Step 2: Record Payment &amp; Mark as Paid
                       </div>
                       <span className="px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-extrabold">
-                        Payable: ₹{selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0}
+                        {selectedItem.isBulkPay ? 'Total Payable' : 'Payable'}: ₹{roundRupee(selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0).toLocaleString('en-IN')}
                       </span>
                     </div>
                     <p className="text-[11px] text-emerald-800 font-medium m-0">
-                      Confirming payment marks the claim as <strong>Paid</strong> and credits the settled amount back to the employee&apos;s Petty Cash wallet (if enabled).
+                      {selectedItem.isBulkPay
+                        ? <>The same <strong>Paid Date</strong>, <strong>Payment Confirmation Proof</strong>, and <strong>Payment Remark</strong> will be applied to all <strong>{selectedItem.bulkItems?.length || 0} selected claims</strong>, marking each as <strong>Paid</strong> and crediting each settled amount back to the employee&apos;s Petty Cash wallet (if enabled).</>
+                        : <>Confirming payment marks the claim as <strong>Paid</strong> and credits the settled amount back to the employee&apos;s Petty Cash wallet (if enabled).</>}
                     </p>
 
                     <div className="space-y-1">
@@ -3651,7 +4017,7 @@ const PendingApprovals = () => {
                     <label className="text-[11px] font-extrabold text-slate-700 tracking-wider block">
                       {actionType === 'reject'
                         ? <>Rejection Reason / Remarks <span className="text-rose-500">*</span></>
-                        : selectedItem.type === 'accounts_expense' && actionType === 'approve'
+                        : (selectedItem.type === 'accounts_expense' || selectedItem.type === 'rm_pending_expense') && actionType === 'approve'
                           ? <>Approval Remark <span className="text-rose-500">*</span></>
                           : selectedItem.type === 'accounts_expense' && actionType === 'pay'
                             ? <>Payment Remark <span className="text-rose-500">*</span></>
@@ -3662,7 +4028,7 @@ const PendingApprovals = () => {
                       onChange={(e) => setAdminNote(e.target.value)}
                       rows={3}
                       placeholder={
-                        selectedItem.type === 'accounts_expense' && actionType === 'approve'
+                        (selectedItem.type === 'accounts_expense' || selectedItem.type === 'rm_pending_expense') && actionType === 'approve'
                           ? 'Enter approval remark (required)...'
                           : selectedItem.type === 'accounts_expense' && actionType === 'pay'
                             ? 'Enter payment remark (required)...'
@@ -3677,7 +4043,8 @@ const PendingApprovals = () => {
                   <button
                     type="button"
                     onClick={resetActionModal}
-                    className="px-5 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+                    disabled={processing}
+                    className="px-5 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Cancel
                   </button>
@@ -3692,7 +4059,8 @@ const PendingApprovals = () => {
                       (selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && !newSplitBarcode.trim()) ||
                       (selectedItem.type === 'accounts_expense' && actionType === 'approve' && !adminNote.trim()) ||
                       (selectedItem.type === 'accounts_expense' && actionType === 'pay' && (!paymentDate || !paymentProofUrl || !adminNote.trim())) ||
-                      (selectedItem.type === 'accounts_expense' && actionType === 'reject' && !adminNote.trim())
+                      (selectedItem.type === 'accounts_expense' && actionType === 'reject' && !adminNote.trim()) ||
+                      (selectedItem.type === 'rm_pending_expense' && !adminNote.trim())
                     }
                     className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${(actionType === 'approve' || actionType === 'pay')
                       ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
@@ -3700,13 +4068,17 @@ const PendingApprovals = () => {
                       }`}
                   >
                     {processing
-                      ? 'Processing...'
+                      ? (selectedItem.isBulkPay && bulkPayProgress.total > 0
+                        ? `Processing (${bulkPayProgress.current}/${bulkPayProgress.total})...`
+                        : 'Processing...')
                       : selectedItem.type === 'split' && actionType === 'approve'
                         ? (splitPhase === 1 ? 'Accept & Generate Tally Voucher' : 'Complete Split & Activate Barcode')
                         : selectedItem.type === 'accounts_expense' && actionType === 'approve'
                           ? 'Confirm Approval'
                           : selectedItem.type === 'accounts_expense' && actionType === 'pay'
-                            ? 'Confirm & Mark Paid'
+                            ? (selectedItem.isBulkPay
+                              ? `Confirm & Mark ${selectedItem.bulkItems?.length || 0} Paid`
+                              : 'Confirm & Mark Paid')
                             : actionType === 'approve'
                               ? 'Confirm Approval'
                               : 'Confirm Rejection'}

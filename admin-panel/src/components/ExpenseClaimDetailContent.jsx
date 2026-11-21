@@ -23,6 +23,12 @@ const VEHICLE_LABELS = {
   PUBLIC_TRANSPORT: 'Public Transport',
 };
 
+const roundRupee = (n) => {
+  const num = Number(n);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.floor(num + 0.5 + 1e-9);
+};
+
 const fmtINR = (val) => {
   const n = Number(val);
   if (!Number.isFinite(n)) return '₹0';
@@ -592,7 +598,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
   const isAccountsRejected =
     acc.status === 'REJECTED' || (isRejected && !isMgrRejected && !isFinRejected);
 
-  const paidAmount = Number(claim.paidAmount ?? disb.amount ?? (isPaid ? claim.payableAmount || allowed : 0));
+  const paidAmount = roundRupee(claim.paidAmount ?? disb.amount ?? (isPaid ? claim.payableAmount || allowed : 0));
   const paidAt = claim.paymentDate || claim.disbursedAt || disb.paymentDate || null;
   const paymentMethod = claim.paymentMethod || disb.paymentMethod || '';
   const paymentRef = claim.paymentReference || claim.utr || disb.paymentReference || '';
@@ -610,7 +616,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
           ? [disb.paymentProof]
           : [];
 
-  const payable = Number(
+  const payable = roundRupee(
     claim.payableAmount ??
     (isFullPayment && (fp.status === 'APPROVED' || isFinApproved || isClaimantManagement) ? requested : allowed)
   );

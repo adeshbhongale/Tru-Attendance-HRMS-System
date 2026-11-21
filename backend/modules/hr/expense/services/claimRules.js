@@ -5,7 +5,7 @@ const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpensePolicy = require('../models/ExpensePolicy');
 const ExpenseEntitlement = require('../models/ExpenseEntitlement');
 const { getActivePolicy, findEntitlement, getEmployeeLevelNumber, getEmployeeGradeCode } = require('./policyEngine');
-const { calculateItem, round2 } = require('./calculationEngine');
+const { calculateItem, round2, roundRupee } = require('./calculationEngine');
 const { getISTDateComponents, createDateFromIST } = require('../../../../utils/timezone');
 const food = require('./foodEntitlementService');
 const travelPolicy = require('./travelPolicyService');
@@ -958,11 +958,11 @@ function splitAmount(total, n) {
   return Array.from({ length: n }, (_, i) => (i === n - 1 ? paise - base * (n - 1) : base) / 100);
 }
 
-/** Payable = policy-allowed amount, or the approved full-payment amount. */
+/** Payable = policy-allowed amount, or the approved full-payment amount (rounded to whole rupees). */
 function computePayable(claim) {
   const fp = claim.fullPayment || {};
-  if (fp.requested && fp.status === 'APPROVED') return round2(fp.approvedAmount || claim.grandRequested || 0);
-  return round2(claim.grandAllowed || 0);
+  if (fp.requested && fp.status === 'APPROVED') return roundRupee(fp.approvedAmount || claim.grandRequested || 0);
+  return roundRupee(claim.grandAllowed || 0);
 }
 
 /**

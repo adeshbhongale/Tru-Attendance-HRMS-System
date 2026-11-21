@@ -788,9 +788,9 @@ async function generateClaimPdf(claim, res) {
   const grandAllow = claim.grandAllowed !== undefined ? claim.grandAllowed : (claim.allowedAmount !== undefined ? claim.allowedAmount : grandReq);
   const grandPolicyLim = Number(claim.grandPolicyLimit || claim.policyLimit || grandAllow);
   const grandExc = claim.grandExcess !== undefined ? claim.grandExcess : (claim.excessAmount || 0);
-  const payAmt = claim.payableAmount !== undefined ? claim.payableAmount : grandAllow;
+  const payAmt = Math.floor(Math.max(0, Number(claim.payableAmount !== undefined ? claim.payableAmount : grandAllow) || 0) + 0.5 + 1e-9);
   const isPaid = ['PAID', 'DISBURSED', 'SETTLED'].includes(String(claim.status || '').toUpperCase()) || ['PAID', 'DISBURSED'].includes(String(claim.paymentStatus || '').toUpperCase());
-  const paidAmt = claim.paidAmount || claim.disbursement?.amount || (isPaid ? payAmt : 0);
+  const paidAmt = Math.floor(Math.max(0, Number(claim.paidAmount || claim.disbursement?.amount || (isPaid ? payAmt : 0)) || 0) + 0.5 + 1e-9);
 
   const boxes = [
     { label: 'TOTAL CLAIMED', value: formatINR(grandReq), color: '#0f172a', bg: '#f8fafc', border: '#e2e8f0' },

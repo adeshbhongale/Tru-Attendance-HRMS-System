@@ -56,9 +56,20 @@ import api from '../api/axios';
 import ExpenseClaimDetailContent from '../components/ExpenseClaimDetailContent';
 import SearchableDropdown from '../components/SearchableDropdown';
 
+// Round claim payment rupee values to whole integers (>= .5 rounds up, < .5 rounds down)
+const roundRupee = (val) => {
+  const num = Number(val);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.floor(num + 0.5 + 1e-9);
+};
+
 // Format INR currency
 const formatINR = (val) => {
   return Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+};
+
+const formatRupeeINR = (val) => {
+  return roundRupee(val).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 };
 
 // Format Date for Display (e.g. 13-9-2026, 13-10-2026)
@@ -730,7 +741,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
         'Claimed': Number(c.claimedAmount || 0),
         'Allowed': Number(c.allowedAmount || 0),
         'Excess': Number(c.excessAmount || 0),
-        'Paid Amount': c.status === 'PAID' ? Number(c.paidAmount || 0) : 0,
+        'Paid Amount': c.status === 'PAID' ? roundRupee(c.paidAmount || 0) : 0,
         'Status': c.statusLabel || c.status || '',
         'Lodging': Number(c.lodging || 0),
         'Food': Number(c.food || 0),
@@ -786,7 +797,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
       doc.setFontSize(7.5);
       doc.setTextColor(100, 116, 139);
       doc.text(
-        `Generated: ${new Date().toLocaleString()} | Claims: ${summary.totalClaims || 0} | Paid: Rs ${formatINR(summary.totalPaidAmount)} | Rejected: Rs ${formatINR(summary.totalRejectedAmount)}`,
+        `Generated: ${new Date().toLocaleString()} | Claims: ${summary.totalClaims || 0} | Paid: Rs ${formatRupeeINR(summary.totalPaidAmount)} | Rejected: Rs ${formatINR(summary.totalRejectedAmount)}`,
         14,
         18
       );
@@ -822,7 +833,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
           formatINR(c.claimedAmount),
           formatINR(c.allowedAmount),
           formatINR(c.excessAmount),
-          c.status === 'PAID' ? formatINR(c.paidAmount) : '0',
+          c.status === 'PAID' ? formatRupeeINR(c.paidAmount) : '0',
           c.statusLabel || c.status || '-',
           formatINR(c.lodging || 0),
           formatINR(c.food || 0),
@@ -1179,7 +1190,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
         />
         <StatCard title="Paid Claims" value={summary.paidClaims || 0} icon={<CheckCircle2 />} iconBg="#f0fdf4" iconColor="#15803d" loading={summaryLoading} />
         <StatCard title="Rejected Claims" value={summary.rejectedClaims || 0} icon={<XCircle />} iconBg="#fff1f2" iconColor="#e11d48" loading={summaryLoading} />
-        <StatCard title="Total Paid Amount" value={`₹ ${formatINR(summary.totalPaidAmount)}`} icon={<IndianRupee />} iconBg="#ecfdf5" iconColor="#047857" loading={summaryLoading} />
+        <StatCard title="Total Paid Amount" value={`₹ ${formatRupeeINR(summary.totalPaidAmount)}`} icon={<IndianRupee />} iconBg="#ecfdf5" iconColor="#047857" loading={summaryLoading} />
         <StatCard title="Total Rejected Amount" value={`₹ ${formatINR(summary.totalRejectedAmount)}`} icon={<IndianRupee />} iconBg="#fff1f2" iconColor="#be123c" loading={summaryLoading} />
       </div>
 
@@ -1275,7 +1286,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                       <td className="px-2.5 py-2.5 text-left font-extrabold border-r border-slate-200 whitespace-nowrap text-xs">
                         {claim.status === 'PAID' ? (
                           <>
-                            <div className="text-emerald-700">₹ {formatINR(claim.paidAmount)}</div>
+                            <div className="text-emerald-700">₹ {formatRupeeINR(claim.paidAmount)}</div>
                             {claim.paymentDate && (
                               <div className="text-[10px] text-slate-400 font-medium mt-0.5">
                                 {formatDateDisplay(claim.paymentDate)}

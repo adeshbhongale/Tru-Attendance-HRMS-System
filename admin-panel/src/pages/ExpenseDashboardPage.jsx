@@ -163,12 +163,18 @@ const ExpenseDashboardPage = () => {
     excess: { amount: 0 },
   };
 
+  const roundRupee = (n) => {
+    const num = Number(n);
+    if (!Number.isFinite(num) || num <= 0) return 0;
+    return Math.floor(num + 0.5 + 1e-9);
+  };
+
   // Employee-wise dataset with computed pending, paid, reject, excess amounts
   const rawList = useMemo(() => {
     return (analyticsData?.employeeWise || []).map(item => ({
       ...item,
-      pendingAmount: Math.round((item.pending ?? ((item.waitingForApproval || 0) + (item.waitingForDisbursement || 0))) * 100) / 100,
-      paidAmount: Math.round((item.paid ?? item.settled ?? 0) * 100) / 100,
+      pendingAmount: roundRupee(item.pending ?? ((item.waitingForApproval || 0) + (item.waitingForDisbursement || 0))),
+      paidAmount: roundRupee(item.paid ?? item.settled ?? 0),
       rejectAmount: Math.round((item.rejected || 0) * 100) / 100,
       excessAmount: Math.round((item.excessAmount || 0) * 100) / 100,
     }));
@@ -558,7 +564,7 @@ const ExpenseDashboardPage = () => {
         />
         <StatCard
           title="Pending Claims"
-          amount={summary.pending?.amount ?? summary.waitingForApproval?.amount}
+          amount={roundRupee(summary.pending?.amount ?? summary.waitingForApproval?.amount)}
           count={summary.pending?.count ?? summary.waitingForApproval?.count}
           icon={<Hourglass />}
           iconBg="#fffbeb"
@@ -567,7 +573,7 @@ const ExpenseDashboardPage = () => {
         />
         <StatCard
           title="Paid Claims"
-          amount={summary.paid?.amount ?? summary.settled?.amount}
+          amount={roundRupee(summary.paid?.amount ?? summary.settled?.amount)}
           count={summary.paid?.count ?? summary.settled?.count}
           icon={<CheckSquare />}
           iconBg="#ecfdf5"

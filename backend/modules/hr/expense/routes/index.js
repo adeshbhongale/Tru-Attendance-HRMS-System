@@ -75,6 +75,7 @@ router.post('/claims/:id/submit', claim.submitClaim);
 // Approval stage (Full Payment -> Management, OTHER expense -> Reporting Manager), before Accounts
 router.get('/approvers', approval.listApprovers);
 router.get('/approvals', approval.myApprovals);
+router.get('/approvals/reporting-manager-pending', approval.reportingManagerPending);
 router.post('/claims/:id/approve', approval.approveClaim);
 router.post('/claims/:id/approval-reject', approval.rejectApproval);
 

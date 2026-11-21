@@ -254,6 +254,42 @@ exports.myApprovals = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/expense/approvals/reporting-manager-pending
+ * Super Admin / Company Admin queue of all claims currently awaiting Reporting Manager approval.
+ */
+exports.reportingManagerPending = async (req, res) => {
+  try {
+    if (!access.isSuperAdmin(req.user) && !access.isCompanyAdmin(req.user)) {
+      return fail(res, 403, 'Only Super Admin or Company Admin can view Reporting Manager pending approvals.');
+    }
+    const companyId = access.resolveCompanyId(req, { allowAll: true });
+    const filter = {
+      status: 'APPROVAL_PENDING',
+      'managerApproval.status': 'PENDING',
+      'financeApproval.status': { $ne: 'PENDING' },
+    };
+    if (companyId && companyId !== 'ALL') filter.companyId = companyId;
+
+    const claims = await ExpenseClaim.find(filter)
+      .populate([
+        ...POPULATE,
+        { path: 'companyId', select: 'name code' },
+      ])
+      .sort({ submittedAt: -1, createdAt: -1 })
+      .limit(500)
+      .lean();
+
+    res.json({
+      success: true,
+      count: claims.length,
+      data: claims.map((c) => withPermissions(req, c)),
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+};
+
 async function loadForDecision(req, res) {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) { fail(res, 404, 'Claim not found'); return null; }
   const claim = await ExpenseClaim.findById(req.params.id);

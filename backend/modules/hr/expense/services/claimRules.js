@@ -40,10 +40,12 @@ const DEFAULT_CLAIM_RULES = {
   claimsEnabled: true,
   normalClaimMaxPastDays: 2,
 };
+const MAX_FILES_PER_ENTRY = 7;
+const MAX_FILE_SIZE_MB = 15;
 const DEFAULT_RECEIPT_RULES = {
   required: true,
-  maxFiles: 10,
-  maxFileSizeMb: 10,
+  maxFilesPerEntry: MAX_FILES_PER_ENTRY,
+  maxFileSizeMb: MAX_FILE_SIZE_MB,
   allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'],
 };
 // Full payment is approved in-app by a selected Management user (no proof upload).
@@ -303,6 +305,9 @@ const clean = (obj) => {
 function resolvePolicyConfig(policy) {
   const p = policy || {};
   const receiptRules = { ...DEFAULT_RECEIPT_RULES, ...clean(p.receiptRules) };
+  delete receiptRules.maxFiles;
+  receiptRules.maxFilesPerEntry = MAX_FILES_PER_ENTRY;
+  receiptRules.maxFileSizeMb = MAX_FILE_SIZE_MB;
   if (!Array.isArray(receiptRules.allowedMimeTypes) || receiptRules.allowedMimeTypes.length === 0) {
     receiptRules.allowedMimeTypes = DEFAULT_RECEIPT_RULES.allowedMimeTypes;
   }
@@ -821,9 +826,9 @@ function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = 
   else if (input.remark.length < minR) add('remark', 'REMARK_TOO_SHORT', `Remark must be at least ${minR} characters.`);
   else if (input.remark.length > maxR) add('remark', 'REMARK_TOO_LONG', `Remark can be at most ${maxR} characters.`);
 
-  // Receipts
+  // Receipts (no whole-claim image count limit; max 7 images per individual entry)
   const allowed = receiptRules.allowedMimeTypes.map((t) => String(t).toLowerCase());
-  const maxFiles = Number(receiptRules.maxFiles) || 10;
+  const maxPerEntry = MAX_FILES_PER_ENTRY;
   const svcEntries = input.entries || [];
   const isConveyanceEntry = (e) => String(e.expenseType || '').toUpperCase() === 'CONVEYANCE';
   // Own Vehicle travel (KM_RATE) uses the Local Conveyance proofs (photos) instead of bills
@@ -840,8 +845,29 @@ function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = 
   if (receiptsRequired && input.receipts.length === 0) {
     add('receipts', 'RECEIPT_REQUIRED', 'Please attach at least one bill or receipt.', true);
   }
-  if (input.receipts.length > maxFiles) add('receipts', 'TOO_MANY_FILES', `You can attach a maximum of ${maxFiles} receipts.`);
-  checkFiles(input.receipts, 'receipts');
+  if (svcEntries.length > 0) {
+    svcEntries.forEach((e, idx) => {
+      const p = svcEntries.length > 1 ? `entries[${idx}].` : '';
+      const entryLabel = svcEntries.length > 1 ? `Entry #${idx + 1}: ` : '';
+      const entryImageCount =
+        (e.receipts || []).length +
+        (e.numberPlatePhotos || []).length +
+        (e.startKmPhotos || []).length +
+        (e.endKmPhotos || []).length;
+      if (entryImageCount > maxPerEntry) {
+        add(`${p}receipts`, 'TOO_MANY_FILES', `${entryLabel}You can attach a maximum of ${maxPerEntry} images per entry.`);
+      }
+      checkFiles(e.receipts || [], `${p}receipts`);
+    });
+    if (svcEntries.every((e) => !(e.receipts || []).length)) {
+      checkFiles(input.receipts, 'receipts');
+    }
+  } else {
+    if (input.receipts.length > maxPerEntry) {
+      add('receipts', 'TOO_MANY_FILES', `You can attach a maximum of ${maxPerEntry} images per entry.`);
+    }
+    checkFiles(input.receipts, 'receipts');
+  }
 
   // Lodging form — Food section (one or more food bills over the same date range)
   if (input.claimMode === 'LODGING' && input.includeFood) {
@@ -855,7 +881,7 @@ function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = 
       else if (f.requestedAmount < 0) add(`${p}requestedAmount`, 'AMOUNT_NEGATIVE', `${label}: amount cannot be negative.`);
       else if (f.requestedAmount === 0) add(`${p}requestedAmount`, 'AMOUNT_ZERO', `${label}: amount must be greater than zero.`, true);
       else if (f.requestedAmount > MAX_AMOUNT) add(`${p}requestedAmount`, 'AMOUNT_TOO_HIGH', `${label}: amount cannot exceed ${formatINR(MAX_AMOUNT)}.`);
-      if ((f.receipts || []).length > maxFiles) add(`${p}receipts`, 'TOO_MANY_FILES', `${label}: you can attach a maximum of ${maxFiles} bills.`);
+      if ((f.receipts || []).length > maxPerEntry) add(`${p}receipts`, 'TOO_MANY_FILES', `${label}: you can attach a maximum of ${maxPerEntry} images per entry.`);
       checkFiles(f.receipts || [], `${p}receipts`);
     });
     if (foodTypeConfig && foodTypeConfig.proofRequired === true && foodEntries.length && foodEntries.every((f) => !(f.receipts || []).length)) {
@@ -946,7 +972,9 @@ function validateClaimInput(input, { policyConfig, typeConfig, foodTypeConfig = 
     }
   }
 
-  return isDraft ? errors.filter((e) => !e.required) : errors;
+  // Drafts skip all * required fields, upload, and typing restrictions; all rules apply on submit.
+  const DRAFT_BLOCKING_CODES = new Set(['INVALID_MODE', 'AMOUNT_NEGATIVE', 'STAY_TYPE_INVALID', 'INVALID_DATE']);
+  return isDraft ? errors.filter((e) => !e.required && DRAFT_BLOCKING_CODES.has(e.code)) : errors;
 }
 
 // ─── Amounts (pure) ─────────────────────────────────────────────────────────

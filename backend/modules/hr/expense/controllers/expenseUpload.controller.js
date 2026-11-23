@@ -5,12 +5,12 @@ const { getActivePolicy } = require('../services/policyEngine');
 const { resolvePolicyConfig } = require('../services/claimRules');
 const access = require('../services/expenseAccess');
 
-// Hard ceiling; the per-company limit (receiptRules.maxFileSizeMb) is enforced below.
-const HARD_LIMIT_MB = 25;
+const MAX_FILE_SIZE_MB = 15;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: HARD_LIMIT_MB * 1024 * 1024, files: 1 },
+  limits: { fileSize: MAX_FILE_SIZE_BYTES, files: 1 },
   fileFilter: (req, file, cb) => {
     // Allow images, PDFs, ODF, and all supporting document types
     cb(null, true);
@@ -26,7 +26,11 @@ exports.uploadMiddleware = (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (!err) return next();
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(413).json({ success: false, code: 'FILE_TOO_LARGE', message: `File is too large. Maximum allowed size is ${HARD_LIMIT_MB} MB.` });
+      return res.status(413).json({
+        success: false,
+        code: 'FILE_TOO_LARGE',
+        message: `File is too large. Maximum allowed size is ${MAX_FILE_SIZE_MB} MB.`,
+      });
     }
     if (req.body && (req.body.image || req.body.base64 || req.body.file)) {
       return next();
@@ -120,9 +124,12 @@ exports.uploadProofFile = async (req, res) => {
     }
 
     const rules = await receiptRulesFor(req);
-    const maxBytes = Math.min(HARD_LIMIT_MB, Number(rules.maxFileSizeMb) || 10) * 1024 * 1024;
-    if (req.file.size > maxBytes) {
-      return res.status(413).json({ success: false, code: 'FILE_TOO_LARGE', message: `"${req.file.originalname}" is too large. Maximum allowed size is ${Math.round(maxBytes / 1048576)} MB.` });
+    if (req.file.size > MAX_FILE_SIZE_BYTES) {
+      return res.status(413).json({
+        success: false,
+        code: 'FILE_TOO_LARGE',
+        message: `"${req.file.originalname}" is too large. Maximum allowed size is ${MAX_FILE_SIZE_MB} MB.`,
+      });
     }
 
     let realType = sniffMime(req.file.buffer);
@@ -181,6 +188,16 @@ exports.uploadProofBase64 = async (req, res) => {
     const name = req.body?.name || 'proof';
     if (!rawImage) {
       return res.status(400).json({ success: false, message: 'No image base64 data provided.' });
+    }
+    const b64Payload = String(rawImage).replace(/^data:[^;]+;base64,/i, '').replace(/\s+/g, '');
+    const padding = b64Payload.endsWith('==') ? 2 : (b64Payload.endsWith('=') ? 1 : 0);
+    const decodedBytes = Math.floor((b64Payload.length * 3) / 4) - padding;
+    if (decodedBytes > MAX_FILE_SIZE_BYTES) {
+      return res.status(413).json({
+        success: false,
+        code: 'FILE_TOO_LARGE',
+        message: `"${name}" is too large. Maximum allowed size is ${MAX_FILE_SIZE_MB} MB.`,
+      });
     }
     const folder = `expense/${req.tenant?.companyId || 'company'}`;
     const geoTag = parseGeoTag(req.body?.geoTag);

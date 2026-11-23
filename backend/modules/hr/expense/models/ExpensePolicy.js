@@ -118,8 +118,6 @@ const ExpensePolicySchema = new mongoose.Schema({
   // Bills / receipt proof rules
   receiptRules: {
     required: { type: Boolean, default: true },
-    maxFiles: { type: Number, default: 10 },
-    maxFileSizeMb: { type: Number, default: 10 },
     allowedMimeTypes: {
       type: [String],
       default: ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'],

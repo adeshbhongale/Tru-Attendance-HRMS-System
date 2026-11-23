@@ -70,24 +70,28 @@ exports.getCompanies = async (req, res) => {
   try {
     const companies = await Company.find().sort({ createdAt: -1 }).lean();
 
-    // Populate company admin details for each company
+    // Populate dedicated Company Admin (only role === 'company_admin'; max 1 per company)
     const companyIds = companies.map(c => c._id);
     const companyAdmins = await User.find({
       companyId: { $in: companyIds },
-      role: { $in: ['company_admin', 'admin'] }
+      role: 'company_admin'
     }).select('name email mobile employeeIdCode companyId companyCode status').lean();
 
     const adminMap = {};
     companyAdmins.forEach(adm => {
-      if (adm.companyId) {
+      if (adm.companyId && !adminMap[adm.companyId.toString()]) {
         adminMap[adm.companyId.toString()] = adm;
       }
     });
 
-    const data = companies.map(comp => ({
-      ...comp,
-      companyAdmin: adminMap[comp._id.toString()] || null
-    }));
+    const data = companies.map(comp => {
+      const adm = adminMap[comp._id.toString()] || null;
+      return {
+        ...comp,
+        companyAdmin: adm,
+        companyAdmins: adm ? [adm] : []
+      };
+    });
 
     res.status(200).json({ success: true, count: data.length, data });
   } catch (err) {
@@ -182,6 +186,124 @@ exports.createCompany = async (req, res) => {
       }
     });
   } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.addCompanyAdmin = async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const companyId = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(companyId)) {
+      return res.status(400).json({ success: false, message: 'Invalid company ID.' });
+    }
+
+    const company = await Company.findById(companyId).lean();
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found.' });
+    }
+
+    // Strict 1-Company-Admin-per-company rule
+    const existingCompanyAdmin = await User.findOne({
+      $or: [{ companyId: company._id }, { company: company._id }],
+      role: 'company_admin',
+    }).select('name email employeeIdCode').lean();
+
+    if (existingCompanyAdmin) {
+      return res.status(409).json({
+        success: false,
+        message: `Company '${company.name}' already has a Company Admin (${existingCompanyAdmin.email}). Only 1 Company Admin is allowed per company.`
+      });
+    }
+
+    const cleanName = String(req.body.name || req.body.adminName || '').trim();
+    const emailLower = String(req.body.email || req.body.adminEmail || '').trim().toLowerCase();
+    const cleanMobile = String(req.body.mobile || req.body.adminMobile || '').trim();
+    const cleanPassword = String(req.body.password || req.body.adminPassword || '').trim();
+    const rawEmpCode = String(req.body.employeeIdCode || req.body.adminEmployeeIdCode || '').trim().toUpperCase();
+
+    if (!cleanName) return res.status(400).json({ success: false, message: 'Company Admin Name is required.' });
+    if (!emailLower) return res.status(400).json({ success: false, message: 'Company Admin Email is required.' });
+    if (!cleanMobile) return res.status(400).json({ success: false, message: 'Company Admin Mobile number is required.' });
+    if (!cleanPassword || cleanPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+    }
+
+    const companyCode = String(company.code || company.companyCode || 'COMP').trim().toUpperCase();
+    let finalEmpCode = rawEmpCode;
+    if (!finalEmpCode) {
+      const baseCode = `ADM_${companyCode}`;
+      let candidate = baseCode;
+      let suffix = 2;
+      while (await User.exists({ $or: [{ companyId: company._id }, { company: company._id }], employeeIdCode: candidate })) {
+        candidate = `${baseCode}_${suffix++}`;
+      }
+      finalEmpCode = candidate;
+    }
+
+    // Strict additive guard: never overwrite or modify any existing user in this company
+    const conflict = await User.findOne({
+      $and: [
+        { $or: [{ companyId: company._id }, { company: company._id }] },
+        {
+          $or: [
+            { email: emailLower },
+            { mobile: cleanMobile },
+            { employeeIdCode: finalEmpCode }
+          ]
+        }
+      ]
+    }).select('email mobile employeeIdCode').lean();
+
+    if (conflict) {
+      const field =
+        conflict.email === emailLower ? 'Email' :
+        conflict.mobile === cleanMobile ? 'Mobile number' :
+        'Employee ID Code';
+      return res.status(409).json({
+        success: false,
+        message: `${field} already exists in ${company.name}. Please use unique credentials.`
+      });
+    }
+
+    const created = await User.create({
+      name: cleanName,
+      email: emailLower,
+      mobile: cleanMobile,
+      employeeIdCode: finalEmpCode,
+      password: cleanPassword,
+      role: 'company_admin',
+      roleCode: 'TCCA1',
+      scope: 'COMPANY',
+      companyId: company._id,
+      company: company._id,
+      department: 'Management',
+      designation: 'Company Admin',
+      status: 'ACTIVE',
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Company Admin '${created.name}' added to '${company.name}' successfully!`,
+      data: {
+        _id: created._id,
+        name: created.name,
+        email: created.email,
+        mobile: created.mobile,
+        employeeIdCode: created.employeeIdCode,
+        role: created.role,
+        roleCode: created.roleCode,
+        companyId: created.companyId,
+        status: created.status,
+      }
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'A user with this Email, Mobile number, or Employee ID Code already exists in this company.'
+      });
+    }
     res.status(400).json({ success: false, message: err.message });
   }
 };

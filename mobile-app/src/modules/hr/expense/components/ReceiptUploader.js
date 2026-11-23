@@ -32,8 +32,8 @@ export const fromAttachments = (list = []) =>
 const ReceiptUploader = ({
   files,
   setFiles,
-  maxFiles = 10,
-  maxSizeMb = 10,
+  maxFiles = 7,
+  maxSizeMb = 15,
   allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf"],
   purpose = "receipt",
   title = "Add Photos or PDF",
@@ -67,7 +67,7 @@ const ReceiptUploader = ({
       const size = a.fileSize || a.size || 0;
       if (!allowedTypes.includes(type)) { rejected.push(`${name}: unsupported file type`); continue; }
       if (size && size > maxSizeMb * 1048576) { rejected.push(`${name}: larger than ${maxSizeMb} MB`); continue; }
-      if (files.length + accepted.length >= maxFiles) { rejected.push(`${name}: maximum ${maxFiles} files`); continue; }
+      if (files.length + accepted.length >= maxFiles) { rejected.push(`${name}: maximum ${maxFiles} images per entry`); continue; }
       accepted.push({ localId: `loc_${Date.now()}_${++seq}`, uri: a.uri, name, type, size, status: "uploading", progress: 0 });
     }
     if (accepted.length) {
@@ -79,7 +79,7 @@ const ReceiptUploader = ({
 
   const pick = async (source) => {
     setSheet(false);
-    if (remaining <= 0) { Alert.alert("Limit reached", `You can attach a maximum of ${maxFiles} files.`); return; }
+    if (remaining <= 0) { Alert.alert("Limit reached", `You can attach a maximum of ${maxFiles} images per entry.`); return; }
     try {
       if (source === "camera") {
         const perm = await ImagePicker.requestCameraPermissionsAsync();

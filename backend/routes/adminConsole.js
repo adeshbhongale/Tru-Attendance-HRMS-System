@@ -16,6 +16,9 @@ router.route('/companies/:id')
   .put(authorize('superadmin'), adminConsole.updateCompany)
   .delete(authorize('superadmin'), adminConsole.deleteCompany);
 
+router.route('/companies/:id/admins')
+  .post(authorize('superadmin'), adminConsole.addCompanyAdmin);
+
 // Enterprise Org Chart Tree Generator (Accessible to all logged in users)
 router.route('/org-chart-tree')
   .get(adminConsole.getOrgChartTree);

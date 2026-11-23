@@ -193,11 +193,76 @@ test('TC10c valid claim without receipts passes when proofRequired is false', ()
   assert.deepEqual(validate(normalBody({ expenseType: 'FOOD', receipts: [] })), []);
 });
 
-test('TC10b too many / unsupported / not-uploaded receipts are rejected', () => {
-  const many = Array.from({ length: 11 }, (_, i) => receipt(`Bill_${i}.jpg`));
-  assert.ok(codes(validate(normalBody({ receipts: many }))).includes('TOO_MANY_FILES'));
+test('TC10b max 7 images per entry (no whole-claim limit), while unsupported / not-uploaded receipts are rejected', () => {
+  // Single entry with 7 receipts passes; 8 receipts fails
+  const seven = Array.from({ length: 7 }, (_, i) => receipt(`Bill_${i}.jpg`));
+  const eight = Array.from({ length: 8 }, (_, i) => receipt(`Bill_${i}.jpg`));
+  assert.deepEqual(validate(normalBody({ receipts: seven })), []);
+  assert.ok(codes(validate(normalBody({ receipts: eight }))).includes('TOO_MANY_FILES'));
+
+  // Whole claim with 3 entries x 7 receipts each = 21 total receipts passes (no whole-claim limit)
+  const threeEntries = [0, 1, 2].map((eIdx) => ({
+    expenseType: 'TRAVEL',
+    requestedAmount: 200,
+    remark: `Travel leg ${eIdx + 1} for client visit`,
+    receipts: Array.from({ length: 7 }, (_, i) => receipt(`E${eIdx}_Bill_${i}.jpg`)),
+  }));
+  assert.deepEqual(
+    validate(normalBody({ entries: threeEntries, receipts: threeEntries.flatMap((e) => e.receipts) })),
+    []
+  );
+
+  // One entry with 8 receipts among multiple entries fails
+  const badEntries = [
+    threeEntries[0],
+    { ...threeEntries[1], receipts: eight },
+  ];
+  assert.ok(
+    codes(validate(normalBody({ entries: badEntries, receipts: badEntries.flatMap((e) => e.receipts) }))).includes('TOO_MANY_FILES')
+  );
+
+  // Lodging claim with 7 hotel receipts + 2 food entries x 7 bills each = 21 total passes; 8 on a food entry fails
+  assert.deepEqual(
+    validate(lodgingBody({
+      receipts: seven,
+      includeFood: true,
+      foodEntries: [
+        { requestedAmount: 200, remark: 'Lunch', receipts: seven },
+        { requestedAmount: 250, remark: 'Dinner', receipts: seven },
+      ],
+    })),
+    []
+  );
+  assert.ok(
+    codes(validate(lodgingBody({
+      receipts: seven,
+      includeFood: true,
+      foodEntries: [{ requestedAmount: 200, remark: 'Lunch', receipts: eight }],
+    }))).includes('TOO_MANY_FILES')
+  );
+
   assert.ok(codes(validate(normalBody({ receipts: [receipt('a.gif', 'image/gif')] }))).includes('UNSUPPORTED_FILE'));
   assert.ok(codes(validate(normalBody({ receipts: [{ name: 'x.jpg', url: 'file:///data/x.jpg', type: 'image/jpeg' }] }))).includes('UPLOAD_INCOMPLETE'));
+});
+
+test('TC10d upload rejects images larger than 15 MB with FILE_TOO_LARGE', async () => {
+  const uploadCtrl = require('../controllers/expenseUpload.controller');
+  const makeRes = () => {
+    const out = { statusCode: 200, body: null };
+    out.status = (c) => { out.statusCode = c; return out; };
+    out.json = (b) => { out.body = b; return out; };
+    return out;
+  };
+  const oversizedB64 = Buffer.alloc(15 * 1024 * 1024 + 1024).toString('base64');
+  const resB64 = makeRes();
+  await uploadCtrl.uploadProofBase64({ body: { image: `data:image/jpeg;base64,${oversizedB64}`, name: 'big.jpg' }, tenant: {} }, resB64);
+  assert.equal(resB64.statusCode, 413);
+  assert.equal(resB64.body?.code, 'FILE_TOO_LARGE');
+
+  const resMp = makeRes();
+  await uploadCtrl.uploadProofFile({ file: { originalname: 'big.jpg', size: 15 * 1024 * 1024 + 1, buffer: Buffer.alloc(16), mimetype: 'image/jpeg' }, body: {}, tenant: {} }, resMp);
+  assert.equal(resMp.statusCode, 413);
+  assert.equal(resMp.body?.code, 'FILE_TOO_LARGE');
 });
 
 test('TC11 zero and negative amounts are rejected', () => {
@@ -438,6 +503,50 @@ test('invalid lodging date range and future dates are rejected', () => {
 test('drafts skip required-field errors but keep format errors', () => {
   const draft = validate({ claimMode: 'NORMAL', requestedAmount: -1 }, { isDraft: true });
   assert.deepEqual(codes(draft), ['AMOUNT_NEGATIVE']);
+});
+
+test('drafts allow saving without required fields, upload, or typing restrictions while submit enforces all', () => {
+  const partialNormal = {
+    claimMode: 'NORMAL',
+    claimDate: '2026-09-01', // older than maxPastDaysNormal
+    customerName: '',
+    destinationCity: '',
+    expenseType: 'STOCK_PURCHASE',
+    requestedAmount: 0,
+    remark: 'hi', // shorter than 5 chars
+    receipts: [],
+    visitType: 'VISIT',
+    serviceReports: [],
+  };
+  assert.deepEqual(validate(partialNormal, { isDraft: true, maxPastDaysNormal: 2 }), []);
+  const submitNormalErrs = codes(validate(partialNormal, { isDraft: false, maxPastDaysNormal: 2 }));
+  assert.ok(submitNormalErrs.includes('PAST_DATE_LIMIT_EXCEEDED'));
+  assert.ok(submitNormalErrs.includes('CUSTOMER_REQUIRED'));
+  assert.ok(submitNormalErrs.includes('DESTINATION_REQUIRED'));
+  assert.ok(submitNormalErrs.includes('REMARK_TOO_SHORT'));
+  assert.ok(submitNormalErrs.includes('RECEIPT_REQUIRED'));
+  assert.ok(submitNormalErrs.includes('SERVICE_REPORT_REQUIRED'));
+  assert.ok(submitNormalErrs.includes('BARCODE_REQUIRED'));
+
+  const partialLodging = {
+    claimMode: 'LODGING',
+    fromDate: '2026-10-08',
+    toDate: '2026-10-08', // same day
+    stayType: '',
+    customerName: '',
+    destinationCity: '',
+    expenseType: 'LODGING',
+    requestedAmount: '',
+    remark: 'a',
+    receipts: [],
+    serviceReports: [],
+  };
+  assert.deepEqual(validate(partialLodging, { isDraft: true }), []);
+  const submitLodgingErrs = codes(validate(partialLodging, { isDraft: false }));
+  assert.ok(submitLodgingErrs.includes('INVALID_DATE_RANGE'));
+  assert.ok(submitLodgingErrs.includes('STAY_TYPE_REQUIRED'));
+  assert.ok(submitLodgingErrs.includes('REMARK_TOO_SHORT'));
+  assert.ok(submitLodgingErrs.includes('SERVICE_REPORT_REQUIRED'));
 });
 
 test('type defaults: Food/Travel/Conveyance/Other/StockPurchase have no same-date limit, Lodging is a lodging type', () => {

@@ -236,6 +236,16 @@ const SuperAdminConsole = () => {
     adminPassword: '',
     adminEmployeeIdCode: ''
   });
+  const [showAddCompanyAdminModal, setShowAddCompanyAdminModal] = useState(false);
+  const [targetCompanyForAdmin, setTargetCompanyForAdmin] = useState(null);
+  const [addingCompanyAdmin, setAddingCompanyAdmin] = useState(false);
+  const [addCompanyAdminForm, setAddCompanyAdminForm] = useState({
+    name: '',
+    email: '',
+    mobile: '',
+    password: '',
+    employeeIdCode: ''
+  });
   const [levels, setLevels] = useState([]);
   const [grades, setGrades] = useState([]);
   const [roleTemplates, setRoleTemplates] = useState([]);
@@ -296,6 +306,38 @@ const SuperAdminConsole = () => {
       fetchData();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create company & company admin');
+    }
+  };
+
+  const handleOpenAddCompanyAdminModal = (comp) => {
+    setTargetCompanyForAdmin(comp);
+    setAddCompanyAdminForm({
+      name: '',
+      email: '',
+      mobile: '',
+      password: '',
+      employeeIdCode: ''
+    });
+    setShowAddCompanyAdminModal(true);
+  };
+
+  const handleSaveAddedCompanyAdmin = async (e) => {
+    e.preventDefault();
+    if (!targetCompanyForAdmin?._id || addingCompanyAdmin) return;
+    setAddingCompanyAdmin(true);
+    try {
+      const res = await api.post(
+        `/admin/console/companies/${targetCompanyForAdmin._id}/admins`,
+        addCompanyAdminForm
+      );
+      toast.success(res.data?.message || 'Company Admin added successfully!');
+      setShowAddCompanyAdminModal(false);
+      setTargetCompanyForAdmin(null);
+      fetchData(true);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to add Company Admin');
+    } finally {
+      setAddingCompanyAdmin(false);
     }
   };
 
@@ -981,25 +1023,37 @@ const SuperAdminConsole = () => {
                         <div className="mt-4 p-3.5 bg-white border border-slate-200/80 rounded-xl space-y-2">
                           <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-400 tracking-wider border-b border-slate-100 pb-1.5">
                             <span>Company Admin Credentials</span>
-                            <span className="text-indigo-600 font-bold">TCCA1</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-indigo-600 font-bold">TCCA1</span>
+                              {!comp.companyAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenAddCompanyAdminModal(comp)}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold transition-colors"
+                                  title={`Add Company Admin to ${comp.name}`}
+                                >
+                                  <Plus size={11} /> Add Admin
+                                </button>
+                              )}
+                            </div>
                           </div>
 
                           {comp.companyAdmin ? (
                             <div className="space-y-1 text-xs">
                               <div className="flex items-center gap-2 text-slate-800 font-bold">
-                                <Users size={14} className="text-indigo-600" />
-                                <span>{comp.companyAdmin.name}</span>
+                                <Users size={14} className="text-indigo-600 shrink-0" />
+                                <span className="truncate">{comp.companyAdmin.name}</span>
                               </div>
                               <div className="flex items-center gap-2 text-slate-600 font-medium">
-                                <Mail size={14} className="text-slate-400" />
-                                <span>{comp.companyAdmin.email}</span>
+                                <Mail size={14} className="text-slate-400 shrink-0" />
+                                <span className="truncate">{comp.companyAdmin.email}</span>
                               </div>
                               <div className="flex items-center gap-2 text-slate-600 font-medium">
-                                <Phone size={14} className="text-slate-400" />
+                                <Phone size={14} className="text-slate-400 shrink-0" />
                                 <span>{comp.companyAdmin.mobile}</span>
                               </div>
-                              <div className="flex items-center gap-2 text-slate-600 font-mono text-[11px] font-bold pt-1">
-                                <KeyRound size={13} className="text-amber-500" />
+                              <div className="flex items-center gap-2 text-slate-600 font-mono text-[11px] font-bold pt-0.5">
+                                <KeyRound size={13} className="text-amber-500 shrink-0" />
                                 <span>ID: {comp.companyAdmin.employeeIdCode || 'ADM_' + comp.code}</span>
                               </div>
                             </div>
@@ -2215,6 +2269,125 @@ const SuperAdminConsole = () => {
                   className="px-6 py-2.5 bg-indigo-600 text-white rounded-2xl font-bold text-xs hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 active:scale-95"
                 >
                   Create Company & Admin
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* --- ADD COMPANY ADMIN TO EXISTING COMPANY MODAL --- */}
+      {showAddCompanyAdminModal && targetCompanyForAdmin && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto border border-slate-100">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl">
+                  <Shield size={22} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Add Company Admin</h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Add a dedicated Company Admin (TCCA1) to an existing company
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddCompanyAdminModal(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl flex items-center justify-between">
+              <div className="min-w-0">
+                <div className="text-[10px] font-extrabold text-indigo-600 uppercase tracking-wider">Target Company</div>
+                <div className="text-sm font-extrabold text-slate-900 truncate">{targetCompanyForAdmin.name}</div>
+              </div>
+              <span className="px-2.5 py-1 bg-indigo-600 text-white text-[11px] font-extrabold rounded-lg tracking-wider shrink-0 ml-2">
+                {targetCompanyForAdmin.code}
+              </span>
+            </div>
+
+            <form onSubmit={handleSaveAddedCompanyAdmin} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Company Admin Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Rajesh Kulkarni"
+                    value={addCompanyAdminForm.name}
+                    onChange={(e) => setAddCompanyAdminForm({ ...addCompanyAdminForm, name: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Company Admin Email *</label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="admin2@company.com"
+                    value={addCompanyAdminForm.email}
+                    onChange={(e) => setAddCompanyAdminForm({ ...addCompanyAdminForm, email: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Mobile Number *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="9876543210"
+                    value={addCompanyAdminForm.mobile}
+                    onChange={(e) => setAddCompanyAdminForm({ ...addCompanyAdminForm, mobile: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Password *</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    placeholder="Min 6 characters"
+                    value={addCompanyAdminForm.password}
+                    onChange={(e) => setAddCompanyAdminForm({ ...addCompanyAdminForm, password: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Employee ID Code (Optional)</label>
+                <input
+                  type="text"
+                  placeholder={`Auto (e.g. ADM_${targetCompanyForAdmin.code}_2)`}
+                  value={addCompanyAdminForm.employeeIdCode}
+                  onChange={(e) => setAddCompanyAdminForm({ ...addCompanyAdminForm, employeeIdCode: e.target.value.toUpperCase() })}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold tracking-wider text-slate-900 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAddCompanyAdminModal(false)}
+                  disabled={addingCompanyAdmin}
+                  className="px-5 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold text-xs hover:bg-slate-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={addingCompanyAdmin}
+                  className="px-6 py-2.5 bg-indigo-600 text-white rounded-2xl font-bold text-xs hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 active:scale-95 disabled:opacity-60"
+                >
+                  {addingCompanyAdmin ? 'Adding...' : 'Add Company Admin'}
                 </button>
               </div>
             </form>

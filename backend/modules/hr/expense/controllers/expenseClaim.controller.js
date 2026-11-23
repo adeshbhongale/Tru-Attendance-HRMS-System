@@ -250,10 +250,10 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId, ex
     user: effectiveActorUser,
     maxPastDaysNormal: skipNormalPastLimit ? null : configuredMaxPastDaysNormal,
   });
-  errors.push(...(submit ? travelErrors : travelErrors.filter((e) => !e.required)));
+  if (submit) errors.push(...travelErrors);
 
   // Stay with relative needs a valid configured percentage (never silently defaulted here)
-  if (input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE' && rules.resolveRelativeStayPercent(policy) === null) {
+  if (submit && input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE' && rules.resolveRelativeStayPercent(policy) === null) {
     errors.push({ field: 'stayType', code: 'RELATIVE_STAY_CONFIG_MISSING', message: 'Relative stay allowance percentage is not configured. Please contact HR / Admin.' });
   }
 
@@ -1468,7 +1468,7 @@ exports.submitClaim = async (req, res) => {
     if (claimsDisabledMsg) return fail(res, 403, claimsDisabledMsg, [{ field: 'claimsEnabled', code: 'CLAIMS_DISABLED', message: claimsDisabledMsg }]);
 
     const wasRejected = bs === 'REJECTED';
-    const isLegacyClaim = !claim.claimDate && !claim.fromDate;
+    const isLegacyClaim = !claim.claimDate && !claim.fromDate && Number(claim.calcVersion || 1) < 2;
     if (isLegacyClaim) {
       // Claims created by the old multi-step form keep their stored calculation.
       const itemCount = (claim.employeeClaims || []).reduce((s, ec) => s + (ec.items?.length || 0), 0);

@@ -43,6 +43,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -417,6 +418,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   // Server Preview & Validation
   const [previewData, setPreviewData] = useState(null);
   const [previewing, setPreviewing] = useState(false);
+  const previewHintBounce = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (previewing || previewData) {
+      previewHintBounce.setValue(0);
+      return undefined;
+    }
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(previewHintBounce, { toValue: -4, duration: 450, useNativeDriver: true }),
+        Animated.timing(previewHintBounce, { toValue: 0, duration: 450, useNativeDriver: true }),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [previewing, previewData, previewHintBounce]);
   const [submitting, setSubmitting] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [serverErrors, setServerErrors] = useState([]);
@@ -2425,9 +2441,41 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setActiveModal(null);
   };
 
-  // Multiple Bill Proof & Supporting Document Pickers
+  // Multiple Bill Proof & Supporting Document Pickers (max 7 images per entry, max 15 MB per image; no whole-claim image limit)
+  const MAX_IMAGES_PER_ENTRY = 7;
+  const MAX_IMAGE_SIZE_MB = 15;
+  const MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024;
+  const getAssetSizeBytes = (asset) => {
+    if (asset?.fileSize) return Number(asset.fileSize) || 0;
+    if (asset?.size) return Number(asset.size) || 0;
+    if (typeof asset?.base64 === "string" && asset.base64.length > 0) {
+      const cleanB64 = asset.base64.replace(/^data:[^;]+;base64,/i, "");
+      return Math.floor((cleanB64.length * 3) / 4);
+    }
+    return 0;
+  };
+
   const handlePickAttachment = async (useCamera = false, _legacyFullPayment = false, targetEntryIndex = null, targetField = "attachments") => {
     try {
+      let currentEntryCount = 0;
+      if (targetField === "food_attachments" && typeof targetEntryIndex === "number") {
+        currentEntryCount = (foodEntries[targetEntryIndex]?.attachments || []).length;
+      } else if (typeof targetEntryIndex === "number") {
+        const entryObj = entries[targetEntryIndex] || {};
+        currentEntryCount =
+          (entryObj.attachments || []).length +
+          (entryObj.numberPlatePhotos || []).length +
+          (entryObj.startKmPhotos || []).length +
+          (entryObj.endKmPhotos || []).length;
+      } else {
+        currentEntryCount = attachments.length;
+      }
+      const remainingSlots = Math.max(0, MAX_IMAGES_PER_ENTRY - currentEntryCount);
+      if (remainingSlots <= 0) {
+        Alert.alert("Image Limit Reached", `You can upload a maximum of ${MAX_IMAGES_PER_ENTRY} images per entry.`);
+        return;
+      }
+
       let result;
       let geoTag = null;
       if (useCamera) {
@@ -2458,16 +2506,42 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           mediaTypes: ["images"],
           quality: 0.6,
           allowsMultipleSelection: true,
+          selectionLimit: remainingSlots,
           base64: true,
         });
       }
 
       if (result.canceled || !result.assets || !result.assets.length) return;
 
+      const oversizedNames = [];
+      const sizedAssets = [];
+      for (const a of result.assets) {
+        const sz = getAssetSizeBytes(a);
+        if (sz > MAX_IMAGE_SIZE_BYTES) {
+          oversizedNames.push(a.fileName || "Image");
+        } else {
+          sizedAssets.push(a);
+        }
+      }
+      const trimmedCount = Math.max(0, sizedAssets.length - remainingSlots);
+      const validAssets = sizedAssets.slice(0, remainingSlots);
+
+      if (oversizedNames.length > 0 || trimmedCount > 0) {
+        const msgs = [];
+        if (oversizedNames.length > 0) {
+          msgs.push(`Maximum allowed image size is ${MAX_IMAGE_SIZE_MB} MB (${oversizedNames.join(", ")} skipped).`);
+        }
+        if (trimmedCount > 0) {
+          msgs.push(`Maximum ${MAX_IMAGES_PER_ENTRY} images allowed per entry (${trimmedCount} extra skipped).`);
+        }
+        Alert.alert("Some Images Not Added", msgs.join("\n"));
+      }
+      if (!validAssets.length) return;
+
       setPreviewData(null);
       setUploadingProof(true);
 
-      for (const asset of result.assets) {
+      for (const asset of validAssets) {
         const tempId = `proof_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         const fileName = asset.fileName || `Bill_${Date.now()}.jpg`;
 
@@ -2731,10 +2805,24 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
       if (!assets || assets.length === 0) return;
 
+      const oversizedSr = [];
+      const validSrAssets = [];
+      for (const a of assets) {
+        if (getAssetSizeBytes(a) > MAX_IMAGE_SIZE_BYTES) {
+          oversizedSr.push(a.name || "Image");
+        } else {
+          validSrAssets.push(a);
+        }
+      }
+      if (oversizedSr.length > 0) {
+        Alert.alert("Image Too Large", `Maximum allowed image size is ${MAX_IMAGE_SIZE_MB} MB (${oversizedSr.join(", ")} skipped).`);
+      }
+      if (!validSrAssets.length) return;
+
       setPreviewData(null);
       setUploadingServiceReport(true);
 
-      for (const asset of assets) {
+      for (const asset of validSrAssets) {
         const tempId = `sr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
         const newFile = {
           localId: tempId,
@@ -3751,7 +3839,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const handleSaveDraft = async () => {
     if (savingDraft || submitting || previewing) return;
 
-    if (!validateForm()) return;
+    // Save Draft skips all * required fields, upload, and typing restrictions;
+    // full validation applies when submitting (or updating an already-submitted claim).
+    if (isEditingSubmittedClaim && !validateForm()) return;
 
     setSavingDraft(true);
     setServerErrors([]);
@@ -5737,14 +5827,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                           if (!fInfo) return null;
                           const fTotal = Number(fInfo.entitlement ?? fInfo.totalPeriodLimit ?? 0);
                           const fPrior = Number(fInfo.priorConsumed ?? 0);
-                          const fRem = Number(fInfo.remaining ?? fInfo.totalRemainingLimit ?? Math.max(0, fTotal - fPrior));
+                          const fBaseRem = Number(fInfo.remaining ?? fInfo.totalRemainingLimit ?? Math.max(0, fTotal - fPrior));
+                          const priorFoodInForm = entries
+                            .slice(0, idx)
+                            .reduce(
+                              (sum, prev) => (prev.expenseType === "FOOD" ? sum + Math.max(0, parseFloat(prev.requestedAmount) || 0) : sum),
+                              0
+                            );
+                          const fRem = Math.max(0, Math.round((fBaseRem - priorFoodInForm) * 100) / 100);
                           return (
                             <View style={{ backgroundColor: "#f8fafc", borderColor: "#e2e8f0", borderWidth: 1, borderRadius: 8, padding: 8, marginBottom: 8 }}>
                               <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                                 <Text style={{ fontSize: 11, color: "#64748b", fontWeight: "600" }}>
                                   Remaining Food Entitlement ({claimDate || "Today"}):
                                 </Text>
-                                <Text style={{ fontSize: 11, color: "#059669", fontWeight: "800" }}>
+                                <Text style={{ fontSize: 11, color: fRem > 0 ? "#059669" : "#dc2626", fontWeight: "800" }}>
                                   {formatINR(fRem)}
                                 </Text>
                               </View>
@@ -6551,20 +6648,28 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           {/* BOTTOM ACTIONS: CALCULATE, SAVE DRAFT & SUBMIT CLAIM     */}
           {/* ======================================================== */}
           <View style={styles.bottomActions}>
-            <TouchableOpacity
-              style={styles.previewBtn}
-              onPress={handlePreview}
-              disabled={previewing || savingDraft || submitting}
-            >
-              {previewing ? (
-                <ActivityIndicator size="small" color="#4f46e5" />
-              ) : (
-                <>
-                  <Calculator size={16} color="#4f46e5" />
-                  <Text style={styles.previewBtnText}>Calculate & Preview Breakdown</Text>
-                </>
-              )}
-            </TouchableOpacity>
+            <View>
+              <Animated.View style={{ alignItems: "center", transform: [{ translateY: previewHintBounce }] }}>
+                <Text style={{ fontSize: 11, lineHeight: 14, color: "#64748b", fontWeight: "600", textAlign: "center" }}>
+                  First click this button to submit the claim
+                </Text>
+                <Text style={{ fontSize: 13, lineHeight: 14, color: "#64748b", fontWeight: "700" }}>↓</Text>
+              </Animated.View>
+              <TouchableOpacity
+                style={styles.previewBtn}
+                onPress={handlePreview}
+                disabled={previewing || savingDraft || submitting}
+              >
+                {previewing ? (
+                  <ActivityIndicator size="small" color="#4f46e5" />
+                ) : (
+                  <>
+                    <Calculator size={16} color="#4f46e5" />
+                    <Text style={styles.previewBtnText}>Calculate & Preview Breakdown</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
 
             <View style={styles.submitRow}>
               {!isEditingSubmittedClaim ? (

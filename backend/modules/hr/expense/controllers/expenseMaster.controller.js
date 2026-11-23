@@ -75,8 +75,6 @@ function sanitizePolicyRules(body, existingClaimRules = null, isSuperAdmin = fal
     const mimes = Array.isArray(r.allowedMimeTypes) ? r.allowedMimeTypes.filter((m) => allowedTypes.includes(m)) : [];
     out.receiptRules = {
       required: r.required !== false,
-      maxFiles: num(r.maxFiles, 1, 30, 10),
-      maxFileSizeMb: num(r.maxFileSizeMb, 1, 25, 10),
       allowedMimeTypes: mimes.length ? mimes : allowedTypes,
     };
   }

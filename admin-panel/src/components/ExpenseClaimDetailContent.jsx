@@ -923,7 +923,11 @@ export default function ExpenseClaimDetailContent({ claim }) {
           </div>
           {claim.trip?.travelMode ? <DetailRow label="Travel Mode" value={claim.trip.travelMode} /> : null}
           {claim.remark || claim.trip?.purpose || claim.purpose ? (
-            <DetailRow label="Remark / Purpose" value={claim.remark || claim.trip?.purpose || claim.purpose} />
+            <DetailRow
+              label="Remark / Purpose"
+              value={claim.remark || claim.trip?.purpose || claim.purpose}
+              valueClass="text-sm text-slate-900 font-semibold"
+            />
           ) : null}
         </div>
       </div>
@@ -1240,7 +1244,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
                               {entry.distanceKm ? (
                                 <DetailRow
                                   label="Distance"
-                                  value={`${entry.distanceKm} km${entry.startKm !== undefined && entry.endKm !== undefined
+                                  value={`${entry.distanceKm} km${entry.startKm != null && entry.startKm !== '' && entry.endKm != null && entry.endKm !== ''
                                       ? ` (Odometer: ${entry.startKm} → ${entry.endKm} km)`
                                       : ''
                                     }`}
@@ -1292,7 +1296,11 @@ export default function ExpenseClaimDetailContent({ claim }) {
                           </div>
 
                           {entry.description || entry.remark ? (
-                            <DetailRow label="Remark" value={entry.description || entry.remark} />
+                            <DetailRow
+                              label="Remark"
+                              value={entry.description || entry.remark}
+                              valueClass="text-sm text-slate-900 font-semibold"
+                            />
                           ) : null}
 
                           {entryReceipts.length > 0 && (
@@ -1423,7 +1431,11 @@ export default function ExpenseClaimDetailContent({ claim }) {
                           />
                         ) : null}
                         {group.foodSummaryCard.remark ? (
-                          <DetailRow label="Food Remark" value={group.foodSummaryCard.remark} />
+                          <DetailRow
+                            label="Food Remark"
+                            value={group.foodSummaryCard.remark}
+                            valueClass="text-sm text-slate-900 font-semibold"
+                          />
                         ) : null}
                         {Array.isArray(group.foodSummaryCard.receipts) &&
                           group.foodSummaryCard.receipts.length > 0 && (
@@ -1460,7 +1472,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
               <span className="font-bold text-blue-700">Payable: {fmtINR(payable)}</span>
             </div>
           </div>
-          <p className="text-lg font-extrabold text-slate-900">{fmtINR(requested)}</p>
+          <p className="text-lg font-extrabold text-slate-900">{fmtINR(roundRupee(requested))}</p>
         </div>
       </div>
 
@@ -1559,7 +1571,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
           />
           {mgr.requestedAt ? <DetailRow label="Requested On" value={formatDateTime(mgr.requestedAt)} /> : null}
           {mgrDecidedAt ? <DetailRow label="Decided On" value={formatDateTime(mgrDecidedAt)} /> : null}
-          {mgrRemarks ? <DetailRow label="Decision Remarks" value={mgrRemarks} /> : null}
+          {mgrRemarks ? <DetailRow label="Decision Remarks" value={mgrRemarks} valueClass="text-sm text-slate-900 font-semibold" /> : null}
         </div>
       )}
 
@@ -1626,7 +1638,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
           />
           {fin.requestedAt ? <DetailRow label="Requested On" value={formatDateTime(fin.requestedAt)} /> : null}
           {fin.decidedAt ? <DetailRow label="Decided On" value={formatDateTime(fin.decidedAt)} /> : null}
-          {fin.remarks ? <DetailRow label="Decision Remarks" value={fin.remarks} /> : null}
+          {fin.remarks ? <DetailRow label="Decision Remarks" value={fin.remarks} valueClass="text-sm text-slate-900 font-semibold" /> : null}
         </div>
       )}
 
@@ -1692,7 +1704,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
           {isAccountsStep1Approved && accApprovedAt ? (
             <DetailRow label="Approved On" value={formatDateTime(accApprovedAt)} />
           ) : null}
-          {accStep1Remarks ? <DetailRow label="Approval Remark (Step 1)" value={accStep1Remarks} /> : null}
+          {accStep1Remarks ? <DetailRow label="Approval Remark (Step 1)" value={accStep1Remarks} valueClass="text-sm text-slate-900 font-semibold" /> : null}
 
           {isPaid && (
             <>
@@ -1718,19 +1730,7 @@ export default function ExpenseClaimDetailContent({ claim }) {
             </>
           )}
 
-          {(Number(claim.pettyCashSummary?.debitedAmount) > 0 ||
-            Number(claim.pettyCashSummary?.creditedAmount) > 0) && (
-              <DetailRow
-                label="Petty Cash Wallet"
-                value={
-                  isPaid && Number(claim.pettyCashSummary?.creditedAmount) > 0
-                    ? `Settled (+${fmtINR(claim.pettyCashSummary.creditedAmount)} credited on payment)`
-                    : `Debited ${fmtINR(claim.pettyCashSummary?.debitedAmount || 0)} against advance`
-                }
-              />
-            )}
-
-          {paymentRemarks ? <DetailRow label="Payment Remark (Step 2)" value={paymentRemarks} /> : null}
+          {paymentRemarks ? <DetailRow label="Payment Remark (Step 2)" value={paymentRemarks} valueClass="text-sm text-slate-900 font-semibold" /> : null}
 
           {paymentProofsList.length > 0 && (
             <div className="pt-2 border-t border-slate-100">

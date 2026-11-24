@@ -670,7 +670,6 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
 
     const claims = await ExpenseClaim.find({ $and: andConditions })
       .populate('submittedBy', 'name employeeIdCode department designation')
-      .populate('employeeClaims.employee.employeeId', 'name employeeIdCode department designation')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -701,46 +700,24 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
       if (bs === 'PAID') { totals.paid.amount += paidAmt; totals.paid.count += 1; }
       if (bs === 'REJECTED') { totals.rejected.amount += reqAmt; totals.rejected.count += 1; }
 
-      // Employee-wise: lodging is attributed to the submitter; tagged co-occupants get only their own non-lodging items.
-      const submitterId = String(claim.submittedBy?._id || claim.submittedBy || 'unknown');
-      const empClaimList = claim.employeeClaims?.length
-        ? claim.employeeClaims
-        : [{ employee: { employeeId: claim.submittedBy, name: claim.submittedByName }, items: [] }];
-
-      empClaimList.forEach((ec) => {
-        const emp = ec.employee || {};
-        const empUser = emp.employeeId && typeof emp.employeeId === 'object' && emp.employeeId._id ? emp.employeeId : null;
-        const empId = String(empUser?._id || emp.employeeId || submitterId);
-        const isSubmitter = empId === submitterId;
-        let ecReq = 0; let ecAllowed = 0; let ecExcess = 0;
-        if (Array.isArray(ec.items) && ec.items.length) {
-          ec.items.forEach((it) => {
-            if (String(it.expenseType || '').toUpperCase() === 'LODGING' && !isSubmitter) return;
-            ecReq += Number(it.requestedAmount || it.amount || 0);
-            ecAllowed += Number(it.allowedAmount || it.requestedAmount || 0);
-            ecExcess += Number(it.excessAmount || 0);
-          });
-        } else if (isSubmitter) {
-          ecReq = ec.requestedTotal > 0 ? ec.requestedTotal : reqAmt;
-          ecAllowed = ec.allowedTotal > 0 ? ec.allowedTotal : allowedAmt;
-          ecExcess = ec.excessTotal >= 0 && ec.excessTotal !== undefined ? ec.excessTotal : excessAmt;
-        }
-        if (!(ecReq > 0 || isSubmitter)) return;
-        if (!employeeMap[empId]) {
-          const src = empUser || emp;
-          const sub = isSubmitter && typeof claim.submittedBy === 'object' ? claim.submittedBy : {};
-          employeeMap[empId] = {
-            id: empId,
-            employeeName: src.name || sub.name || claim.submittedByName || 'Unknown Employee',
-            employeeCode: src.employeeIdCode || sub.employeeIdCode || '',
-            department: src.department || sub.department || '',
-            designation: src.designation || sub.designation || '',
-            ...emptyRow(),
-          };
-        }
-        const share = allowedAmt > 0 ? ecAllowed / allowedAmt : (isSubmitter ? 1 : 0);
-        addTo(employeeMap[empId], bs, { req: ecReq, pendingAmt: roundRupee(ecAllowed), paidAmt: roundRupee(paidAmt * share), excess: ecExcess });
-      });
+      // Employee-wise: attribute the full claim (including accommodations / shared claims) to the submitter.
+      const submitter = claim.submittedBy && typeof claim.submittedBy === 'object' ? claim.submittedBy : null;
+      const submitterId = String(submitter?._id || claim.submittedBy || 'unknown');
+      if (!employeeMap[submitterId]) {
+        const subEc = (claim.employeeClaims || []).find((ec) => {
+          const eid = ec?.employee?.employeeId?._id || ec?.employee?.employeeId;
+          return eid && String(eid) === submitterId;
+        })?.employee || {};
+        employeeMap[submitterId] = {
+          id: submitterId,
+          employeeName: submitter?.name || subEc.name || claim.submittedByName || 'Unknown Employee',
+          employeeCode: submitter?.employeeIdCode || subEc.employeeIdCode || '',
+          department: submitter?.department || subEc.department || '',
+          designation: submitter?.designation || subEc.designation || '',
+          ...emptyRow(),
+        };
+      }
+      addTo(employeeMap[submitterId], bs, { req: reqAmt, pendingAmt: payable, paidAmt, excess: excessAmt });
 
       const projectName = claim.trip?.purpose || claim.trip?.customerName || claim.claimType || 'General Expenses';
       if (!projectMap[projectName]) projectMap[projectName] = { projectName, destination: claim.trip?.destination || '', ...emptyRow() };

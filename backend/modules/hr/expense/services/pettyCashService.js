@@ -12,7 +12,8 @@ const access = require('./expenseAccess');
  *
  * Claim integration (decisions D1-D6):
  *  - only the submitter's wallet, only when Accounts has enabled it (first debit)
- *  - debit = policy-allowed amount (grandAllowed), never the excess
+ *  - debit = full requested amount (grandRequested) when Full Payment is requested,
+ *    otherwise policy-allowed amount (grandAllowed)
  *  - edits post the delta; Rejected / Deleted reverse the net debit; resubmit debits again
  *  - payment credits min(paidAmount, net debited) exactly once
  */
@@ -341,10 +342,12 @@ async function postTransaction(p, session) {
 
 // ─── Claim integration ───────────────────────────────────────────────────────
 const rupee = (paise) => `₹${fromPaise(paise).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const isFullPaymentClaim = (claim) => Boolean(claim?.fullPayment?.requested || claim?.requestFullPayment);
 
 /**
  * Bring the claim's net wallet debit in line with its current state.
- *   PENDING  -> target = allowed amount (first debit only if the submitter's wallet is enabled)
+ *   PENDING  -> target = full requested amount (grandRequested) when Full Payment is requested,
+ *               otherwise policy-allowed amount (grandAllowed) (first debit only if submitter's wallet is enabled)
  *   REJECTED / DRAFT / deleted (opts.deleted) -> target = 0 (reverse)
  *   PAID     -> unchanged (payment credit is separate)
  * Posts only the delta, guarded by `pettyCash.seq` so concurrent requests cannot double-post.
@@ -355,11 +358,15 @@ async function syncClaimDebit(claim, { session, req, deleted = false } = {}) {
   const pc = claim.pettyCash || {};
   const current = pc.debitedPaise || 0;
   const bs = access.businessStatus(claim);
+  const isFullPayment = isFullPaymentClaim(claim);
 
   let target;
   if (deleted || bs === 'REJECTED' || bs === 'DRAFT') target = 0;
   else if (access.isAccountsApproved(claim)) return null;
-  else if (bs === 'PENDING') target = Math.max(0, toPaise(claim.grandAllowed));
+  else if (bs === 'PENDING') {
+    const debitAmount = isFullPayment ? (claim.grandRequested ?? claim.grandAllowed) : claim.grandAllowed;
+    target = Math.max(0, toPaise(debitAmount));
+  }
   else return null;
 
   const companyId = oid(claim.companyId);
@@ -385,12 +392,23 @@ async function syncClaimDebit(claim, { session, req, deleted = false } = {}) {
 
   let type; let source; let description;
   const direction = delta > 0 ? 'DR' : 'CR';
-  if (current === 0) { type = 'DEBIT'; source = 'CLAIM_SUBMIT'; description = `Claim ${claim.claimNumber} submitted (allowed ${rupee(target)}).`; }
-  else if (target === 0) {
+  if (current === 0) {
+    type = 'DEBIT';
+    source = 'CLAIM_SUBMIT';
+    description = isFullPayment
+      ? `Claim ${claim.claimNumber} submitted (full payment requested ${rupee(target)}).`
+      : `Claim ${claim.claimNumber} submitted (allowed ${rupee(target)}).`;
+  } else if (target === 0) {
     type = 'REVERSAL';
     source = deleted ? 'CLAIM_DELETE' : 'CLAIM_REJECT';
     description = `Claim ${claim.claimNumber} ${deleted ? 'deleted' : 'rejected'}: debit of ${rupee(current)} reversed.`;
-  } else { type = 'ADJUSTMENT'; source = 'CLAIM_EDIT'; description = `Claim ${claim.claimNumber} allowed amount changed ${rupee(current)} -> ${rupee(target)}.`; }
+  } else {
+    type = 'ADJUSTMENT';
+    source = 'CLAIM_EDIT';
+    description = isFullPayment
+      ? `Claim ${claim.claimNumber} full payment amount changed ${rupee(current)} -> ${rupee(target)}.`
+      : `Claim ${claim.claimNumber} allowed amount changed ${rupee(current)} -> ${rupee(target)}.`;
+  }
 
   const res = await postTransaction({
     companyId, employeeId, type, direction, source,

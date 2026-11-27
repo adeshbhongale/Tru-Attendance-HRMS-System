@@ -896,4 +896,70 @@ it('26. Team Lead Return Request: payment proof required, TL accept transfers em
   assert.equal(await balance(U.emp2), tlBalBefore);
 });
 
+it('27. Full payment claim debits full requested amount on submit and restores full requested amount on payment or rejection', async () => {
+  const start = await balance(U.emp);
+
+  // 1) Full payment claim -> debits full requested (₹2,600), NOT allowed (₹2,000), then credits full ₹2,600 on Paid
+  const fpPaid = await draftClaim(U.emp, 2000, 2600, {
+    fullPayment: { requested: true, reason: 'Client emergency stay' },
+    managerApproval: { kind: 'FULL_PAYMENT', approver: U.admin._id, approverName: U.admin.name, approverRole: 'MANAGEMENT', status: 'NOT_REQUIRED' },
+  });
+  let r = await request(app).post(`/api/expense/claims/${fpPaid._id}/submit`).set(as('emp'));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.status, 'APPROVAL_PENDING');
+  assert.equal(await balance(U.emp), start - 260000, 'Full payment submission debits full requested ₹2,600');
+  assert.equal(r.body.data.pettyCashSummary.debitedAmount, 2600);
+
+  // Approving full payment moves claim to SUBMITTED with payable = ₹2,600 and keeps wallet debited at ₹2,600
+  r = await request(app).post(`/api/expense/claims/${fpPaid._id}/approve`).set(as('admin')).send({ remarks: 'Approved full payment' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.payableAmount, 2600);
+  assert.equal(await balance(U.emp), start - 260000, 'No extra debit or premature credit on manager approval');
+
+  // Accounts approve does not credit yet
+  r = await request(app).post(`/api/expense/claims/${fpPaid._id}/accounts-approve`).set(as('accounts')).send({ remarks: 'Accounts approved' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(await balance(U.emp), start - 260000, 'No credit on Accounts approval');
+
+  // Mark Paid credits full ₹2,600 back to petty cash
+  r = await request(app).post(`/api/expense/claims/${fpPaid._id}/payment`).set(as('accounts')).send({
+    paymentDate: '2026-10-10',
+    paymentReference: 'FP-UTR-2600',
+    remarks: 'Paid full requested amount',
+    paymentProof: { name: 'fp-proof.jpg', url: 'https://res.cloudinary.com/demo/fp-proof.jpg' },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.paidAmount, 2600);
+  assert.equal(r.body.data.pettyCashSummary.creditedAmount, 2600);
+  assert.equal(await balance(U.emp), start, 'Full ₹2,600 credited back on payment');
+
+  // 2) Full payment claim rejected at approval stage -> full ₹2,600 debited on submit, full ₹2,600 restored on rejection
+  const fpRej = await draftClaim(U.emp, 2000, 2600, {
+    fullPayment: { requested: true, reason: 'Exceeded limit' },
+    managerApproval: { kind: 'FULL_PAYMENT', approver: U.admin._id, approverName: U.admin.name, approverRole: 'MANAGEMENT', status: 'NOT_REQUIRED' },
+  });
+  r = await request(app).post(`/api/expense/claims/${fpRej._id}/submit`).set(as('emp'));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(await balance(U.emp), start - 260000, 'Full requested ₹2,600 debited');
+
+  r = await request(app).post(`/api/expense/claims/${fpRej._id}/approval-reject`).set(as('admin')).send({ reason: 'Not approved for full payment' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(await balance(U.emp), start, 'Full ₹2,600 reversed back to wallet on approver rejection');
+
+  // Reopen debits full ₹2,600 again; Accounts rejection reverses full ₹2,600 again
+  r = await request(app).post(`/api/expense/claims/${fpRej._id}/reopen`).set(as('admin')).send({ reason: 'Re-reviewing claim' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(await balance(U.emp), start - 260000, 'Reopen debits full requested ₹2,600 again');
+
+  r = await request(app).post(`/api/expense/claims/${fpRej._id}/reject`).set(as('admin')).send({ reason: 'Rejected finally' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(await balance(U.emp), start, 'Accounts/Admin rejection restores full ₹2,600');
+
+  // 3) Regular non-full-payment claim still debits ONLY allowed amount (₹2,000), never excess
+  const normal = await draftClaim(U.emp, 2000, 2600, { fullPayment: { requested: false } });
+  r = await request(app).post(`/api/expense/claims/${normal._id}/submit`).set(as('emp'));
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(await balance(U.emp), start - 200000, 'Normal claim still debits only allowed ₹2,000');
+});
+
 

@@ -141,6 +141,11 @@ const UserSchema = new mongoose.Schema({
     enum: ['ACTIVE', 'SUSPENDED', 'LOCKED', 'DISABLED', 'TERMINATED', 'active', 'inactive'],
     default: 'ACTIVE',
   },
+  employmentStatus: {
+    type: String,
+    enum: ['Training', 'Probation', 'Permanent'],
+    default: 'Training',
+  },
   profileImage: String,
   joiningDate: {
     type: Date,

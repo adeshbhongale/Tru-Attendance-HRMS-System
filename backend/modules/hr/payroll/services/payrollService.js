@@ -104,11 +104,11 @@ async function syncCompanyEmployeesFromUsers(companyId) {
       roleCode: { $nin: SYSTEM_CONSOLE_ROLE_CODES },
     })
       .select(
-        '_id name email mobile employeeIdCode department designation joiningDate status createdAt updatedAt'
+        '_id name email mobile employeeIdCode department designation gender joiningDate status employmentStatus createdAt updatedAt'
       )
       .lean(),
     Employee.find({ companyId })
-      .select('_id userId employeeId name email phone departmentId designationId joiningDate status updatedAt')
+      .select('_id userId employeeId name email phone gender departmentId designationId joiningDate status employmentStatus updatedAt')
       .lean(),
     Department.find({ companyId }).select('_id name').lean(),
     Designation.find({ companyId }).select('_id name').lean(),
@@ -166,7 +166,9 @@ async function syncCompanyEmployeesFromUsers(companyId) {
               departmentId: deptId,
               designationId: desigId,
               joiningDate: u.joiningDate || u.createdAt || new Date(),
+              gender: u.gender || '',
               status: mappedStatus,
+              employmentStatus: u.employmentStatus || 'Training',
             },
             $setOnInsert: {
               companyId,
@@ -194,6 +196,12 @@ async function syncCompanyEmployeesFromUsers(companyId) {
         }
         if (desigId && String(existing.designationId || '') !== String(desigId)) {
           updates.designationId = desigId;
+        }
+        if (u.employmentStatus && u.employmentStatus !== existing.employmentStatus) {
+          updates.employmentStatus = u.employmentStatus;
+        }
+        if (u.gender && u.gender !== existing.gender) {
+          updates.gender = u.gender;
         }
         if (
           u.joiningDate &&
@@ -242,7 +250,24 @@ async function buildRowsForEmployees({ companyId, employees, month, year }) {
       daysOfMonth,
       settings: payrollSettings,
       rows: [],
-      totals: { basicPay: 0, total: 0, leaveDeduction: 0, lateDeduction: 0, netPay: 0 },
+      totals: {
+        basicPay: 0,
+        total: 0,
+        leaveDeduction: 0,
+        halfDayDeduction: 0,
+        lateDeduction: 0,
+        otherDeduction: 0,
+        netPay: 0,
+        pf: 0,
+        esic: 0,
+        pt: 0,
+        statutoryTotal: 0,
+        finalPay: 0,
+        retention: 0,
+        advance: 0,
+        loan: 0,
+        bankPay: 0,
+      },
     };
   }
 
@@ -309,8 +334,19 @@ async function buildRowsForEmployees({ companyId, employees, month, year }) {
     basicPay: 0,
     total: 0,
     leaveDeduction: 0,
+    halfDayDeduction: 0,
     lateDeduction: 0,
+    otherDeduction: 0,
     netPay: 0,
+    pf: 0,
+    esic: 0,
+    pt: 0,
+    statutoryTotal: 0,
+    finalPay: 0,
+    retention: 0,
+    advance: 0,
+    loan: 0,
+    bankPay: 0,
   };
 
   for (const emp of employees) {
@@ -329,7 +365,12 @@ async function buildRowsForEmployees({ companyId, employees, month, year }) {
     const leaveUnitsExact = leavesOverridden ? effectiveLeaves : leavesComputedExact;
 
     const lateDeductionOverride = entry?.lateDeductionOverride ?? null;
+    const halfDayDeductionOverride = entry?.halfDayDeductionOverride ?? null;
     const empLateCounts = lateMarksMap.get(empKey) || { flatDays: 0, halfDays: 0 };
+    const halfDayLeaves = halfDayLeaveCounts.get(empKey) || { session1: 0, session2: 0, total: 0 };
+    const userDoc = resolvedUsers.get(empKey)?.userDoc || null;
+    const employmentStatus = userDoc?.employmentStatus || emp.employmentStatus || 'Training';
+    const gender = userDoc?.gender || emp.gender || 'Male';
 
     const rowCalc = calculateRow({
       basicPay: emp.basicPay ?? 0,
@@ -340,11 +381,22 @@ async function buildRowsForEmployees({ companyId, employees, month, year }) {
       leaveUnitsExact,
       flatDays: empLateCounts.flatDays,
       halfDays: empLateCounts.halfDays,
+      approvedHalfDays: halfDayLeaves.total,
       lateDeductionOverride,
+      halfDayDeductionOverride,
+      otherDeduction: entry?.otherDeduction ?? 0,
+      employmentStatus,
+      gender,
+      month,
+      pf: entry?.pf ?? 0,
+      esic: entry?.esic ?? 0,
+      ptOverride: entry?.ptOverride ?? null,
+      statutoryTotalOverride: entry?.statutoryTotalOverride ?? null,
+      retentionOverride: entry?.retentionOverride ?? null,
+      advance: entry?.advance ?? 0,
+      loan: entry?.loan ?? 0,
       settings: payrollSettings,
     });
-
-    const userDoc = resolvedUsers.get(empKey)?.userDoc || null;
 
     let designation = '';
     if (emp.designationId?.name) {
@@ -366,7 +418,6 @@ async function buildRowsForEmployees({ companyId, employees, month, year }) {
           : String(userDoc.department);
     }
 
-    const halfDayLeaves = halfDayLeaveCounts.get(empKey) || { session1: 0, session2: 0, total: 0 };
     const { extraLeaveHalfDays, totalHalfDays } = computeDisplayHalfDays({
       lateHalfDays: empLateCounts.halfDays,
       shiftHalfDays: halfDayLeaves.total,
@@ -381,7 +432,9 @@ async function buildRowsForEmployees({ companyId, employees, month, year }) {
       designation,
       department,
       dateOfJoining: emp.joiningDate || userDoc?.joiningDate || null,
-      uan: emp.uan || '',
+      gender,
+      month,
+      uan: String(employmentStatus).trim().toLowerCase() === 'permanent' ? (emp.uan || '') : '',
       ...rowCalc,
       leavesComputed,
       leavesComputedExact,
@@ -394,6 +447,11 @@ async function buildRowsForEmployees({ companyId, employees, month, year }) {
         uninformedAbsentDays: 0,
         rejectedLeaveAbsentDays: 0,
       },
+      lateRuleWindow: {
+        lateStartTime: userDoc?.shift?.payrollLateStartTime || payrollSettings.lateStartTime,
+        halfDayTime: userDoc?.shift?.payrollHalfDayTime || payrollSettings.halfDayTime,
+      },
+      verified: Boolean(entry?.verified),
     };
 
     rows.push(row);
@@ -401,8 +459,19 @@ async function buildRowsForEmployees({ companyId, employees, month, year }) {
     totals.basicPay += rowCalc.basicPay;
     totals.total += rowCalc.total;
     totals.leaveDeduction += rowCalc.leaveDeduction;
+    totals.halfDayDeduction += rowCalc.halfDayDeduction;
     totals.lateDeduction += rowCalc.lateDeduction;
+    totals.otherDeduction += rowCalc.otherDeduction;
     totals.netPay += rowCalc.netPay;
+    totals.pf += rowCalc.pf;
+    totals.esic += rowCalc.esic;
+    totals.pt += rowCalc.pt;
+    totals.statutoryTotal += rowCalc.statutoryTotal;
+    totals.finalPay += rowCalc.finalPay;
+    totals.retention += rowCalc.retention;
+    totals.advance += rowCalc.advance;
+    totals.loan += rowCalc.loan;
+    totals.bankPay += rowCalc.bankPay;
   }
 
   return { daysOfMonth, settings: payrollSettings, rows, totals };
@@ -440,10 +509,10 @@ async function getPayrollData({ companyId, month, year }) {
     .populate('designationId', 'name')
     .populate({
       path: 'userId',
-      select: '_id name employeeIdCode role roleCode scope department designation joiningDate shift',
+      select: '_id name employeeIdCode role roleCode scope department designation gender joiningDate employmentStatus shift',
       populate: {
         path: 'shift',
-        select: 'name startTime endTime firstSession secondSession halfDayAfter',
+        select: 'name startTime endTime firstSession secondSession halfDayAfter payrollLateStartTime payrollHalfDayTime',
       },
     })
     .lean();
@@ -492,10 +561,10 @@ async function recalculateSingleRow({ companyId, employeeId, month, year }) {
     .populate('designationId', 'name')
     .populate({
       path: 'userId',
-      select: '_id name employeeIdCode role roleCode scope department designation joiningDate shift',
+      select: '_id name employeeIdCode role roleCode scope department designation gender joiningDate employmentStatus shift',
       populate: {
         path: 'shift',
-        select: 'name startTime endTime firstSession secondSession halfDayAfter',
+        select: 'name startTime endTime firstSession secondSession halfDayAfter payrollLateStartTime payrollHalfDayTime',
       },
     })
     .lean();

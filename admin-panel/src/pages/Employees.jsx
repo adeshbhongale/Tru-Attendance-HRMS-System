@@ -79,6 +79,7 @@ const Employees = () => {
   const [successData, setSuccessData] = useState(null);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [updatingEmploymentStatusIds, setUpdatingEmploymentStatusIds] = useState({});
   const [confirmData, setConfirmData] = useState({ show: false, type: '', action: null, message: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [resetPasswordEnabled, setResetPasswordEnabled] = useState(false);
@@ -194,6 +195,7 @@ const Employees = () => {
     gender: '',
     role: '',
     status: '',
+    employmentStatus: 'Training',
     joiningDate: new Date().toISOString().split('T')[0],
     roleLevel: '',
     roleGrade: '',
@@ -447,6 +449,7 @@ const Employees = () => {
         gender: emp.gender || 'Male',
         role: emp.role || 'employee',
         status: emp.status || 'active',
+        employmentStatus: emp.employmentStatus || 'Training',
         profileImage: emp.profileImage || '',
         joiningDate: safeFormatDate(emp.joiningDate, safeFormatDate(emp.createdAt, new Date().toISOString().split('T')[0])),
         roleLevel: emp.roleLevel || '',
@@ -480,6 +483,7 @@ const Employees = () => {
         gender: 'Male',
         role: 'employee',
         status: 'active',
+        employmentStatus: 'Training',
         profileImage: '',
         joiningDate: new Date().toISOString().split('T')[0],
         roleLevel: '',
@@ -771,6 +775,36 @@ const Employees = () => {
     }
   };
 
+  const handleInlineEmploymentStatusChange = async (emp, nextStatus) => {
+    const prevStatus = emp.employmentStatus || 'Training';
+    if (nextStatus === prevStatus) return;
+
+    setEmployees(prev =>
+      prev.map(item =>
+        item._id === emp._id ? { ...item, employmentStatus: nextStatus } : item
+      )
+    );
+    setUpdatingEmploymentStatusIds(prev => ({ ...prev, [emp._id]: true }));
+
+    try {
+      await api.put(`/employees/${emp._id}`, { employmentStatus: nextStatus });
+      toast.success(`${emp.name}'s employment status updated to ${nextStatus}`);
+    } catch (err) {
+      setEmployees(prev =>
+        prev.map(item =>
+          item._id === emp._id ? { ...item, employmentStatus: prevStatus } : item
+        )
+      );
+      toast.error(err.response?.data?.message || 'Failed to update employment status');
+    } finally {
+      setUpdatingEmploymentStatusIds(prev => {
+        const next = { ...prev };
+        delete next[emp._id];
+        return next;
+      });
+    }
+  };
+
   const handleDeleteConfirm = async (id) => {
     try {
       await api.delete(`/employees/${id}`);
@@ -958,6 +992,7 @@ const Employees = () => {
                 <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Contacts</th>
                 <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Location</th>
                 <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Joined</th>
+                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Employment Status</th>
                 <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Status</th>
                 <th className="px-2 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Actions</th>
               </tr>
@@ -965,7 +1000,7 @@ const Employees = () => {
             <tbody className="divide-y divide-slate-50">
               {filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="py-20 text-center">
+                  <td colSpan="10" className="py-20 text-center">
                     <div className="flex flex-col items-center gap-2">
                       <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300">
                         <Users size={24} />
@@ -1080,6 +1115,30 @@ const Employees = () => {
                         <div className="text-[10px] font-bold text-slate-700 tracking-tight">
                           {emp.joiningDate ? new Date(emp.joiningDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}
                         </div>
+                      </td>
+                      <td className="px-3 py-4 text-center border border-slate-200">
+                        {(() => {
+                          const currentEmpStatus = emp.employmentStatus || 'Training';
+                          const statusStyle =
+                            currentEmpStatus === 'Permanent'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 focus:border-emerald-400'
+                              : currentEmpStatus === 'Probation'
+                              ? 'bg-amber-50 text-amber-800 border-amber-200 focus:border-amber-400'
+                              : 'bg-sky-50 text-sky-700 border-sky-200 focus:border-sky-400';
+                          return (
+                            <select
+                              value={currentEmpStatus}
+                              disabled={Boolean(updatingEmploymentStatusIds[emp._id])}
+                              aria-label={`Employment status for ${emp.name}`}
+                              onChange={(e) => handleInlineEmploymentStatusChange(emp, e.target.value)}
+                              className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold border outline-none cursor-pointer transition-all disabled:opacity-60 ${statusStyle}`}
+                            >
+                              <option value="Training">Training</option>
+                              <option value="Probation">Probation</option>
+                              <option value="Permanent">Permanent</option>
+                            </select>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-4 text-center border border-slate-200">
                         <div className="flex justify-center">
@@ -1493,6 +1552,21 @@ const Employees = () => {
                             )}
                           </AnimatePresence>
                         </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Employment Status <span className="text-rose-500 font-bold">*</span>
+                        </label>
+                        <select
+                          value={formData.employmentStatus || 'Training'}
+                          onChange={(e) => setFormData({ ...formData, employmentStatus: e.target.value })}
+                          className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 cursor-pointer"
+                        >
+                          <option value="Training">Training</option>
+                          <option value="Probation">Probation</option>
+                          <option value="Permanent">Permanent</option>
+                        </select>
                       </div>
 
                       {/* Company Admin Created Levels / Roles */}

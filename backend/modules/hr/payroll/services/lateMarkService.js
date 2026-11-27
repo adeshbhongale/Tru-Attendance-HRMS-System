@@ -57,8 +57,8 @@ async function resolveEmployeeUsers(companyId, employees = []) {
       companyId,
       employeeIdCode: { $in: uniqueCodes },
     })
-      .select('_id employeeIdCode department designation shift')
-      .populate('shift', 'name startTime endTime firstSession secondSession halfDayAfter')
+      .select('_id employeeIdCode department designation gender employmentStatus shift')
+      .populate('shift', 'name startTime endTime firstSession secondSession halfDayAfter payrollLateStartTime payrollHalfDayTime')
       .lean();
 
     const userByCode = new Map();

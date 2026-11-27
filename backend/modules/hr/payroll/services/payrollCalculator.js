@@ -11,13 +11,14 @@ const { isSundayIST, getISTMinutes, getISTDate, getISTDateKey } = require('./cal
 const PAY_PER_DAY_DIVISOR = 26;
 
 /**
- * Round up any fractional rupee value (e.g. 86.2 -> 87) while guarding against
- * binary floating-point noise (e.g. 100.00000000000001 -> 100).
+ * Round any fractional rupee value to the nearest whole rupee
+ * (< 0.5 rounds down, >= 0.5 rounds up; e.g. 2.3 -> 2, 2.6 -> 3),
+ * while guarding against binary floating-point noise.
  */
 function roundUpRupee(val) {
   const n = Number(val);
   if (!Number.isFinite(n)) return 0;
-  return Math.ceil(Math.round(n * 1e6) / 1e6);
+  return Math.round(Math.round(n * 1e6) / 1e6);
 }
 
 const DEFAULT_SETTINGS = {
@@ -83,9 +84,16 @@ function resolveSettings(settings = {}) {
  */
 function resolveDayThresholds(settings = {}, context = {}) {
   const base = resolveSettings(settings);
-  const windowWidth = Math.max(0, base.halfDayMinutes - base.lateStartMinutes);
   const halfDaySession = context?.halfDaySession || null;
   const shift = context?.shift || null;
+
+  const effectiveBaseLate = shift?.payrollLateStartTime
+    ? parseTime(shift.payrollLateStartTime, base.lateStartTime)
+    : base.lateStartMinutes;
+  const effectiveBaseHalf = shift?.payrollHalfDayTime
+    ? parseTime(shift.payrollHalfDayTime, base.halfDayTime)
+    : base.halfDayMinutes;
+  const windowWidth = Math.max(0, effectiveBaseHalf - effectiveBaseLate);
 
   if (halfDaySession === 'Session 1') {
     // 1st shift on half-day leave -> working window is 2nd shift
@@ -99,7 +107,7 @@ function resolveDayThresholds(settings = {}, context = {}) {
 
   if (halfDaySession === 'Session 2') {
     // 2nd shift on half-day leave -> working window is 1st shift
-    const s1Start = shift?.firstSession?.startTime || base.lateStartTime || '09:30';
+    const s1Start = shift?.firstSession?.startTime || shift?.payrollLateStartTime || base.lateStartTime || '09:30';
     const lateStartMinutes = parseTime(s1Start, base.lateStartTime);
     return {
       lateStartMinutes,
@@ -108,8 +116,8 @@ function resolveDayThresholds(settings = {}, context = {}) {
   }
 
   return {
-    lateStartMinutes: base.lateStartMinutes,
-    halfDayMinutes: base.halfDayMinutes,
+    lateStartMinutes: effectiveBaseLate,
+    halfDayMinutes: effectiveBaseHalf,
   };
 }
 
@@ -196,6 +204,37 @@ function summarizePunchIns(
 }
 
 /**
+ * Calculate Maharashtra Professional Tax (PT) per Maharashtra State Tax on
+ * Professions, Trades, Callings and Employments Act, 1975, Schedule I, Entry 1
+ * (amended w.e.f. 1 April 2023).
+ *
+ * Male:
+ * - <= 7,500          : 0
+ * - > 7,500 .. 10,000 : 175 / month
+ * - > 10,000          : 200 / month (300 in February)
+ *
+ * Female:
+ * - <= 25,000         : 0
+ * - > 25,000          : 200 / month (300 in February)
+ */
+function calculateMaharashtraPT({ salary = 0, gender = 'Male', month = 1 } = {}) {
+  const safeSalary = Number.isFinite(Number(salary)) && Number(salary) > 0 ? Number(salary) : 0;
+  if (safeSalary <= 0) return 0;
+
+  const isFebruary = Number(month) === 2;
+  const isFemale = String(gender || '').trim().toLowerCase() === 'female';
+
+  if (isFemale) {
+    if (safeSalary <= 25000) return 0;
+    return isFebruary ? 300 : 200;
+  }
+
+  if (safeSalary <= 7500) return 0;
+  if (safeSalary <= 10000) return 175;
+  return isFebruary ? 300 : 200;
+}
+
+/**
  * Calculate a single payroll row.
  *
  * @param {Object} params
@@ -218,7 +257,21 @@ function calculateRow({
   leaveUnitsExact = null,
   flatDays = 0,
   halfDays = 0,
+  approvedHalfDays = 0,
   lateDeductionOverride = null,
+  halfDayDeductionOverride = null,
+  otherDeduction = 0,
+  employmentStatus = 'Training',
+  gender = 'Male',
+  month = 1,
+  pf = 0,
+  esic = 0,
+  pt = null,
+  ptOverride = null,
+  statutoryTotalOverride = null,
+  retentionOverride = null,
+  advance = 0,
+  loan = 0,
   settings = {},
 } = {}) {
   const safeBasicPay = Number.isFinite(Number(basicPay)) && Number(basicPay) > 0
@@ -250,6 +303,9 @@ function calculateRow({
   const safeHalfDays = Number.isFinite(Number(halfDays)) && Number(halfDays) > 0
     ? Math.round(Number(halfDays))
     : 0;
+  const safeApprovedHalfDays = Number.isFinite(Number(approvedHalfDays)) && Number(approvedHalfDays) > 0
+    ? Math.round(Number(approvedHalfDays))
+    : 0;
 
   const { lateFlatAmount } = resolveSettings(settings);
 
@@ -261,16 +317,27 @@ function calculateRow({
   // Displayed pay per day (rounded up integer)
   const payPerDay = roundUpRupee(payPerDayExact);
 
-  // Gross pay (Pay Per Day * Working Days)
-  const total = workingDays > 0 ? roundUpRupee(payPerDay * workingDays) : 0;
+  // Gross pay (exact Pay Per Day * Working Days, rounded up to whole rupee)
+  const total = workingDays > 0 ? roundUpRupee(payPerDayExact * workingDays) : 0;
 
   // Leave deduction (uses exact leave units when auto-computed from half-day / 2.5x rules, or integer safeLeaves when manually entered)
   const leaveDeduction = roundUpRupee(effectiveLeaveUnits * payPerDayExact);
 
-  // Computed late-marks deduction (sum exact half-day amounts, round up once)
-  const lateDeductionComputed = roundUpRupee(
-    safeFlatDays * lateFlatAmount + (safeHalfDays * payPerDayExact) / 2
+  // Computed half-day deduction (approved half-day leaves + late-arrival half-days)
+  const halfDayDeductionComputed = roundUpRupee(
+    ((safeHalfDays + safeApprovedHalfDays) * payPerDayExact) / 2
   );
+  const halfDayDeductionOverridden =
+    halfDayDeductionOverride !== null &&
+    halfDayDeductionOverride !== undefined &&
+    Number.isFinite(Number(halfDayDeductionOverride)) &&
+    Number(halfDayDeductionOverride) >= 0;
+  const halfDayDeduction = halfDayDeductionOverridden
+    ? roundUpRupee(Number(halfDayDeductionOverride))
+    : halfDayDeductionComputed;
+
+  // Computed late-marks deduction (flat late marks only; half-days are in Half Day column)
+  const lateDeductionComputed = roundUpRupee(safeFlatDays * lateFlatAmount);
 
   // Override handling
   const lateDeductionOverridden =
@@ -283,8 +350,91 @@ function calculateRow({
     ? roundUpRupee(Number(lateDeductionOverride))
     : lateDeductionComputed;
 
+  // Other deduction (manual rupee deduction subtracted from Net Pay)
+  const safeOtherDeduction = Number.isFinite(Number(otherDeduction)) && Number(otherDeduction) > 0
+    ? roundUpRupee(Number(otherDeduction))
+    : 0;
+
   // Net pay uses rounded displayed values so every row visibly adds up; never clamped to 0
-  const netPay = total - leaveDeduction - lateDeduction;
+  const netPay = total - leaveDeduction - halfDayDeduction - lateDeduction - safeOtherDeduction;
+
+  // Employment status rule:
+  // - Training / Probation -> Retention applies (5% of Basic Pay, editable); NO PF / ESIC / PT
+  // - Permanent -> PF / ESIC / PT / Statutory Total apply (editable); NO Retention
+  const normalizedEmploymentStatus = (() => {
+    const s = String(employmentStatus || '').trim().toLowerCase();
+    if (s === 'permanent') return 'Permanent';
+    if (s === 'probation') return 'Probation';
+    return 'Training';
+  })();
+  const isPermanent = normalizedEmploymentStatus === 'Permanent';
+
+  // Statutory fields (only applicable for Permanent employees)
+  const safePf = isPermanent && Number.isFinite(Number(pf)) && Number(pf) > 0 ? roundUpRupee(Number(pf)) : 0;
+  const safeEsic = isPermanent && Number.isFinite(Number(esic)) && Number(esic) > 0 ? roundUpRupee(Number(esic)) : 0;
+
+  // Maharashtra PT (auto-calculated for Permanent employees; editable via ptOverride)
+  const ptComputed = isPermanent
+    ? calculateMaharashtraPT({ salary: safeBasicPay, gender, month })
+    : 0;
+  const effectivePtOverride =
+    ptOverride !== null && ptOverride !== undefined
+      ? ptOverride
+      : pt !== null && pt !== undefined
+      ? pt
+      : null;
+  const ptOverridden =
+    isPermanent &&
+    effectivePtOverride !== null &&
+    effectivePtOverride !== undefined &&
+    Number.isFinite(Number(effectivePtOverride)) &&
+    Number(effectivePtOverride) >= 0;
+  const safePt = isPermanent
+    ? ptOverridden
+      ? roundUpRupee(Number(effectivePtOverride))
+      : ptComputed
+    : 0;
+
+  const statutoryTotalComputed = isPermanent ? safePf + safeEsic + safePt : 0;
+  const statutoryTotalOverridden =
+    isPermanent &&
+    statutoryTotalOverride !== null &&
+    statutoryTotalOverride !== undefined &&
+    Number.isFinite(Number(statutoryTotalOverride)) &&
+    Number(statutoryTotalOverride) >= 0;
+  const statutoryTotal = isPermanent
+    ? statutoryTotalOverridden
+      ? roundUpRupee(Number(statutoryTotalOverride))
+      : statutoryTotalComputed
+    : 0;
+
+  // Final Pay = Net Pay - Statutory Total
+  const finalPay = netPay - statutoryTotal;
+
+  // Retention (only applicable for Training / Probation employees: 5% of whole Total, editable)
+  const retentionComputed = isPermanent ? 0 : roundUpRupee(Math.max(0, total) * 0.05);
+  const retentionOverridden =
+    !isPermanent &&
+    retentionOverride !== null &&
+    retentionOverride !== undefined &&
+    Number.isFinite(Number(retentionOverride)) &&
+    Number(retentionOverride) >= 0;
+  const retention = isPermanent
+    ? 0
+    : retentionOverridden
+    ? roundUpRupee(Number(retentionOverride))
+    : retentionComputed;
+
+  // Advance & Loan
+  const safeAdvance = Number.isFinite(Number(advance)) && Number(advance) > 0
+    ? roundUpRupee(Number(advance))
+    : 0;
+  const safeLoan = Number.isFinite(Number(loan)) && Number(loan) > 0
+    ? roundUpRupee(Number(loan))
+    : 0;
+
+  // Bank Pay = Final Pay - Retention - Advance - Loan
+  const bankPay = finalPay - retention - safeAdvance - safeLoan;
 
   return {
     basicPay: safeBasicPay,
@@ -295,14 +445,34 @@ function calculateRow({
     workingDays,
     total,
     leaveDeduction,
+    halfDayDeduction,
+    halfDayDeductionComputed,
+    halfDayDeductionOverridden,
     lateDeduction,
     lateDeductionComputed,
     lateDeductionOverridden,
+    otherDeduction: safeOtherDeduction,
     lateCounts: {
       flatDays: safeFlatDays,
       halfDays: safeHalfDays,
     },
     netPay,
+    employmentStatus: normalizedEmploymentStatus,
+    pf: safePf,
+    esic: safeEsic,
+    pt: safePt,
+    ptComputed,
+    ptOverridden,
+    statutoryTotal,
+    statutoryTotalComputed,
+    statutoryTotalOverridden,
+    finalPay,
+    retention,
+    retentionComputed,
+    retentionOverridden,
+    advance: safeAdvance,
+    loan: safeLoan,
+    bankPay,
   };
 }
 
@@ -337,6 +507,7 @@ function computeDisplayHalfDays({
 
 module.exports = {
   calculateRow,
+  calculateMaharashtraPT,
   computeDisplayHalfDays,
   classifyPunchIn,
   summarizePunchIns,

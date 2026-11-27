@@ -81,7 +81,6 @@ function summarizeApprovedLeavesDetailed(
         startIST.getTime() <= periodEnd.getTime() &&
         !isSundayIST(startIST)
       ) {
-        approvedLeaveDays += 0.5;
         const sess = resolveLeaveHalfDaySession(lv);
         const dayKey = getISTDateKey(startIST);
         if (sess && !halfDaySessionsByDay.has(dayKey)) {

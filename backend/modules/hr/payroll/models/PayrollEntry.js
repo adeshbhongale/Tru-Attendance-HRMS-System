@@ -34,6 +34,60 @@ const PayrollEntrySchema = new mongoose.Schema({
     default: null,
     min: 0,
   },
+  halfDayDeductionOverride: {
+    type: Number,
+    default: null,
+    min: 0,
+  },
+  otherDeduction: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  pf: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  esic: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  pt: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  ptOverride: {
+    type: Number,
+    default: null,
+    min: 0,
+  },
+  statutoryTotalOverride: {
+    type: Number,
+    default: null,
+    min: 0,
+  },
+  retentionOverride: {
+    type: Number,
+    default: null,
+    min: 0,
+  },
+  advance: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  loan: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+  verified: {
+    type: Boolean,
+    default: false,
+  },
   updatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

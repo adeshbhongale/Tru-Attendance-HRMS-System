@@ -27,6 +27,15 @@ const ShiftSchema = new mongoose.Schema({
     type: String, // HH:mm format - Punching in after this marks Half Day
     default: "11:00",
   },
+  // Optional per-shift payroll late-mark overrides (null = use company payroll settings)
+  payrollLateStartTime: {
+    type: String,
+    default: null,
+  },
+  payrollHalfDayTime: {
+    type: String,
+    default: null,
+  },
   firstSession: {
     startTime: {
       type: String, // HH:mm format, e.g. "09:30"

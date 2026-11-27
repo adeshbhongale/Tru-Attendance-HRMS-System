@@ -76,6 +76,11 @@ const EmployeeSchema = new mongoose.Schema({
     enum: ['ACTIVE', 'INACTIVE', 'TERMINATED', 'active', 'inactive'],
     default: 'ACTIVE',
   },
+  employmentStatus: {
+    type: String,
+    enum: ['Training', 'Probation', 'Permanent'],
+    default: 'Training',
+  },
   profileImage: {
     type: String,
     default: '',

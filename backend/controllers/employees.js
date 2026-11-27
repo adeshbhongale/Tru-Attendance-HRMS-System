@@ -24,6 +24,18 @@ const CompanySetting = require('../models/CompanySetting');
 const { generateRoleCode } = require('../middleware/rbac');
 const trackingCache = require('../services/trackingCache');
 
+const VALID_EMPLOYMENT_STATUSES = {
+    training: 'Training',
+    probation: 'Probation',
+    permanent: 'Permanent',
+};
+
+function normalizeEmploymentStatus(val, fallback = 'Training') {
+    if (!val) return fallback;
+    const key = String(val).trim().toLowerCase();
+    return VALID_EMPLOYMENT_STATUSES[key] || fallback;
+}
+
 // @desc    Get all employees / users with dynamic RBAC filters
 // @route   GET /api/employees
 // @access  Private/Admin
@@ -169,7 +181,8 @@ exports.addEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already exists in this company's records.` });
         }
 
-        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade, levelRef, gradeRef, reportsTo, approver, responsibilities, responsibilityCodes, dataScope, address, dob, bloodGroup, referenceName1, referenceNumber1, referenceName2, referenceNumber2, documents } = req.body;
+        const { name, department, designation, shift, workingPlace, gender, status, employmentStatus, password, joiningDate, role, roleLevel, roleGrade, levelRef, gradeRef, reportsTo, approver, responsibilities, responsibilityCodes, dataScope, address, dob, bloodGroup, referenceName1, referenceNumber1, referenceName2, referenceNumber2, documents } = req.body;
+        const normalizedEmploymentStatus = normalizeEmploymentStatus(employmentStatus, 'Training');
 
         // Cross-company manager validation
         if (reportsTo) {
@@ -236,6 +249,7 @@ roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix, targ
             workingPlace,
             gender,
             status: status || 'ACTIVE',
+            employmentStatus: normalizedEmploymentStatus,
             role: role || 'employee',
             roleLevel: finalRoleLevel || roleLevel || null,
             roleGrade: roleGrade || null,
@@ -306,6 +320,7 @@ roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix, targ
             reportingTo: reportsTo || null,
             joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
             status: 'ACTIVE',
+            employmentStatus: normalizedEmploymentStatus,
         }).catch(err => console.log('[Employee Record Warning]:', err.message));
 
         if (req.file) {
@@ -361,7 +376,7 @@ exports.updateEmployee = async (req, res, next) => {
         }
 
         const allowedFields = [
-          'name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status',
+          'name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status', 'employmentStatus',
           'joiningDate', 'roleLevel', 'roleGrade', 'roleCode', 'role', 'company', 'levelRef', 'gradeRef', 'reportsTo',
           'approver', 'responsibilities', 'responsibilityCodes', 'dataScope', 'address', 'dob', 'bloodGroup',
           'referenceName1', 'referenceNumber1', 'referenceName2', 'referenceNumber2', 'documents'
@@ -371,7 +386,12 @@ exports.updateEmployee = async (req, res, next) => {
         let updateData = {};
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
-                if (field === 'documents') {
+                if (field === 'employmentStatus') {
+                    const normalized = normalizeEmploymentStatus(req.body.employmentStatus, null);
+                    if (normalized) {
+                        updateData.employmentStatus = normalized;
+                    }
+                } else if (field === 'documents') {
                     try {
                         updateData.documents = typeof req.body.documents === 'string' ? JSON.parse(req.body.documents) : req.body.documents;
                     } catch (e) {
@@ -474,6 +494,14 @@ exports.updateEmployee = async (req, res, next) => {
 
         Object.assign(employee, updateData);
         await employee.save();
+
+        // Keep HR Employee record in sync for employmentStatus
+        if (updateData.employmentStatus) {
+            await Employee.updateOne(
+                { companyId: req.tenant.companyId, userId: employee._id },
+                { $set: { employmentStatus: updateData.employmentStatus } }
+            ).catch(() => {});
+        }
 
         // Real-time Force Logout of active mobile/web sessions on password reset or deactivation
         try {
